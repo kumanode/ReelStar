@@ -74,16 +74,16 @@ export const VISUAL_STYLES: VisualStyle[] = [
     characterHint: 'a sleek minimalist geometric stickman silhouette with subtle glowing accent outlines'
   },
   {
-    id: 'flat',
-    name: 'Kartun flat',
+    id: 'islamic_storybook',
+    name: 'Buku cerita Islami',
     category: '2d',
-    niche: 'Sains, fakta, edukasi',
-    swatch: '#8CCBE3',
+    niche: 'Kisah nabi, sirah, religi',
+    swatch: '#D99B52',
     ink: '#1F1D1A',
     prompt:
-      'Flat vector explainer illustration, bold geometric shapes, a limited harmonious color palette, clean lines, friendly cartoon characters with simple features, soft subtle grain texture, clear readable composition. ' +
+      'Warm 2D Islamic storybook illustration, soft gouache painting textures on vintage aged parchment paper, warm desert palette of golden sand, terracotta, and gentle lapis lazuli blue. Ancient Middle Eastern oasis setting with date palm trees, clay architecture, and peaceful atmosphere. Holy figures and prophets are respectfully depicted from behind in pure white garments with a soft radiant golden light aura around them, strictly no facial features. Friendly community characters with modest traditional attire, cinematic storybook depth. ' +
       NO_TEXT,
-    characterHint: 'a friendly flat vector cartoon character with simple geometric features'
+    characterHint: 'a respectful character in ancient Middle Eastern modest attire, or a holy figure seen from behind in glowing white garments with a soft golden light aura'
   },
   {
     id: 'whiteboard',
@@ -96,18 +96,6 @@ export const VISUAL_STYLES: VisualStyle[] = [
       'Hand-drawn whiteboard doodle, black marker line art on a clean white board, one accent color used sparingly (red or blue), simple sketchy characters, arrows and small icons, like a whiteboard animation explainer. ' +
       NO_TEXT,
     characterHint: 'a simple hand-drawn marker doodle character'
-  },
-  {
-    id: 'watercolor',
-    name: 'Buku cerita cat air',
-    category: '2d',
-    niche: 'Dongeng anak, religi',
-    swatch: '#CFE3B5',
-    ink: '#1F1D1A',
-    prompt:
-      "Children's storybook watercolor illustration, soft washes on textured paper, warm pastel palette, cute expressive characters, whimsical and cozy mood. " +
-      NO_TEXT,
-    characterHint: 'a cute storybook watercolor character'
   },
   {
     id: 'anime',
@@ -249,30 +237,6 @@ export const VISUAL_STYLES: VisualStyle[] = [
     prompt:
       'Low-poly 3D render, faceted geometric shapes, flat-shaded polygons, clean pastel colors, soft ambient lighting. ' + NO_TEXT,
     characterHint: 'a low-poly 3D character with faceted shapes'
-  },
-  {
-    id: 'diorama',
-    name: 'Diorama miniatur',
-    category: '3d',
-    niche: 'Sejarah, kota, perang',
-    swatch: '#C9D9A6',
-    ink: '#1F1D1A',
-    prompt:
-      'Tilt-shift miniature diorama, tiny detailed 3D figures and buildings, shallow depth of field, soft daylight, toy-like scale. ' +
-      NO_TEXT,
-    characterHint: 'a tiny detailed miniature figurine'
-  },
-  {
-    id: 'isometric3d',
-    name: 'Diorama isometrik 3D',
-    category: '3d',
-    niche: 'Simulasi, strategi, infografis',
-    swatch: '#7BDCB5',
-    ink: '#1F1D1A',
-    prompt:
-      'Clean isometric 3D render, miniature diorama block, smooth clay and stylized materials, soft warm ambient lighting, cute geometric props, orthographic angle, tilt-shift depth. ' +
-      NO_TEXT,
-    characterHint: 'a cute stylized 3D miniature character with rounded features'
   },
   {
     id: 'cinematic',
