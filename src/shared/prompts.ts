@@ -146,12 +146,17 @@ export function collectReferenceSheets(
   return result.slice(0, maxRefs)
 }
 
-function characterLine(c: Character, deriv?: CharacterDerivative | null): string {
-  if (deriv) {
-    return `${c.name}: ${c.description}. In this scene wears custom outfit: ${deriv.name} (${deriv.promptChange || 'formal'})`
-  }
+function characterLine(c: Character): string {
   return `${c.name}: ${c.description}`
 }
+
+/** One line per character for short prompt limits: identity and outfit together, since there is no Wardrobe block. */
+function compactCharacterLine(c: Character, deriv: CharacterDerivative | null): string {
+  return deriv ? `${c.name}: ${c.description}; wears ${deriv.name} (${deriv.promptChange || 'custom outfit'})` : `${c.name}: ${c.description}`
+}
+
+/** True when the storyboard prompt (written by writePrompts or the creator) already has a "<label>:" line. */
+const hasLine = (text: string, label: string): boolean => new RegExp(`^\\s*${label}\\s*:`, 'im').test(text)
 
 /**
  * Compiles a structured, labelled image prompt for a clip (§8.C):
@@ -180,7 +185,9 @@ export function compileClipPrompt(opts: CompileClipPromptOptions): string {
 
   // Setting line if location is defined
   const loc = clip.locationId ? locMap.get(clip.locationId) : null
-  const settingLine = loc ? `Setting: ${loc.name}${loc.description ? `, ${loc.description}` : ''}.` : ''
+  // The storyboard prompt may already carry Setting/Framing/Wardrobe lines; repeating them in other words
+  // gives the model two instructions for the same thing.
+  const settingLine = loc && !hasLine(scene, 'setting') ? `Setting: ${loc.name}${loc.description ? `, ${loc.description}` : ''}.` : ''
 
   // Props line
   const clipProps = (clip.propIds || []).map((pid) => propMap.get(pid)).filter(Boolean) as Prop[]
@@ -191,7 +198,9 @@ export function compileClipPrompt(opts: CompileClipPromptOptions): string {
 
   // Framing line
   const orientation = project.aspectRatio === '9:16' ? 'vertical 9:16 full-bleed' : `${project.aspectRatio} full-bleed`
-  const framingLine = `Framing & composition: ${clip.framing || 'cinematic shot'}, ${orientation}, shallow depth of field, clear atmospheric lighting.`
+  const framingLine = hasLine(scene, 'framing')
+    ? ''
+    : `Framing & composition: ${clip.framing || 'medium close-up'}, ${orientation}, shallow depth of field, clear atmospheric lighting.`
 
   // Scene description
   const sceneBlock = [settingLine, scene, emotionLine, propsLine, framingLine].filter(Boolean).join('\n')
@@ -207,9 +216,9 @@ export function compileClipPrompt(opts: CompileClipPromptOptions): string {
     })
 
     parts.push(
-      `Wardrobe:\n${wardrobeLines.join('\n')}\n\n` +
+      (hasLine(scene, 'wardrobe') ? '' : `Wardrobe:\n${wardrobeLines.join('\n')}\n\n`) +
       `Recurring characters in this scene. Keep each one's body, face, hair and skin exactly as described${refNames.length ? ' and as on their reference sheet' : ''}:\n` +
-      visibleChars.map(({ char, deriv }) => characterLine(char, deriv)).join('\n')
+      visibleChars.map(({ char }) => characterLine(char)).join('\n')
     )
   }
 
@@ -230,7 +239,7 @@ export function compileClipPrompt(opts: CompileClipPromptOptions): string {
   // Gracefully trim to fit shorter prompt limits
   return [
     scene,
-    visibleChars.map(({ char, deriv }) => characterLine(char, deriv)).join('; '),
+    visibleChars.map(({ char, deriv }) => compactCharacterLine(char, deriv)).join('; '),
     loc ? `Setting: ${loc.name}` : '',
     avoid && `Must not appear: ${avoid}.`,
     style.prompt

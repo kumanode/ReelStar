@@ -8,11 +8,27 @@ import { anchorPoint } from '@shared/overlays'
 import { NO_MUSIC } from '@shared/higgsfield'
 import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt } from '@shared/prompts'
 import { computeClipImageBasisHash } from '@shared/hash'
-import { checkClipImagePrerequisites, getClipImageStatus } from '@shared/validation'
+import { checkClipImagePrerequisites, clipImageBasis, getClipImageStatus, getClipVideoStatus, planBatch, referenceLimit, videoSecondsFor } from '@shared/validation'
 import { startExport } from './exporter'
 import { assetAbsPath, binPath } from './paths'
 import { probeDurationMs } from './services/audio'
-import { confirmEpisodeScriptRepo, createEpisode, createProject, getBundle, insertAsset, listEpisodes, patchClip, replaceStory, saveSnapshot, touchProject } from './repo'
+import {
+  confirmEpisodeScriptRepo,
+  createEpisode,
+  createProject,
+  getBundle,
+  insertAsset,
+  listEpisodes,
+  patchClip,
+  replaceStory,
+  saveSnapshot,
+  setCharacterSheet,
+  setDerivativeSheet,
+  setLocationSheet,
+  setPropSheet,
+  touchProject
+} from './repo'
+import { getSettings, setSettings } from './settings'
 import { planEpisodes, writePrompts } from './story'
 import { batchEstimate, generateMissingImages } from './generation'
 import { recordCheck, setSecret } from './secrets'
@@ -516,84 +532,102 @@ async function checkPhase4(projectId: string): Promise<boolean> {
   )
   console.log(`[checkPhase4] Prompt compilation OK, refs count: ${refs.length}`)
 
-  // 3. Test prerequisite validation (blocked because characters/locations have no sheet assets yet)
-  const prereqCtx = {
+  // 3. Prerequisites follow the model: sheets are required only when the model takes references
+  const flowCtx = {
     characters: bundle.characters,
     derivatives: bundle.derivatives,
     locations: bundle.locations,
     props: bundle.props,
     assets: bundle.assets,
-    activeJobs: []
+    activeJobs: [],
+    isFlow2Api: true
   }
+  const noRefProject = { ...project, imageModel: 'higgsfield-ai/soul/v2/standard' }
+  if (referenceLimit(noRefProject, {}) !== 0) throw new Error('Soul seharusnya tidak memakai lembar referensi')
+  if (!checkClipImagePrerequisites(clip, noRefProject, { ...flowCtx, isFlow2Api: false }).ok) {
+    throw new Error('Model tanpa referensi tidak boleh mewajibkan lembar')
+  }
+  const imgPrereq = checkClipImagePrerequisites(clip, project, flowCtx)
+  if (imgPrereq.ok || !imgPrereq.blockers.some((b) => b.includes('lembar'))) {
+    throw new Error(`Flow2API (pakai referensi) seharusnya mewajibkan lembar: ${imgPrereq.blockers.join(', ')}`)
+  }
+  if (getClipImageStatus(clip, project, flowCtx).status !== 'blocked') throw new Error("Status gambar tanpa lembar harus 'blocked'")
 
-  const imgPrereq = checkClipImagePrerequisites(clip, project, prereqCtx)
-  if (imgPrereq.ok) {
-    throw new Error('checkClipImagePrerequisites seharusnya memblokir klip karena belum ada lembar karakter/lokasi!')
-  }
-  if (!imgPrereq.blockers.some((b) => b.includes('lembar'))) {
-    throw new Error(`Alasan blocker tidak menyebutkan lembar: ${imgPrereq.blockers.join(', ')}`)
-  }
-
-  const imgStatus = getClipImageStatus(clip, project, prereqCtx)
-  if (imgStatus.status !== 'blocked') {
-    throw new Error(`Status gambar harus 'blocked', didapat '${imgStatus.status}'`)
-  }
-
-  // 4. Test basis hash computation
-  const hash1 = computeClipImageBasisHash({
-    project,
-    clip,
-    characters: bundle.characters,
-    derivatives: bundle.derivatives,
-    locations: bundle.locations,
-    props: bundle.props,
-    refSheetAssetIds: []
-  })
-  const hash2 = computeClipImageBasisHash({
-    project,
-    clip,
-    characters: bundle.characters,
-    derivatives: bundle.derivatives,
-    locations: bundle.locations,
-    props: bundle.props,
-    refSheetAssetIds: []
-  })
-  if (hash1 !== hash2) {
-    throw new Error('computeClipImageBasisHash tidak deterministik!')
-  }
-
-  const modifiedClip = { ...clip, visualPrompt: clip.visualPrompt + ' additional detail' }
-  const hashModified = computeClipImageBasisHash({
-    project,
-    clip: modifiedClip,
-    characters: bundle.characters,
-    derivatives: bundle.derivatives,
-    locations: bundle.locations,
-    props: bundle.props,
-    refSheetAssetIds: []
-  })
-  if (hash1 === hashModified) {
+  // 4. Basis hash: deterministic and sensitive to the prompt
+  const hashArgs = { project, clip, characters: bundle.characters, derivatives: bundle.derivatives, locations: bundle.locations, props: bundle.props, refSheetAssetIds: [] }
+  if (computeClipImageBasisHash(hashArgs) !== computeClipImageBasisHash(hashArgs)) throw new Error('computeClipImageBasisHash tidak deterministik!')
+  if (computeClipImageBasisHash(hashArgs) === computeClipImageBasisHash({ ...hashArgs, clip: { ...clip, visualPrompt: clip.visualPrompt + ' detail' } })) {
     throw new Error('computeClipImageBasisHash tidak berubah saat prompt diubah!')
   }
 
-  // 5. Test batchEstimate and all-or-nothing
-  const estimate = await batchEstimate(projectId, ep.id, 'image', false)
-  if (estimate.canRun) {
-    throw new Error('batchEstimate.canRun seharusnya false karena ada klip yang terblokir!')
-  }
-  if (!estimate.items.some((it) => it.status === 'blocked')) {
-    throw new Error('batchEstimate seharusnya mendata item berstatus blocked!')
+  // 5. All-or-nothing batch while sheets are missing (Flow2API takes references)
+  const before = getSettings().defaultVisualProvider
+  setSettings({ defaultVisualProvider: 'flow2api' })
+  try {
+    const estimate = await batchEstimate(projectId, ep.id, 'image', false)
+    if (estimate.canRun || !estimate.items.some((it) => it.status === 'blocked')) throw new Error('batchEstimate seharusnya terblokir')
+    if (estimate.totalCredits !== null) throw new Error('Flow2API tidak memakai kredit Higgsfield; total harus kosong')
+    let rejected = false
+    try {
+      generateMissingImages(projectId, ep.id, false)
+    } catch (err) {
+      rejected = (err as Error).message.includes('terblokir')
+    }
+    if (!rejected) throw new Error('generateMissingImages seharusnya menolak batch (semua atau tidak sama sekali)')
+  } finally {
+    setSettings({ defaultVisualProvider: before })
   }
 
-  let rejected = false
-  try {
-    await generateMissingImages(projectId, ep.id, false)
-  } catch (err) {
-    rejected = (err as Error).message.includes('terblokir')
+  // 6. A freshly made image is current: give every entity a sheet, then store an image with the basis
+  //    generation would write. Then legacy results (no basis) count as current too.
+  const fakeImage = (extra: Parameters<typeof insertAsset>[0]['meta'] = {}): string =>
+    insertAsset({ projectId, kind: 'image', localPath: 'images/uji.png', meta: extra }).id
+  for (const c of bundle.characters) setCharacterSheet(c.id, fakeImage())
+  for (const d of bundle.derivatives) setDerivativeSheet(d.id, fakeImage())
+  for (const l of bundle.locations) setLocationSheet(l.id, fakeImage())
+  for (const p of bundle.props) setPropSheet(p.id, fakeImage())
+  const withSheets = getBundle(projectId, ep.id)
+  const sheetCtx = { ...flowCtx, characters: withSheets.characters, derivatives: withSheets.derivatives, locations: withSheets.locations, props: withSheets.props, assets: withSheets.assets }
+  const target = withSheets.clips[0]
+  if (getClipImageStatus(target, project, sheetCtx).status !== 'missing') throw new Error('Dengan semua lembar, status harus missing')
+  const { basisHash } = clipImageBasis(target, project, sheetCtx)
+  patchClip(target.id, { imageAssetId: fakeImage({ basisHash }) })
+  let after = getBundle(projectId, ep.id)
+  const freshCtx = { ...sheetCtx, assets: after.assets }
+  if (getClipImageStatus(after.clips[0], project, freshCtx).status !== 'current') throw new Error('Gambar yang baru dibuat harus current, bukan basi')
+  const soulCtx = { ...freshCtx, isFlow2Api: false }
+  const soulBasis = clipImageBasis(after.clips[0], noRefProject, soulCtx).basisHash
+  patchClip(target.id, { imageAssetId: fakeImage({ basisHash: soulBasis }) })
+  after = getBundle(projectId, ep.id)
+  if (getClipImageStatus(after.clips[0], noRefProject, { ...soulCtx, assets: after.assets }).status !== 'current') {
+    throw new Error('Gambar Higgsfield tanpa referensi harus current setelah dibuat')
   }
-  if (!rejected) {
-    throw new Error('generateMissingImages seharusnya menolak batch dengan aturan all-or-nothing!')
+  patchClip(target.id, { imageAssetId: fakeImage() })
+  after = getBundle(projectId, ep.id)
+  if (getClipImageStatus(after.clips[0], project, { ...freshCtx, assets: after.assets }).status !== 'current') {
+    throw new Error('Gambar lama tanpa basisHash harus dianggap current')
   }
+  patchClip(target.id, { imageAssetId: fakeImage({ basisHash: 'lama' }) })
+  after = getBundle(projectId, ep.id)
+  if (getClipImageStatus(after.clips[0], project, { ...freshCtx, assets: after.assets }).status !== 'stale') {
+    throw new Error('Gambar dengan basis berbeda harus basi')
+  }
+
+  // 7. Video length is fitted to the model instead of blocking; a blocked clip that already has a result
+  //    does not stop a batch of missing ones.
+  const videoProject = { ...project, videoModel: 'veo-3.1-fast-i2v' }
+  const vctx = { ...freshCtx, assets: after.assets }
+  const fiveSec = { ...after.clips[0], durationMs: 5000 }
+  if (videoSecondsFor(videoProject, fiveSec, vctx).seconds !== 6) throw new Error('Klip 5 dtk seharusnya dibuat jadi video 6 dtk')
+  if (getClipVideoStatus(fiveSec, videoProject, vctx).status !== 'missing') throw new Error('Klip 5 dtk tidak boleh terblokir karena durasi')
+  const dialog = { ...fiveSec, speakerId: fiveSec.characterIds[0], narration: Array(60).fill('kata').join(' ') }
+  if (getClipVideoStatus(dialog, { ...videoProject, dialogAudio: 'video' }, vctx).status !== 'blocked') {
+    throw new Error('Dialog yang lebih panjang dari video terpanjang harus terblokir')
+  }
+  const done = { status: { status: 'blocked' as const, blockers: ['x'], basisHash: '', hasResult: true } }
+  const todo = { status: { status: 'missing' as const, blockers: [], basisHash: '', hasResult: false } }
+  if (planBatch([done, todo], false).blocking.length !== 0) throw new Error('Klip yang sudah punya hasil tidak boleh membatalkan batch')
+  if (planBatch([done, todo], true).blocking.length !== 1) throw new Error('Saat membuat ulang yang basi, klip terblokir harus membatalkan batch')
 
   console.log('[checkPhase4] Semua pengujian backend Fase 4 BERHASIL!')
   return true

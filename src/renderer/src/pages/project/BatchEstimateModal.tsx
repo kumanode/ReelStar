@@ -109,7 +109,7 @@ export function BatchEstimateModal({
               <div className="flex flex-col rounded-xl border border-line bg-sand/60 p-3.5">
                 <span className="text-xs text-muted">Perkiraan Biaya Kredit</span>
                 <span className="font-display text-2xl font-bold text-accent-dark font-mono">
-                  ≈ {result.totalCredits.toLocaleString('id-ID')} kr
+                  {result.totalCredits != null ? `≈ ${result.totalCredits.toLocaleString('id-ID')} kr` : '—'}
                 </span>
                 <span className="truncate text-[11px] text-muted">
                   Model: {result.items[0]?.model || 'Standar'}

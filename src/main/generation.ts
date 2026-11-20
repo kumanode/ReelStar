@@ -8,7 +8,6 @@ import { getStyle, NO_TEXT } from '@shared/styles'
 import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt } from '@shared/prompts'
 import {
   computeCharacterSheetBasisHash,
-  computeClipImageBasisHash,
   computeClipTtsBasisHash,
   computeClipVideoBasisHash,
   computeDerivativeSheetBasisHash,
@@ -18,8 +17,13 @@ import {
 import {
   checkClipImagePrerequisites,
   checkClipVideoPrerequisites,
+  clipImageBasis,
   getClipImageStatus,
   getClipVideoStatus,
+  planBatch,
+  referenceLimit,
+  videoSecondsFor,
+  type ClipStatusResult,
   type GenerationPrerequisitesContext
 } from '@shared/validation'
 import type {
@@ -313,29 +317,34 @@ function isFlow2Api(): boolean {
   return getSettings().defaultVisualProvider === 'flow2api'
 }
 
+/** Everything the shared status and prerequisite rules read, gathered once per call. */
+function prereqContext(projectId: string): GenerationPrerequisitesContext {
+  const s = getSettings()
+  return {
+    characters: charactersOf(projectId),
+    derivatives: derivativesOf(projectId),
+    locations: locationsOf(projectId),
+    props: propsOf(projectId),
+    assets: assetsOf(projectId),
+    activeJobs: activeJobsOf(projectId),
+    isFlow2Api: isFlow2Api(),
+    flow2apiImageModel: s.flow2apiImageModel,
+    flow2apiVideoModel: s.flow2apiVideoModel
+  }
+}
+
+function blockedMessage(kind: 'gambar' | 'video', blocking: { index: number; title: string; status: ClipStatusResult }[]): string {
+  const details = blocking.map((b) => `Shot ${b.index} (${b.title}):\n  • ${b.status.blockers.join('\n  • ')}`).join('\n')
+  return `Batch ${kind} dibatalkan karena beberapa adegan terblokir (semua atau tidak sama sekali):\n${details}`
+}
+
 // ---------- public entry points ----------
 
 export function generateClipImage(clipId: string): Job {
   const existing = activeJobFor({ clipId }, 'image')
   if (existing) return existing
   const clip = getClip(clipId)
-  const project = getProject(clip.projectId)
-  const chars = charactersOf(project.id)
-  const derivs = derivativesOf(project.id)
-  const locs = locationsOf(project.id)
-  const props = propsOf(project.id)
-  const assets = assetsOf(project.id)
-  const activeJobs = activeJobsOf(project.id)
-
-  const prereqs = checkClipImagePrerequisites(clip, project, {
-    characters: chars,
-    derivatives: derivs,
-    locations: locs,
-    props,
-    assets,
-    activeJobs,
-    isFlow2Api: isFlow2Api()
-  })
+  const prereqs = checkClipImagePrerequisites(clip, getProject(clip.projectId), prereqContext(clip.projectId))
   if (!prereqs.ok) {
     throw new Error(`Syarat generate gambar tidak terpenuhi:\n- ${prereqs.blockers.join('\n- ')}`)
   }
@@ -346,17 +355,19 @@ export function generateClipImage(clipId: string): Job {
     return runJob(job, 'flow2api', async (ctx) => {
       const fresh = getClip(clipId)
       const project = getProject(fresh.projectId)
-      const allChars = charactersOf(project.id)
-      const allDerivs = derivativesOf(project.id)
-      const allLocs = locationsOf(project.id)
-      const allProps = propsOf(project.id)
+      const pctx = prereqContext(project.id)
+      const allChars = pctx.characters
+      const allDerivs = pctx.derivatives
+      const allLocs = pctx.locations
+      const allProps = pctx.props
+      const limit = referenceLimit(project, pctx)
 
-      const refItems = collectReferenceSheets(fresh, allChars, allDerivs, allLocs, allProps, 3)
+      const refItems = collectReferenceSheets(fresh, allChars, allDerivs, allLocs, allProps, limit)
 
       const refBuffers: Buffer[] = []
       for (const it of refItems) {
         const sheet = getAsset(it.sheetAssetId)
-        if (sheet && refBuffers.length < 3) {
+        if (sheet && refBuffers.length < limit) {
           const abs = assetAbsPath(project.id, sheet.localPath)
           if (existsSync(abs)) refBuffers.push(readFileSync(abs))
         }
@@ -374,15 +385,7 @@ export function generateClipImage(clipId: string): Job {
         refNames: refItems.map((r) => r.name),
         limit: 4000
       })
-      const basisHash = computeClipImageBasisHash({
-        project,
-        clip: fresh,
-        characters: allChars,
-        derivatives: allDerivs,
-        locations: allLocs,
-        props: allProps,
-        refSheetAssetIds: refItems.map((r) => r.sheetAssetId)
-      })
+      const { basisHash } = clipImageBasis(fresh, project, pctx)
 
       ctx.progress(0.04, 'Menyiapkan prompt Flow2API')
       const { mediaUrl } = await f2a.generateImage({
@@ -430,12 +433,13 @@ export function generateClipImage(clipId: string): Job {
     const fresh = getClip(clipId)
     const project = getProject(fresh.projectId)
     const model = getImageModel(project.imageModel)
-    const allChars = charactersOf(project.id)
-    const allDerivs = derivativesOf(project.id)
-    const allLocs = locationsOf(project.id)
-    const allProps = propsOf(project.id)
+    const pctx = prereqContext(project.id)
+    const allChars = pctx.characters
+    const allDerivs = pctx.derivatives
+    const allLocs = pctx.locations
+    const allProps = pctx.props
 
-    const refItems = collectReferenceSheets(fresh, allChars, allDerivs, allLocs, allProps, maxRefs(model))
+    const refItems = collectReferenceSheets(fresh, allChars, allDerivs, allLocs, allProps, referenceLimit(project, pctx))
     const refs = await resolveReferenceUrls(model, refItems, ctx.signal)
     const prompt = compileClipPrompt({
       project,
@@ -447,15 +451,7 @@ export function generateClipImage(clipId: string): Job {
       refNames: refs.names,
       limit: promptLimit(model)
     })
-    const basisHash = computeClipImageBasisHash({
-      project,
-      clip: fresh,
-      characters: allChars,
-      derivatives: allDerivs,
-      locations: allLocs,
-      props: allProps,
-      refSheetAssetIds: refItems.map((r) => r.sheetAssetId)
-    })
+    const { basisHash } = clipImageBasis(fresh, project, pctx)
     return {
       endpoint: model.id,
       body: imageBody(model, prompt, project.aspectRatio, refs.urls, getSettings().imageGenerationMode === 'draft' ? resolutionOptions(model)[0] : undefined),
@@ -837,23 +833,7 @@ export function generateClipVideo(clipId: string): Job {
   const clip = getClip(clipId)
   if (!clip.imageAssetId) throw new Error('Buat gambar klip ini dulu sebelum membuat video AI.')
 
-  const project = getProject(clip.projectId)
-  const chars = charactersOf(project.id)
-  const derivs = derivativesOf(project.id)
-  const locs = locationsOf(project.id)
-  const props = propsOf(project.id)
-  const assets = assetsOf(project.id)
-  const activeJobs = activeJobsOf(project.id)
-
-  const prereqs = checkClipVideoPrerequisites(clip, project, {
-    characters: chars,
-    derivatives: derivs,
-    locations: locs,
-    props,
-    assets,
-    activeJobs,
-    isFlow2Api: isFlow2Api()
-  })
+  const prereqs = checkClipVideoPrerequisites(clip, getProject(clip.projectId), prereqContext(clip.projectId))
   if (!prereqs.ok) {
     throw new Error(`Syarat generate video tidak terpenuhi:\n- ${prereqs.blockers.join('\n- ')}`)
   }
@@ -872,7 +852,7 @@ export function generateClipVideo(clipId: string): Job {
       if (!existsSync(imgAbs)) throw new Error('File gambar klip tidak ditemukan di disk')
       const imgBuffer = readFileSync(imgAbs)
 
-      const durationSec = Math.max(4, Math.round(fresh.durationMs / 1000))
+      const durationSec = videoSecondsFor(project, fresh, prereqContext(project.id)).seconds
       const baseModel = (project.videoModel && !project.videoModel.includes('/') ? project.videoModel : null) ?? getSettings().flow2apiVideoModel
       const video = resolveFlow2ApiVideo(baseModel, project.aspectRatio, durationSec)
       const modelId = video.model
@@ -950,7 +930,7 @@ export function generateClipVideo(clipId: string): Job {
     })
     return {
       endpoint: model.id,
-      body: videoBody(model, prompt, url, fresh.durationMs / 1000, project.aspectRatio, project.videoResolution),
+      body: videoBody(model, prompt, url, videoSecondsFor(project, fresh, prereqContext(project.id)).seconds, project.aspectRatio, project.videoResolution),
       payload: { target: 'clip-video', model: model.id, prompt, basisHash }
     }
   })
@@ -1017,63 +997,16 @@ export function generateClipTts(clipId: string): Job {
 }
 
 /**
- * Batch generate missing images for an episode (§6.J).
- * Follows the all-or-nothing rule: if ANY candidate clip is blocked,
- * the entire batch is aborted before running any job.
+ * Makes the missing (and, when asked, stale) images of an episode (§6.J). All or nothing: if a clip that would
+ * be made is blocked, nothing starts.
  */
 export function generateMissingImages(projectId: string, episodeId?: string, includeStale = false): Job[] {
   const project = getProject(projectId)
-  const clips = clipsOf(projectId, episodeId)
-  const chars = charactersOf(projectId)
-  const derivs = derivativesOf(projectId)
-  const locs = locationsOf(projectId)
-  const props = propsOf(projectId)
-  const assets = assetsOf(projectId)
-  const activeJobs = activeJobsOf(projectId)
-  const ctx: GenerationPrerequisitesContext = {
-    characters: chars,
-    derivatives: derivs,
-    locations: locs,
-    props,
-    assets,
-    activeJobs,
-    isFlow2Api: isFlow2Api()
-  }
-
-  const candidates: Clip[] = []
-  const blockers: { clipIndex: number; title: string; reasons: string[] }[] = []
-
-  for (let i = 0; i < clips.length; i++) {
-    const c = clips[i]
-    const statusRes = getClipImageStatus(c, project, ctx)
-    if (statusRes.status === 'blocked') {
-      blockers.push({ clipIndex: i + 1, title: c.title || `Shot ${i + 1}`, reasons: statusRes.blockers })
-    } else if (statusRes.status === 'missing' || (includeStale && statusRes.status === 'stale')) {
-      candidates.push(c)
-    }
-  }
-
-  if (blockers.length > 0) {
-    const details = blockers.map((b) => `Shot ${b.clipIndex} (${b.title}):\n  • ${b.reasons.join('\n  • ')}`).join('\n')
-    throw new Error(`Batch generate gambar dibatalkan (aturan semua-atau-tidak-sama-sekali).\nBeberapa adegan terblokir:\n${details}`)
-  }
-
-  // Also ensure required character sheets exist if using Flow2API or models that support reference sheets
-  const canRef = isFlow2Api()
-    ? getFlow2ApiModel(project.imageModel || getSettings().flow2apiImageModel, 'image').supportsRef
-    : maxRefs(getImageModel(project.imageModel)) > 0
-  const jobs: Job[] = []
-  if (canRef) {
-    const needed = new Set(candidates.flatMap((c) => c.characterIds))
-    for (const c of chars) {
-      if (needed.has(c.id) && !c.sheetAssetId) jobs.push(generateCharacterSheet(c.id))
-    }
-  }
-
-  for (const clip of candidates) {
-    jobs.push(generateClipImage(clip.id))
-  }
-  return jobs
+  const ctx = prereqContext(projectId)
+  const items = clipsOf(projectId, episodeId).map((clip, i) => ({ clip, index: i + 1, title: clip.title || `Shot ${i + 1}`, status: getClipImageStatus(clip, project, ctx) }))
+  const { targets, blocking } = planBatch(items, includeStale)
+  if (blocking.length) throw new Error(blockedMessage('gambar', blocking))
+  return targets.map((t) => generateClipImage(t.clip.id))
 }
 
 /** Generates AI video for the clips the creator picked; every one of them needs an image. */
@@ -1089,51 +1022,15 @@ export function generateClipsVideo(clipIds: string[]): Job[] {
 }
 
 /**
- * Turns every clip that has an image into a video (§6.J).
- * Aborts entire batch if any candidate is blocked.
+ * Turns the clips that have an image into videos (§6.J), with the same all-or-nothing rule as images.
  */
 export function generateMissingVideos(projectId: string, episodeId?: string, includeStale = false): Job[] {
   const project = getProject(projectId)
-  const clips = clipsOf(projectId, episodeId)
-  const chars = charactersOf(projectId)
-  const derivs = derivativesOf(projectId)
-  const locs = locationsOf(projectId)
-  const props = propsOf(projectId)
-  const assets = assetsOf(projectId)
-  const activeJobs = activeJobsOf(projectId)
-  const ctx: GenerationPrerequisitesContext = {
-    characters: chars,
-    derivatives: derivs,
-    locations: locs,
-    props,
-    assets,
-    activeJobs,
-    isFlow2Api: isFlow2Api()
-  }
-
-  const candidates: Clip[] = []
-  const blockers: { clipIndex: number; title: string; reasons: string[] }[] = []
-
-  for (let i = 0; i < clips.length; i++) {
-    const c = clips[i]
-    const statusRes = getClipVideoStatus(c, project, ctx)
-    if (statusRes.status === 'blocked') {
-      blockers.push({ clipIndex: i + 1, title: c.title || `Shot ${i + 1}`, reasons: statusRes.blockers })
-    } else if (statusRes.status === 'missing' || (includeStale && statusRes.status === 'stale')) {
-      candidates.push(c)
-    }
-  }
-
-  if (blockers.length > 0) {
-    const details = blockers.map((b) => `Shot ${b.clipIndex} (${b.title}):\n  • ${b.reasons.join('\n  • ')}`).join('\n')
-    throw new Error(`Batch video dibatalkan (aturan semua-atau-tidak-sama-sekali).\nBeberapa adegan terblokir:\n${details}`)
-  }
-
-  const jobs: Job[] = []
-  for (const clip of candidates) {
-    jobs.push(generateClipVideo(clip.id))
-  }
-  return jobs
+  const ctx = prereqContext(projectId)
+  const items = clipsOf(projectId, episodeId).map((clip, i) => ({ clip, index: i + 1, title: clip.title || `Shot ${i + 1}`, status: getClipVideoStatus(clip, project, ctx) }))
+  const { targets, blocking } = planBatch(items, includeStale)
+  if (blocking.length) throw new Error(blockedMessage('video', blocking))
+  return targets.map((t) => generateClipVideo(t.clip.id))
 }
 
 export function generateMissingTts(projectId: string, episodeId?: string): Job[] {
@@ -1143,8 +1040,8 @@ export function generateMissingTts(projectId: string, episodeId?: string): Job[]
 }
 
 /**
- * Batch estimation calculation (§6.J and §4).
- * Returns item count, credit estimate, status per item, and blockers.
+ * What a batch would make and cost (§6.J). Video credits follow each clip's fitted length. Flow2API does not
+ * spend Higgsfield credits, so its cost is null rather than a made-up number.
  */
 export async function batchEstimate(
   projectId: string,
@@ -1153,91 +1050,62 @@ export async function batchEstimate(
   includeStale = false
 ): Promise<BatchEstimateResult> {
   const project = getProject(projectId)
-  const clips = clipsOf(projectId, episodeId)
-  const chars = charactersOf(projectId)
-  const derivs = derivativesOf(projectId)
-  const locs = locationsOf(projectId)
-  const props = propsOf(projectId)
-  const assets = assetsOf(projectId)
-  const activeJobs = activeJobsOf(projectId)
-  const flow2api = isFlow2Api()
-  const ctx: GenerationPrerequisitesContext = {
-    characters: chars,
-    derivatives: derivs,
-    locations: locs,
-    props,
-    assets,
-    activeJobs,
-    isFlow2Api: flow2api
-  }
-
-  let singleCredit = 1
-  if (!flow2api) {
-    try {
-      const est = await estimateCredits(
-        kind,
-        (kind === 'image' ? project.imageModel : project.videoModel) || '',
-        project.aspectRatio,
-        5
-      )
-      if (est && typeof est.credits === 'number') singleCredit = est.credits
-      else singleCredit = kind === 'video' ? 10 : 1
-    } catch {
-      singleCredit = kind === 'video' ? 10 : 1
-    }
-  } else {
-    singleCredit = kind === 'video' ? 5 : 1
-  }
-
-  const items: BatchEstimateItem[] = []
-  let blockedCount = 0
-  let missingCount = 0
-  let staleCount = 0
-
+  const ctx = prereqContext(projectId)
+  const settings = getSettings()
   const modelName =
     kind === 'image'
-      ? flow2api
-        ? project.imageModel || getSettings().flow2apiImageModel
-        : project.imageModel || 'Soul v2'
-      : flow2api
-        ? project.videoModel || getSettings().flow2apiVideoModel
-        : project.videoModel || 'Veo 3.1'
+      ? ctx.isFlow2Api
+        ? getFlow2ApiModel(project.imageModel && !project.imageModel.includes('/') ? project.imageModel : settings.flow2apiImageModel, 'image').name
+        : getImageModel(project.imageModel).name
+      : ctx.isFlow2Api
+        ? getFlow2ApiModel(project.videoModel && !project.videoModel.includes('/') ? project.videoModel : settings.flow2apiVideoModel, 'video').name
+        : getVideoModel(project.videoModel).name
 
-  for (let i = 0; i < clips.length; i++) {
-    const clip = clips[i]
-    const statusRes = kind === 'image' ? getClipImageStatus(clip, project, ctx) : getClipVideoStatus(clip, project, ctx)
+  const items = clipsOf(projectId, episodeId).map((clip, i) => ({
+    clip,
+    index: i + 1,
+    title: clip.title || `Shot ${i + 1}`,
+    status: kind === 'image' ? getClipImageStatus(clip, project, ctx) : getClipVideoStatus(clip, project, ctx)
+  }))
+  const { targets, blocking } = planBatch(items, includeStale)
 
-    if (statusRes.status === 'blocked') blockedCount++
-    if (statusRes.status === 'missing') missingCount++
-    if (statusRes.status === 'stale') staleCount++
-
-    const isTarget = statusRes.status === 'missing' || (includeStale && statusRes.status === 'stale') || statusRes.status === 'blocked'
-    if (isTarget) {
-      items.push({
-        clipId: clip.id,
-        clipIndex: i + 1,
-        title: clip.title || `Shot ${i + 1}`,
-        kind,
-        model: modelName,
-        status: statusRes.status,
-        blockers: statusRes.blockers,
-        estimatedCredits: singleCredit
-      })
+  // One estimate per distinct video length: the price depends on it, and lookups are cached anyway.
+  const priceBySeconds = new Map<number, number | null>()
+  const priceOf = async (clip: Clip): Promise<number | null> => {
+    if (ctx.isFlow2Api) return null
+    const seconds = kind === 'video' ? videoSecondsFor(project, clip, ctx).seconds : 0
+    if (!priceBySeconds.has(seconds)) {
+      const est = await estimateCredits(kind, (kind === 'image' ? project.imageModel : project.videoModel) || '', project.aspectRatio, seconds || 5, project.videoResolution).catch(() => null)
+      priceBySeconds.set(seconds, est?.credits ?? null)
     }
+    return priceBySeconds.get(seconds) ?? null
   }
 
-  const targetItems = items.filter((it) => it.status === 'missing' || (includeStale && it.status === 'stale'))
-  const totalCredits = targetItems.reduce((acc, it) => acc + it.estimatedCredits, 0)
-  const canRun = blockedCount === 0 && targetItems.length > 0
+  const shown = items.filter((it) => targets.includes(it) || blocking.includes(it))
+  const out: BatchEstimateItem[] = []
+  for (const it of shown) {
+    out.push({
+      clipId: it.clip.id,
+      clipIndex: it.index,
+      title: it.title,
+      kind,
+      model: modelName,
+      status: it.status.status,
+      blockers: it.status.blockers,
+      estimatedCredits: targets.includes(it) ? await priceOf(it.clip) : null
+    })
+  }
 
+  const prices = out.filter((o) => o.status !== 'blocked').map((o) => o.estimatedCredits)
+  const totalCredits = prices.length && prices.every((p) => p != null) ? Math.round(prices.reduce<number>((a, p) => a + (p ?? 0), 0) * 10) / 10 : null
   return {
-    canRun,
-    totalItems: targetItems.length,
-    totalCredits: Math.round(totalCredits * 10) / 10,
-    items,
-    blockedCount,
-    missingCount,
-    staleCount
+    canRun: blocking.length === 0 && targets.length > 0,
+    totalItems: targets.length,
+    totalCredits,
+    items: out,
+    blockedCount: blocking.length,
+    missingCount: items.filter((i) => i.status.status === 'missing').length,
+    staleCount: items.filter((i) => i.status.status === 'stale').length
   }
 }
 

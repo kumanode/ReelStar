@@ -616,13 +616,15 @@ export interface BatchEstimateItem {
   model: string
   status: ClipGenerationStatus
   blockers: string[]
-  estimatedCredits: number
+  /** Higgsfield credits for this item; null when unknown or not paid in credits (Flow2API). */
+  estimatedCredits: number | null
 }
 
 export interface BatchEstimateResult {
   canRun: boolean
   totalItems: number
-  totalCredits: number
+  /** Null when any price is unknown or the provider does not charge credits (Flow2API). */
+  totalCredits: number | null
   items: BatchEstimateItem[]
   blockedCount: number
   missingCount: number

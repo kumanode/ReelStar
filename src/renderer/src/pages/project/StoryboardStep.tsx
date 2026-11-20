@@ -27,7 +27,7 @@ import { CAMERA_PRESETS, MOTION_STRENGTHS, cameraAt, cameraCss } from '@shared/m
 import { needsVisual } from '@shared/script'
 import { geminiVoiceName, geminiVoiceTone } from '@shared/models'
 import { getClipImageStatus, getClipVideoStatus, type GenerationPrerequisitesContext } from '@shared/validation'
-import type { Asset, Clip, Job, Project } from '@shared/types'
+import type { AppSettings, Asset, Clip, Job, Project } from '@shared/types'
 import { AutoTextarea } from '../../components/AutoTextarea'
 import { CharacterAvatar } from '../../components/CharacterAvatar'
 import { ClipVisual } from '../../components/ClipVisual'
@@ -899,6 +899,12 @@ export function StoryboardStep() {
   const isFlow2Image = FLOW2API_IMAGE_MODELS.some((m) => m.id === project?.imageModel)
   const isFlow2Video = FLOW2API_VIDEO_MODELS.some((m) => m.id === project?.videoModel)
 
+  // The provider comes from the app settings, exactly as the main process decides it, so badges match generation.
+  const [appSettings, setAppSettings] = useState<AppSettings | null>(null)
+  useEffect(() => {
+    void window.api.settings.get().then(setAppSettings).catch(() => setAppSettings(null))
+  }, [])
+
   const prereqCtx = useMemo<GenerationPrerequisitesContext>(
     () => ({
       characters,
@@ -907,9 +913,11 @@ export function StoryboardStep() {
       props,
       assets,
       activeJobs: Object.values(jobs),
-      isFlow2Api: isFlow2Image || isFlow2Video
+      isFlow2Api: appSettings?.defaultVisualProvider === 'flow2api',
+      flow2apiImageModel: appSettings?.flow2apiImageModel,
+      flow2apiVideoModel: appSettings?.flow2apiVideoModel
     }),
-    [characters, derivatives, locations, props, assets, jobs, isFlow2Image, isFlow2Video]
+    [characters, derivatives, locations, props, assets, jobs, appSettings]
   )
 
   // A failed narration take is reported once, when it happens.

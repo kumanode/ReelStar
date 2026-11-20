@@ -130,9 +130,9 @@ export function resolveFlow2ApiVideo(baseId: string, aspectRatio: AspectRatio, d
   const known = FLOW2API_VIDEO_MODELS.find((m) => m.id === clean)
   const model = known ?? (clean ? null : getFlow2ApiModel(null, 'video'))
   const allowed = model?.durations ?? []
-  const dur = allowed.length
-    ? allowed.reduce((prev, curr) => (Math.abs(curr - durationSec) < Math.abs(prev - durationSec) ? curr : prev))
-    : durationSec
+  // The shortest length that covers the clip, so a spoken line is never cut; the longest when none does.
+  const sorted = [...allowed].sort((x, y) => x - y)
+  const dur = sorted.length ? (sorted.find((d) => d >= durationSec) ?? sorted[sorted.length - 1]) : durationSec
   return {
     // Unknown IDs are passed through so users can type any model Flow2API itself lists.
     model: model?.apiModel ?? clean,

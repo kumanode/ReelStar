@@ -1,5 +1,5 @@
 import { FLOW2API_VIDEO_MODELS, getFlow2ApiModel } from './flow2api-catalog'
-import { getVideoModel } from './higgsfield'
+import { getImageModel, getVideoModel, maxRefs } from './higgsfield'
 import { collectReferenceSheets } from './prompts'
 import { computeClipImageBasisHash, computeClipVideoBasisHash, computeClipTtsBasisHash } from './hash'
 import { estimateNarrationMs } from './script'
@@ -15,6 +15,10 @@ export interface GenerationPrerequisitesContext {
   assets: Asset[] | Record<string, Asset>
   activeJobs?: Job[]
   isFlow2Api?: boolean
+  /** Flow2API image model from the app settings, used when the project names a Higgsfield model. */
+  flow2apiImageModel?: string
+  /** Flow2API video model from the app settings, used when the project names a Higgsfield model. */
+  flow2apiVideoModel?: string
 }
 
 export interface PrerequisitesCheckResult {
@@ -26,223 +30,179 @@ export interface ClipStatusResult {
   status: ClipGenerationStatus
   blockers: string[]
   basisHash: string
+  /** True when the clip already has a result; a blocked clip with a result is not in the way of a batch. */
+  hasResult: boolean
 }
+
+type ProjectModels = Pick<Project, 'imageModel' | 'videoModel'>
 
 function findAsset(assets: Asset[] | Record<string, Asset>, id: string | null | undefined): Asset | null {
   if (!id) return null
-  if (Array.isArray(assets)) {
-    return assets.find((a) => a.id === id) ?? null
-  }
+  if (Array.isArray(assets)) return assets.find((a) => a.id === id) ?? null
   return assets[id] ?? null
 }
 
+/** Flow2API model ids never contain "/", Higgsfield ids always do; a Higgsfield id falls back to the settings. */
+function flow2apiId(projectModel: string | null | undefined, fallback: string | undefined): string | null {
+  return projectModel && !projectModel.includes('/') ? projectModel : fallback ?? null
+}
+
 /**
- * Validates pre-generation prerequisites for generating a clip image (§6.I).
+ * How many reference sheets the image model takes. Status and generation both read this, so the basis hash
+ * of a fresh image always matches the one the storyboard computes.
  */
-export function checkClipImagePrerequisites(
-  clip: Clip,
-  _project: Project,
-  ctx: GenerationPrerequisitesContext
-): PrerequisitesCheckResult {
+export function referenceLimit(project: ProjectModels, ctx: Pick<GenerationPrerequisitesContext, 'isFlow2Api' | 'flow2apiImageModel'>): number {
+  if (ctx.isFlow2Api) {
+    const m = getFlow2ApiModel(flow2apiId(project.imageModel, ctx.flow2apiImageModel), 'image')
+    return m.supportsRef ? m.maxRefs : 0
+  }
+  return maxRefs(getImageModel(project.imageModel))
+}
+
+/** Allowed video lengths in seconds, or null when the model takes any length. */
+function videoDurations(project: ProjectModels, ctx: Pick<GenerationPrerequisitesContext, 'isFlow2Api' | 'flow2apiVideoModel'>): number[] | { min: number; max: number } | null {
+  if (ctx.isFlow2Api) {
+    const id = (flow2apiId(project.videoModel, ctx.flow2apiVideoModel) ?? '')
+      .trim()
+      .replace(/-\d+s-(landscape|portrait)$/, '')
+      .replace(/-(landscape|portrait)$/, '')
+    const model = FLOW2API_VIDEO_MODELS.find((m) => m.id === id) ?? getFlow2ApiModel(null, 'video')
+    return model.durations.length ? [...model.durations].sort((a, b) => a - b) : null
+  }
+  const d = getVideoModel(project.videoModel).durations
+  if (!d) return null
+  return 'values' in d ? [...d.values].sort((a, b) => a - b) : d
+}
+
+/**
+ * The length to request for a clip's video: the shortest allowed length that covers the clip (and, for
+ * dialogue spoken by the video model, the line), or the longest one. `fits` is false when even the longest
+ * length is too short for the line.
+ */
+export function videoSecondsFor(
+  project: ProjectModels & Pick<Project, 'dialogAudio'>,
+  clip: Pick<Clip, 'durationMs' | 'speakerId' | 'narration'>,
+  ctx: Pick<GenerationPrerequisitesContext, 'isFlow2Api' | 'flow2apiVideoModel'>
+): { seconds: number; longest: number; speechMs: number; fits: boolean } {
+  const speechMs = isVideoDialogue(project, clip) ? estimateNarrationMs(clip.narration) : 0
+  const want = Math.max(1, Math.ceil(Math.max(clip.durationMs, speechMs) / 1000))
+  const d = videoDurations(project, ctx)
+  if (!d) return { seconds: want, longest: Infinity, speechMs, fits: true }
+  if (Array.isArray(d)) {
+    const longest = d[d.length - 1]
+    return { seconds: d.find((v) => v >= want) ?? longest, longest, speechMs, fits: speechMs <= longest * 1000 }
+  }
+  return { seconds: Math.min(d.max, Math.max(d.min, want)), longest: d.max, speechMs, fits: speechMs <= d.max * 1000 }
+}
+
+/** A line spoken on screen by a character is voiced by the video model when the series uses video dialogue. */
+export function isVideoDialogue(project: Pick<Project, 'dialogAudio'>, clip: Pick<Clip, 'speakerId' | 'narration'>): boolean {
+  return !!clip.speakerId && project.dialogAudio === 'video' && !!clip.narration.trim()
+}
+
+/**
+ * What a clip image needs before it can be generated (§6.I). Sheets are required only when the model can
+ * take them as references; a model without references would never look at them.
+ */
+export function checkClipImagePrerequisites(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): PrerequisitesCheckResult {
   const blockers: string[] = []
+  const needsSheets = referenceLimit(project, ctx) > 0
   const charMap = new Map(ctx.characters.map((c) => [c.id, c]))
   const derivMap = new Map(ctx.derivatives.map((d) => [d.id, d]))
   const locMap = new Map(ctx.locations.map((l) => [l.id, l]))
   const propMap = new Map(ctx.props.map((p) => [p.id, p]))
+  const hasSheet = (id: string | null | undefined): boolean => !!id && !!findAsset(ctx.assets, id)
 
-  // 1. Character & costume variant checks
   for (const cid of clip.characterIds || []) {
     const ch = charMap.get(cid)
     if (!ch) {
-      blockers.push(`Karakter tidak terdaftar di Lorebook.`)
+      blockers.push('Ada karakter di adegan ini yang tidak terdaftar di Lorebook.')
       continue
     }
-
     const costumeId = clip.costumeIds?.[cid]
     if (costumeId) {
       const deriv = derivMap.get(costumeId)
-      if (!deriv) {
-        blockers.push(`Varian kostum untuk "${ch.name}" tidak terdaftar di Lorebook.`)
-      } else if (!deriv.sheetAssetId || !findAsset(ctx.assets, deriv.sheetAssetId)) {
-        blockers.push(`Varian kostum "${deriv.name}" (${ch.name}) belum memiliki lembar referensi.`)
-      }
-    } else {
-      if (!ch.sheetAssetId || !findAsset(ctx.assets, ch.sheetAssetId)) {
-        blockers.push(`Karakter "${ch.name}" belum memiliki lembar referensi dasar.`)
-      }
+      if (!deriv) blockers.push(`Varian kostum untuk "${ch.name}" tidak terdaftar di Lorebook.`)
+      else if (needsSheets && !hasSheet(deriv.sheetAssetId)) blockers.push(`Varian kostum "${deriv.name}" (${ch.name}) belum punya lembar referensi.`)
+    } else if (needsSheets && !hasSheet(ch.sheetAssetId)) {
+      blockers.push(`Karakter "${ch.name}" belum punya lembar referensi.`)
     }
   }
 
-  // 2. Location check
   if (clip.locationId) {
     const loc = locMap.get(clip.locationId)
-    if (!loc) {
-      blockers.push(`Lokasi tidak terdaftar di Lorebook.`)
-    } else if (!loc.sheetAssetId || !findAsset(ctx.assets, loc.sheetAssetId)) {
-      blockers.push(`Lokasi "${loc.name}" belum memiliki lembar referensi.`)
-    }
+    if (!loc) blockers.push('Lokasi adegan ini tidak terdaftar di Lorebook.')
+    else if (needsSheets && !hasSheet(loc.sheetAssetId)) blockers.push(`Lokasi "${loc.name}" belum punya lembar referensi.`)
   }
 
-  // 3. Prop checks
   for (const pid of clip.propIds || []) {
     const pr = propMap.get(pid)
-    if (!pr) {
-      blockers.push(`Prop tidak terdaftar di Lorebook.`)
-    } else if (!pr.sheetAssetId || !findAsset(ctx.assets, pr.sheetAssetId)) {
-      blockers.push(`Prop "${pr.name}" belum memiliki lembar referensi.`)
-    }
+    if (!pr) blockers.push('Ada prop di adegan ini yang tidak terdaftar di Lorebook.')
+    else if (needsSheets && !hasSheet(pr.sheetAssetId)) blockers.push(`Prop "${pr.name}" belum punya lembar referensi.`)
   }
 
-  // 4. Active job check
-  if (
-    ctx.activeJobs?.some(
-      (j) => j.clipId === clip.id && j.kind === 'image' && (j.status === 'queued' || j.status === 'running')
-    )
-  ) {
-    blockers.push(`Proses generate gambar sedang berjalan untuk adegan ini.`)
-  }
-
-  return {
-    ok: blockers.length === 0,
-    blockers
-  }
+  return { ok: blockers.length === 0, blockers }
 }
 
 /**
- * Validates pre-generation prerequisites for generating a clip video (§6.I).
+ * What a clip video needs (§6.I). The length is fitted to the model, never a reason to block; only a spoken
+ * line longer than the model's longest video is.
  */
-export function checkClipVideoPrerequisites(
-  clip: Clip,
-  project: Project,
-  ctx: GenerationPrerequisitesContext
-): PrerequisitesCheckResult {
+export function checkClipVideoPrerequisites(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): PrerequisitesCheckResult {
   const blockers: string[] = []
 
-  // 1. Initial image prerequisite
   if (!clip.imageAssetId || !findAsset(ctx.assets, clip.imageAssetId)) {
-    blockers.push(`Klip belum memiliki gambar storyboard. Buat gambar terlebih dahulu.`)
+    blockers.push('Klip belum punya gambar storyboard. Buat gambarnya dulu.')
   }
 
-  // 2. Also check base entity prerequisites
-  const imgPrereqs = checkClipImagePrerequisites(clip, project, ctx)
-  for (const b of imgPrereqs.blockers) {
-    if (!b.includes('generate gambar sedang berjalan')) {
-      blockers.push(b)
-    }
-  }
-
-  // 3. Duration check against video model
-  const durationSec = Math.max(1, Math.round(clip.durationMs / 1000))
-  if (ctx.isFlow2Api) {
-    const cleanId = (project.videoModel || '').trim().replace(/-\d+s-(landscape|portrait)$/, '').replace(/-(landscape|portrait)$/, '')
-    const known = FLOW2API_VIDEO_MODELS.find((m) => m.id === cleanId)
-    const model = known ?? getFlow2ApiModel(null, 'video')
-    if (model.durations.length > 0 && !model.durations.includes(durationSec)) {
-      blockers.push(
-        `Durasi klip (${durationSec} dtk) tidak didukung model video ${model.name}. Pilihan yang didukung: ${model.durations.join(', ')} dtk.`
-      )
-    }
-  } else {
-    try {
-      const model = getVideoModel(project.videoModel)
-      if (model.durations) {
-        if ('values' in model.durations && !model.durations.values.includes(durationSec)) {
-          blockers.push(
-            `Durasi klip (${durationSec} dtk) tidak didukung model ${model.name}. Pilihan: ${model.durations.values.join(', ')} dtk.`
-          )
-        } else if ('min' in model.durations && (durationSec < model.durations.min || durationSec > model.durations.max)) {
-          blockers.push(
-            `Durasi klip (${durationSec} dtk) di luar batas model ${model.name} (${model.durations.min}–${model.durations.max} dtk).`
-          )
-        }
-      }
-    } catch {
-      // Model might not be resolved, let backend handle fallback
-    }
-  }
-
-  // 4. Video dialogue prerequisites (§6.C)
   if (clip.speakerId && project.dialogAudio === 'video') {
     const speaker = ctx.characters.find((c) => c.id === clip.speakerId)
-    if (!speaker) {
-      blockers.push(`Pembicara dialog tidak terdaftar di Lorebook.`)
-    } else if (!(clip.characterIds || []).includes(clip.speakerId)) {
-      blockers.push(`Pembicara "${speaker.name}" harus termasuk dalam karakter yang terlihat di adegan ini.`)
+    if (!speaker) blockers.push('Pembicara dialog tidak terdaftar di Lorebook.')
+    else if (!(clip.characterIds || []).includes(clip.speakerId)) {
+      blockers.push(`Pembicara "${speaker.name}" harus terlihat di adegan ini supaya gerak bibirnya bisa dibuat.`)
     }
-
-    if (!clip.narration.trim()) {
-      blockers.push(`Teks dialog masih kosong.`)
-    } else {
-      const estMs = estimateNarrationMs(clip.narration)
-      if (estMs > clip.durationMs + 1000) {
+    if (!clip.narration.trim()) blockers.push('Teks dialog masih kosong.')
+    else {
+      const fit = videoSecondsFor(project, clip, ctx)
+      if (!fit.fits) {
         blockers.push(
-          `Ucapan dialog (${Math.round(estMs / 1000)} dtk) melebihi durasi video (${durationSec} dtk). Pecah adegan atau perpendek kalimat.`
+          `Ucapan dialog (±${Math.round(fit.speechMs / 1000)} dtk) lebih panjang dari video terpanjang model (${fit.longest} dtk). Pecah adegan atau perpendek kalimat.`
         )
       }
     }
   }
 
-  // 5. Active job check
-  if (
-    ctx.activeJobs?.some(
-      (j) => j.clipId === clip.id && j.kind === 'video' && (j.status === 'queued' || j.status === 'running')
-    )
-  ) {
-    blockers.push(`Proses generate video sedang berjalan untuk adegan ini.`)
-  }
+  return { ok: blockers.length === 0, blockers }
+}
 
-  return {
-    ok: blockers.length === 0,
-    blockers
-  }
+/** What clip narration audio needs (§6.I). */
+export function checkClipAudioPrerequisites(clip: Clip, _project: Project, _ctx: GenerationPrerequisitesContext): PrerequisitesCheckResult {
+  const blockers = clip.narration.trim() ? [] : ['Naskah narasi masih kosong.']
+  return { ok: blockers.length === 0, blockers }
 }
 
 /**
- * Validates pre-generation prerequisites for generating clip TTS audio (§6.I).
+ * Turns a result asset and its expected basis into a status. Results made before basis hashes existed have
+ * no record of their inputs: they count as current, or every old project would be queued for regeneration.
  */
-export function checkClipAudioPrerequisites(
-  clip: Clip,
-  _project: Project,
-  ctx: GenerationPrerequisitesContext
-): PrerequisitesCheckResult {
-  const blockers: string[] = []
-
-  if (!clip.narration.trim()) {
-    blockers.push(`Naskah narasi masih kosong.`)
+function resultStatus(assets: Asset[] | Record<string, Asset>, assetId: string | null | undefined, basisHash: string, prereqs: PrerequisitesCheckResult): ClipStatusResult {
+  const asset = findAsset(assets, assetId)
+  if (asset) {
+    const stored = (asset.meta as Record<string, unknown> | undefined)?.basisHash
+    if (typeof stored !== 'string' || stored === basisHash) return { status: 'current', blockers: [], basisHash, hasResult: true }
+    return prereqs.ok
+      ? { status: 'stale', blockers: [], basisHash, hasResult: true }
+      : { status: 'blocked', blockers: prereqs.blockers, basisHash, hasResult: true }
   }
-
-  if (
-    ctx.activeJobs?.some(
-      (j) => j.clipId === clip.id && j.kind === 'tts' && (j.status === 'queued' || j.status === 'running')
-    )
-  ) {
-    blockers.push(`Proses pembuatan suara sedang berjalan untuk adegan ini.`)
-  }
-
-  return {
-    ok: blockers.length === 0,
-    blockers
-  }
+  return prereqs.ok
+    ? { status: 'missing', blockers: [], basisHash, hasResult: false }
+    : { status: 'blocked', blockers: prereqs.blockers, basisHash, hasResult: false }
 }
 
-/**
- * Computes the generation status (current, stale, missing, or blocked) for a clip image (§6.J).
- */
-export function getClipImageStatus(
-  clip: Clip,
-  project: Project,
-  ctx: GenerationPrerequisitesContext
-): ClipStatusResult {
-  const prereqs = checkClipImagePrerequisites(clip, project, ctx)
-
-  const refItems = collectReferenceSheets(
-    clip,
-    ctx.characters,
-    ctx.derivatives,
-    ctx.locations,
-    ctx.props,
-    3
-  )
+/** The basis hash a clip image is generated from, with the same reference sheets generation will send. */
+export function clipImageBasis(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): { basisHash: string; refSheetAssetIds: string[] } {
+  const refs = collectReferenceSheets(clip, ctx.characters, ctx.derivatives, ctx.locations, ctx.props, referenceLimit(project, ctx))
+  const refSheetAssetIds = refs.map((r) => r.sheetAssetId)
   const basisHash = computeClipImageBasisHash({
     project,
     clip,
@@ -250,138 +210,38 @@ export function getClipImageStatus(
     derivatives: ctx.derivatives,
     locations: ctx.locations,
     props: ctx.props,
-    refSheetAssetIds: refItems.map((r) => r.sheetAssetId)
+    refSheetAssetIds
   })
-
-  if (!prereqs.ok) {
-    return {
-      status: 'blocked',
-      blockers: prereqs.blockers,
-      basisHash
-    }
-  }
-
-  const asset = findAsset(ctx.assets, clip.imageAssetId)
-  if (!asset) {
-    return {
-      status: 'missing',
-      blockers: [],
-      basisHash
-    }
-  }
-
-  const assetBasisHash = (asset.meta as Record<string, unknown> | undefined)?.basisHash
-  if (assetBasisHash === basisHash) {
-    return {
-      status: 'current',
-      blockers: [],
-      basisHash
-    }
-  }
-
-  return {
-    status: 'stale',
-    blockers: [],
-    basisHash
-  }
+  return { basisHash, refSheetAssetIds }
 }
 
-/**
- * Computes the generation status (current, stale, missing, or blocked) for a clip video (§6.J).
- */
-export function getClipVideoStatus(
-  clip: Clip,
-  project: Project,
-  ctx: GenerationPrerequisitesContext
-): ClipStatusResult {
-  const prereqs = checkClipVideoPrerequisites(clip, project, ctx)
-
-  const basisHash = computeClipVideoBasisHash({
-    project,
-    clip,
-    characters: ctx.characters
-  })
-
-  if (!prereqs.ok) {
-    return {
-      status: 'blocked',
-      blockers: prereqs.blockers,
-      basisHash
-    }
-  }
-
-  const asset = findAsset(ctx.assets, clip.videoAssetId)
-  if (!asset) {
-    return {
-      status: 'missing',
-      blockers: [],
-      basisHash
-    }
-  }
-
-  const assetBasisHash = (asset.meta as Record<string, unknown> | undefined)?.basisHash
-  if (assetBasisHash === basisHash) {
-    return {
-      status: 'current',
-      blockers: [],
-      basisHash
-    }
-  }
-
-  return {
-    status: 'stale',
-    blockers: [],
-    basisHash
-  }
+/** Status of a clip image (§6.J). */
+export function getClipImageStatus(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): ClipStatusResult {
+  const { basisHash } = clipImageBasis(clip, project, ctx)
+  return resultStatus(ctx.assets, clip.imageAssetId, basisHash, checkClipImagePrerequisites(clip, project, ctx))
 }
 
-/**
- * Computes the generation status for clip TTS audio (§6.J).
- */
-export function getClipAudioStatus(
-  clip: Clip,
-  project: Project,
-  ctx: GenerationPrerequisitesContext
-): ClipStatusResult {
-  const prereqs = checkClipAudioPrerequisites(clip, project, ctx)
+/** Status of a clip video (§6.J). */
+export function getClipVideoStatus(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): ClipStatusResult {
+  const basisHash = computeClipVideoBasisHash({ project, clip, characters: ctx.characters })
+  return resultStatus(ctx.assets, clip.videoAssetId, basisHash, checkClipVideoPrerequisites(clip, project, ctx))
+}
 
+/** Status of clip narration audio (§6.J). */
+export function getClipAudioStatus(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): ClipStatusResult {
   const char = clip.speakerId ? ctx.characters.find((c) => c.id === clip.speakerId) : null
-  const voice = (char?.ttsProvider === project.ttsProvider ? char?.ttsVoice : null) || project.ttsVoice || ''
-  const basisHash = computeClipTtsBasisHash({
-    narration: clip.narration,
-    voice,
-    ttsProvider: project.ttsProvider
-  })
+  // Same fallback as generateClipTts, or every Gemini take without a chosen voice would look stale.
+  const voice = (char?.ttsProvider === project.ttsProvider ? char?.ttsVoice : null) || project.ttsVoice || (project.ttsProvider === 'gemini' ? 'Charon' : '')
+  const basisHash = computeClipTtsBasisHash({ narration: clip.narration, voice, ttsProvider: project.ttsProvider })
+  return resultStatus(ctx.assets, clip.audioAssetId, basisHash, checkClipAudioPrerequisites(clip, project, ctx))
+}
 
-  if (!prereqs.ok) {
-    return {
-      status: 'blocked',
-      blockers: prereqs.blockers,
-      basisHash
-    }
-  }
-
-  const asset = findAsset(ctx.assets, clip.audioAssetId)
-  if (!asset) {
-    return {
-      status: 'missing',
-      blockers: [],
-      basisHash
-    }
-  }
-
-  const assetBasisHash = (asset.meta as Record<string, unknown> | undefined)?.basisHash
-  if (assetBasisHash === basisHash) {
-    return {
-      status: 'current',
-      blockers: [],
-      basisHash
-    }
-  }
-
-  return {
-    status: 'stale',
-    blockers: [],
-    basisHash
-  }
+/**
+ * Splits clips for a batch run: which ones it makes, and which blocked ones stop it (all-or-nothing, §6.J).
+ * A blocked clip that already has a result only stops the batch when stale results are being remade.
+ */
+export function planBatch<T extends { status: ClipStatusResult }>(items: T[], includeStale: boolean): { targets: T[]; blocking: T[] } {
+  const targets = items.filter((i) => i.status.status === 'missing' || (includeStale && i.status.status === 'stale'))
+  const blocking = items.filter((i) => i.status.status === 'blocked' && (!i.status.hasResult || includeStale))
+  return { targets, blocking }
 }
