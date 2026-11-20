@@ -2,14 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, ArrowRight, Copy, FolderOpen, MoreHorizontal, Plus, RefreshCw, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { DURATIONS, LANGUAGES, clipCountFor, llmName } from '@shared/models'
 import { getStyle } from '@shared/styles'
-import type { ApiProvider, AppSettings, AspectRatio, KeyStatus, ProjectStatus, ProjectSummary, TtsProvider } from '@shared/types'
+import type { ApiProvider, AppSettings, AspectRatio, DialogAudio, KeyStatus, ProjectStatus, ProjectSummary, TtsProvider } from '@shared/types'
 import { Logo } from '../components/Logo'
 import { Select, type SelectOption } from '../components/Select'
 import { StyleSwatch } from '../components/StyleArt'
 import { StyleMenu } from '../components/StyleMenu'
+import { StylePicker } from '../components/StylePicker'
 import { ThemeToggle } from '../components/ThemeToggle'
-import { Badge, Button, Chip, IconButton, Menu, confirmDialog, cx } from '../components/ui'
-import { errorText, mmss, relativeTime } from '../lib/format'
+import { Badge, Button, Chip, Field, IconButton, Menu, Modal, Progress, Segmented, confirmDialog, cx, inputCls } from '../components/ui'
+import { errorText, relativeTime } from '../lib/format'
 import { TTS_NAMES, ttsReadiness, usableTts } from '../lib/keys'
 import { useApp } from '../store/app'
 
@@ -55,10 +56,11 @@ export function Home() {
   const [durationSec, setDurationSec] = useState(60)
   const [longImageCredit, setLongImageCredit] = useState<number | null>(null)
   const [language, setLanguage] = useState('id')
-  const [aspectRatio, setAspectRatio] = useState<AspectRatio>('16:9')
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>('9:16')
   const [styleId, setStyleId] = useState('stickman')
   const [tts, setTts] = useState<TtsProvider>('gemini')
   const [creating, setCreating] = useState(false)
+  const [newModalOpen, setNewModalOpen] = useState(false)
 
   const refresh = (): void => {
     window.api.projects
@@ -195,6 +197,9 @@ export function Home() {
         </label>
         <div className="flex-1" />
         <ThemeToggle />
+        <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setNewModalOpen(true)}>
+          Serial baru
+        </Button>
         <Button icon={<SlidersHorizontal className="size-[18px]" />} onClick={() => go({ name: 'settings', back: { name: 'home' } })}>
           Pengaturan
           {setupIssues.length > 0 && <span className="size-2 rounded-full bg-accent" />}
@@ -315,22 +320,29 @@ export function Home() {
           <div className="grid grid-cols-4 gap-5">
             <button
               type="button"
-              onClick={() => void start()}
-              className="flex min-h-[262px] flex-col items-center justify-center gap-2.5 rounded-2xl border-[1.5px] border-dashed border-line-3 text-ink-2 hover:border-ink-2 hover:bg-surface"
+              onClick={() => setNewModalOpen(true)}
+              className="flex min-h-[262px] flex-col items-center justify-center gap-2.5 rounded-2xl border-[1.5px] border-dashed border-line-3 text-ink-2 transition-all hover:border-ink-2 hover:bg-surface"
             >
               <span className="flex size-[54px] items-center justify-center rounded-full border-[1.5px] border-ink bg-accent text-white shadow-ink">
                 <Plus className="size-6" strokeWidth={2.2} />
               </span>
-              <span className="text-base font-semibold text-ink">Proyek baru</span>
-              <span className="text-[13px]">Mulai dari ide atau sinopsis</span>
+              <span className="font-display text-base font-bold text-ink">Serial baru</span>
+              <span className="text-[13px] text-muted">Mulai dari serial drama baru</span>
             </button>
 
             {visible.map((p) => {
               const st = STATUS[p.status]
+              const epCount = p.episodeCount || 1
+              const expCount = p.exportedCount || 0
+              const progressVal = epCount > 0 ? expCount / epCount : 0
+
               return (
-                <article key={p.id} className="flex flex-col overflow-hidden rounded-2xl border border-line bg-surface">
+                <article
+                  key={p.id}
+                  className="flex flex-col justify-between overflow-hidden rounded-2xl border border-line bg-surface shadow-xs transition-all hover:border-ink-2 hover:shadow-md"
+                >
                   <button type="button" onClick={() => go({ name: 'project', id: p.id })} className="text-left">
-                    <div className="relative aspect-video w-full overflow-hidden border-b border-line">
+                    <div className="relative aspect-video w-full overflow-hidden border-b border-line bg-sand/30">
                       {p.coverUrl ? (
                         <img src={p.coverUrl} alt="" className="size-full object-cover" />
                       ) : (
@@ -339,28 +351,43 @@ export function Home() {
                       <span className="absolute left-2.5 top-2.5 rounded-full border border-ink bg-surface px-2.5 py-[3px] text-xs font-semibold">
                         {getStyle(p.styleId).name}
                       </span>
-                      {p.totalMs > 0 && (
-                        <span className="absolute bottom-2.5 right-2.5 rounded-md bg-ink px-2 py-[3px] font-mono text-xs text-paper">
-                          {mmss(p.totalMs)}
-                        </span>
-                      )}
+                      <span className="absolute right-2.5 top-2.5 rounded-md bg-ink px-2 py-[2px] font-mono text-[11px] font-bold text-paper">
+                        {p.aspectRatio || '9:16'}
+                      </span>
                     </div>
-                    <div className="line-clamp-2 min-h-[46px] px-4 pb-0.5 pt-3.5 text-base font-semibold leading-snug">{p.title}</div>
+
+                    <div className="flex flex-col gap-1.5 p-4">
+                      <div className="line-clamp-2 min-h-[44px] font-display text-base font-bold leading-snug text-ink">
+                        {p.title}
+                      </div>
+
+                      {/* Episode count & Export progress bar */}
+                      <div className="flex flex-col gap-1 pt-1">
+                        <div className="flex items-center justify-between text-xs text-muted">
+                          <span>{epCount} episode</span>
+                          <span>
+                            {expCount}/{epCount} terekspor
+                          </span>
+                        </div>
+                        <Progress value={progressVal} className="h-1.5" />
+                      </div>
+                    </div>
                   </button>
-                  <div className="flex items-center gap-2 py-2 pl-4 pr-2">
+
+                  <div className="flex items-center gap-2 border-t border-line/70 py-2.5 pl-4 pr-2">
                     <Badge tone={st.tone}>{st.label}</Badge>
-                    <span className="truncate text-[13px] text-muted">{relativeTime(p.updatedAt)}</span>
+                    <span className="truncate text-xs text-muted">{relativeTime(p.updatedAt)}</span>
                     <div className="flex-1" />
                     <Menu
                       trigger={(open) => (
-                        <IconButton label="Opsi proyek" onClick={open} className="border-transparent" size={36}>
-                          <MoreHorizontal className="size-[18px]" />
+                        <IconButton label="Opsi serial" onClick={open} className="border-transparent" size={32}>
+                          <MoreHorizontal className="size-4" />
                         </IconButton>
                       )}
                       items={[
-                        { label: 'Buka', icon: <FolderOpen className="size-4" />, run: () => go({ name: 'project', id: p.id }) },
-                        { label: 'Duplikat', icon: <Copy className="size-4" />, run: () => void duplicate(p) },
-                        { label: 'Hapus', icon: <Trash2 className="size-4" />, danger: true, run: () => void remove(p) }
+                        { label: 'Buka serial', icon: <FolderOpen className="size-4" />, run: () => go({ name: 'project', id: p.id }) },
+                        { label: 'Duplikat serial', icon: <Copy className="size-4" />, run: () => void duplicate(p) },
+                        { label: 'Hapus serial', icon: <Trash2 className="size-4" />, danger: true, run: () => void remove(p) }
                       ]}
                     />
                   </div>
@@ -369,10 +396,121 @@ export function Home() {
             })}
           </div>
           {projects && projects.length === 0 && (
-            <p className="text-sm text-muted">Belum ada proyek. Tulis ide di atas lalu klik Mulai.</p>
+            <p className="text-sm text-muted">Belum ada serial drama. Buat serial baru untuk memulai.</p>
           )}
         </section>
       </main>
+
+      <NewSerialModal
+        open={newModalOpen}
+        onClose={() => setNewModalOpen(false)}
+        onCreated={(id) => go({ name: 'project', id })}
+      />
     </div>
+  )
+}
+
+function NewSerialModal({
+  open,
+  onClose,
+  onCreated
+}: {
+  open: boolean
+  onClose: () => void
+  onCreated: (projectId: string) => void
+}) {
+  const [title, setTitle] = useState('')
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>('9:16')
+  const [styleId, setStyleId] = useState('stickman')
+  const [dialogAudio, setDialogAudio] = useState<DialogAudio>('video')
+  const [creating, setCreating] = useState(false)
+  const { toast } = useApp()
+
+  const handleCreate = async () => {
+    setCreating(true)
+    try {
+      const bundle = await window.api.projects.create({
+        title: title.trim() || 'Serial Baru',
+        aspectRatio,
+        styleId,
+        dialogAudio
+      })
+      toast('success', `Serial "${bundle.project.title}" berhasil dibuat`)
+      onCreated(bundle.project.id)
+    } catch (err) {
+      toast('error', `Gagal membuat serial: ${errorText(err)}`)
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Buat Serial Baru"
+      subtitle="Atur judul, rasio aspek, gaya visual, dan sumber dialog untuk serial drama kamu."
+      width={680}
+    >
+      <div className="flex flex-col gap-4 text-sm text-ink">
+        <Field label="Judul Serial">
+          <input
+            autoFocus
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Misal: Pembalasan Sang Pewaris, Misteri Ruang Rapat..."
+            className={cx(inputCls, 'h-11')}
+          />
+        </Field>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="Rasio Aspek">
+            <Segmented<AspectRatio>
+              value={aspectRatio}
+              onChange={setAspectRatio}
+              options={[
+                { id: '9:16', label: '9:16 · Vertikal (Shorts)' },
+                { id: '16:9', label: '16:9 · Horizontal' }
+              ]}
+              size="md"
+            />
+          </Field>
+
+          <Field
+            label="Sumber Suara Dialog"
+            hint={
+              dialogAudio === 'video'
+                ? 'Suara dan gerak bibir dihasilkan langsung dari video AI (Veo).'
+                : 'Dialog diucapkan lewat suara narator atau TTS.'
+            }
+          >
+            <Segmented<DialogAudio>
+              value={dialogAudio}
+              onChange={setDialogAudio}
+              options={[
+                { id: 'video', label: 'Dari video (Veo)' },
+                { id: 'tts', label: 'Suara TTS' }
+              ]}
+              size="md"
+            />
+          </Field>
+        </div>
+
+        <Field label="Gaya Visual Serial" hint="Gaya seni ilustrasi yang akan digunakan pada semua lembar karakter dan adegan.">
+          <div className="scroll-thin max-h-60 overflow-y-auto pr-1">
+            <StylePicker value={styleId} onChange={setStyleId} />
+          </div>
+        </Field>
+
+        <div className="flex items-center justify-end gap-2.5 border-t border-line pt-4">
+          <Button onClick={onClose} disabled={creating}>
+            Batal
+          </Button>
+          <Button variant="primary" loading={creating} onClick={() => void handleCreate()}>
+            Buat serial
+          </Button>
+        </div>
+      </div>
+    </Modal>
   )
 }

@@ -17,15 +17,15 @@ Rincian setiap tugas ada di [plan.md](plan.md); desain di
 
 ## Fase 2 — Studio Hub & Lorebook
 
-- [ ] Tugas 9 — Kerangka Studio: header, sidebar yang bisa ciut (otomatis ciut di Editor), buka episode/tab terakhir.
-- [ ] Tugas 10 — Episode Hub tanpa AI: keadaan kosong, CRUD dan urutan episode, kartu yang bisa diedit.
-- [ ] Tugas 11 — Lorebook karakter: grid, panel detail, gaya suara, alias, "Dipakai di", lembar 3 tampak.
-- [ ] Tugas 12 — Varian kostum: lembar dari edit lembar dasar, unggah pengganti, tanda basi.
-- [ ] Tugas 13 — Lokasi dan prop: CRUD, lembar tunggal, chip di kartu klip.
-- [ ] Tugas 14 — Gabung dan hapus aset dengan ringkasan dampak.
-- [ ] Tugas 15 — Home kartu serial dan modal Buat serial baru.
-- [ ] Tugas 16 — Hapus alur narasi lama dan tulis ulang dokumentasi terkait.
-- [ ] Checkpoint 2 — kriteria fase 2 + screenshot 1180×720 dan 1600×900, terang dan gelap.
+- [x] Tugas 9 — Kerangka Studio: header, sidebar yang bisa ciut (otomatis ciut di Editor), buka episode/tab terakhir.
+- [x] Tugas 10 — Episode Hub tanpa AI: keadaan kosong, CRUD dan urutan episode, kartu yang bisa diedit.
+- [x] Tugas 11 — Lorebook karakter: grid, panel detail, gaya suara, alias, "Dipakai di", lembar 3 tampak.
+- [x] Tugas 12 — Varian kostum: lembar dari edit lembar dasar, unggah pengganti, tanda basi.
+- [x] Tugas 13 — Lokasi dan prop: CRUD, lembar tunggal, chip di kartu klip.
+- [x] Tugas 14 — Gabung dan hapus aset dengan ringkasan dampak.
+- [x] Tugas 15 — Home kartu serial dan modal Buat serial baru.
+- [x] Tugas 16 — Hapus alur narasi lama dan tulis ulang dokumentasi terkait.
+- [x] Checkpoint 2 — kriteria fase 2 + screenshot 1180×720 dan 1600×900, terang dan gelap.
 
 ## Fase 3 — Planner & naskah dua tahap
 

@@ -31,14 +31,37 @@ const api: StudioApi = {
     remove: call('episodes:remove'),
     reorder: call('episodes:reorder')
   },
+  lorebook: {
+    createCharacter: call('lorebook:createCharacter'),
+    updateCharacter: call('lorebook:updateCharacter'),
+    removeCharacter: call('lorebook:removeCharacter'),
+    pickCharacterSheet: call('lorebook:pickCharacterSheet'),
+
+    listDerivatives: call('lorebook:listDerivatives'),
+    createDerivative: call('lorebook:createDerivative'),
+    updateDerivative: call('lorebook:updateDerivative'),
+    removeDerivative: call('lorebook:removeDerivative'),
+    generateDerivativeSheet: call('lorebook:generateDerivativeSheet'),
+    pickDerivativeSheet: call('lorebook:pickDerivativeSheet'),
+
+    listLocations: call('lorebook:listLocations'),
+    createLocation: call('lorebook:createLocation'),
+    updateLocation: call('lorebook:updateLocation'),
+    removeLocation: call('lorebook:removeLocation'),
+    generateLocationSheet: call('lorebook:generateLocationSheet'),
+    pickLocationSheet: call('lorebook:pickLocationSheet'),
+
+    listProps: call('lorebook:listProps'),
+    createProp: call('lorebook:createProp'),
+    updateProp: call('lorebook:updateProp'),
+    removeProp: call('lorebook:removeProp'),
+    generatePropSheet: call('lorebook:generatePropSheet'),
+    pickPropSheet: call('lorebook:pickPropSheet'),
+
+    assetUsage: call('lorebook:assetUsage'),
+    merge: call('lorebook:merge')
+  },
   story: {
-    chapterPlan: call('story:chapterPlan'),
-    styleProfile: call('story:styleProfile'),
-    brief: call('story:brief'),
-    hooks: call('story:hooks'),
-    outline: call('story:outline'),
-    script: call('story:script'),
-    reviseScene: call('story:reviseScene'),
     visuals: call('story:visuals'),
     musicPrompt: call('story:musicPrompt'),
     planSmartSfx: call('story:planSmartSfx'),

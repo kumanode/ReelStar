@@ -5,7 +5,7 @@ import { estimateWordTimings } from '@shared/captions'
 import { stripVoiceTags } from '@shared/speech'
 import { getImageModel, getVideoModel, imageBody, maxRefs, promptLimit, resolutionOptions, videoBody, type HfModel } from '@shared/higgsfield'
 import { getStyle, NO_TEXT } from '@shared/styles'
-import type { AspectRatio, Asset, Character, Clip, CreditEstimate, Job, Project, ThumbnailRequest, WordTiming } from '@shared/types'
+import type { AspectRatio, Asset, Character, CharacterDerivative, Clip, CreditEstimate, Job, Location, Project, Prop, ThumbnailRequest, WordTiming } from '@shared/types'
 import { getDb } from './db'
 import { emit } from './events'
 import { runJob, type TaskCtx } from './jobs'
@@ -17,12 +17,18 @@ import {
   getAsset,
   getCharacter,
   getClip,
+  getDerivative,
   getJob,
+  getLocation,
   getProject,
+  getProp,
   insertAsset,
   insertJob,
   patchClip,
   setCharacterSheet,
+  setDerivativeSheet,
+  setLocationSheet,
+  setPropSheet,
   touchProject,
   unfinishedJobs,
   updateAssetMeta,
@@ -132,6 +138,33 @@ function sheetPrompt(project: Project, c: Character): string {
   ].join('\n\n')
 }
 
+function derivativeSheetPrompt(project: Project, c: Character, d: CharacterDerivative): string {
+  const style = getStyle(project.styleId)
+  return [
+    style.prompt,
+    `Character reference sheet variant for "${c.name}" (${d.name}). Base appearance: ${c.description}. Costume change: ${d.promptChange}. The character is ${style.characterHint}.`,
+    'Show the SAME character three times side by side: front view, three-quarter view and side view, full body, neutral standing pose, evenly spaced, on a plain light neutral background. Consistent proportions, face, hair, and costume in all three views matching the costume modification.'
+  ].join('\n\n')
+}
+
+function locationSheetPrompt(project: Project, l: Location): string {
+  const style = getStyle(project.styleId)
+  return [
+    style.prompt,
+    `Location environment reference for "${l.name}": ${l.description || l.name}.`,
+    'Clean architectural or landscape establishing shot, cinematic composition, NO people, NO characters, empty scenery, high detail, clear lighting.'
+  ].join('\n\n')
+}
+
+function propSheetPrompt(project: Project, p: Prop): string {
+  const style = getStyle(project.styleId)
+  return [
+    style.prompt,
+    `Prop reference sheet for "${p.name}": ${p.description || p.name}.`,
+    'Isolated studio shot of the single object, clean light neutral background, high detail, centered, NO people, NO hands holding it.'
+  ].join('\n\n')
+}
+
 // ---------- waiting for character sheets ----------
 
 async function waitForSheets(characterIds: string[], signal: AbortSignal): Promise<void> {
@@ -165,17 +198,32 @@ async function referenceUrls(model: HfModel, chars: Character[], signal: AbortSi
 // ---------- finishing a Higgsfield request (also used to resume after a restart) ----------
 
 interface HfPayload {
-  target: 'clip-image' | 'sheet' | 'clip-video' | 'thumbnail'
+  target: 'clip-image' | 'sheet' | 'clip-video' | 'thumbnail' | 'derivative-sheet' | 'location-sheet' | 'prop-sheet'
   model: string
   prompt: string
   resolution?: string
+  derivativeId?: string
+  locationId?: string
+  propId?: string
 }
 
 async function finishHiggsfield(ctx: TaskCtx, job: Job, requestId: string, payload: HfPayload): Promise<string> {
   const isVideo = payload.target === 'clip-video'
+  const progressLabel =
+    isVideo
+      ? 'Membuat video'
+      : payload.target === 'sheet'
+        ? 'Membuat lembar karakter'
+        : payload.target === 'derivative-sheet'
+          ? 'Membuat lembar varian'
+          : payload.target === 'location-sheet'
+            ? 'Membuat lembar lokasi'
+            : payload.target === 'prop-sheet'
+              ? 'Membuat lembar prop'
+              : 'Membuat gambar'
   const result = await hf.waitForResult(
     requestId,
-    imageProgress(ctx, isVideo ? 'Membuat video' : payload.target === 'sheet' ? 'Membuat lembar karakter' : 'Membuat gambar'),
+    imageProgress(ctx, progressLabel),
     ctx.signal,
     isVideo ? 30 * 60 * 1000 : 15 * 60 * 1000
   )
@@ -195,6 +243,9 @@ async function finishHiggsfield(ctx: TaskCtx, job: Job, requestId: string, paylo
     projectId: job.projectId,
     clipId: job.clipId,
     characterId: job.characterId,
+    derivativeId: payload.derivativeId ?? null,
+    locationId: payload.locationId ?? null,
+    propId: payload.propId ?? null,
     kind: isVideo ? 'video' : 'image',
     provider: 'higgsfield',
     model: payload.model,
@@ -212,6 +263,12 @@ async function finishHiggsfield(ctx: TaskCtx, job: Job, requestId: string, paylo
   if (payload.target === 'sheet' && job.characterId) {
     setCharacterSheet(job.characterId, asset.id)
     emit.character({ characterId: job.characterId, patch: { sheetAssetId: asset.id } })
+  } else if (payload.target === 'derivative-sheet' && payload.derivativeId) {
+    setDerivativeSheet(payload.derivativeId, asset.id)
+  } else if (payload.target === 'location-sheet' && payload.locationId) {
+    setLocationSheet(payload.locationId, asset.id)
+  } else if (payload.target === 'prop-sheet' && payload.propId) {
+    setPropSheet(payload.propId, asset.id)
   } else if (payload.target === 'clip-image' && job.clipId) {
     patchClip(job.clipId, { imageAssetId: asset.id })
     emit.clip({ clipId: job.clipId, patch: { imageAssetId: asset.id } })
@@ -484,6 +541,194 @@ export function generateCharacterSheet(characterId: string): Job {
       endpoint: model.id,
       body: imageBody(model, prompt, '16:9', []),
       payload: { target: 'sheet', model: model.id, prompt }
+    }
+  })
+}
+
+export function generateDerivativeSheet(derivativeId: string): Job {
+  const d = getDerivative(derivativeId)
+  if (!d) throw new Error('Varian kostum tidak ditemukan')
+  const c = getCharacter(d.characterId)
+  if (!c.sheetAssetId) throw new Error('Buat lembar karakter dasar terlebih dahulu sebelum membuat varian kostum.')
+  const baseSheet = getAsset(c.sheetAssetId)
+  if (!baseSheet) throw new Error('Lembar karakter dasar tidak ditemukan.')
+
+  const project = getProject(c.projectId)
+  const prompt = derivativeSheetPrompt(project, c, d)
+
+  if (isFlow2Api()) {
+    const job = insertJob({ projectId: c.projectId, characterId: c.id, kind: 'sheet', provider: 'flow2api', payload: { target: 'derivative-sheet', derivativeId } })
+    emit.job(job)
+    return runJob(job, 'flow2api', async (ctx) => {
+      const baseModel = (project.imageModel && !project.imageModel.includes('/') ? project.imageModel : null) ?? getSettings().flow2apiImageModel
+      const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
+
+      const refBuffers: Buffer[] = []
+      const absSheet = assetAbsPath(project.id, baseSheet.localPath)
+      if (existsSync(absSheet)) {
+        refBuffers.push(readFileSync(absSheet))
+      }
+
+      ctx.progress(0.04, 'Menyiapkan prompt lembar varian Flow2API')
+      const { mediaUrl } = await f2a.generateImage({
+        prompt,
+        model: modelId,
+        referenceImages: refBuffers,
+        signal: ctx.signal,
+        onProgress: (p, msg) => ctx.progress(p, msg)
+      })
+
+      ctx.progress(0.93, 'Mengunduh lembar varian')
+      const { bytes, contentType } = await downloadTo(mediaUrl, ctx.signal)
+      if (ctx.signal.aborted) throw new Error('Dibatalkan')
+      const rel = saveFile(project.id, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
+      const abs = assetAbsPath(project.id, rel)
+      const size = await probeSize(abs)
+      if (ctx.signal.aborted) throw new Error('Dibatalkan')
+      const asset = insertAsset({
+        projectId: project.id,
+        characterId: c.id,
+        derivativeId: d.id,
+        kind: 'image',
+        provider: 'flow2api',
+        model: modelId,
+        prompt,
+        remoteUrl: mediaUrl,
+        localPath: rel,
+        width: size?.width ?? null,
+        height: size?.height ?? null
+      })
+      setDerivativeSheet(d.id, asset.id)
+      emit.asset(asset)
+      touchProject(c.projectId)
+      return asset.id
+    })
+  }
+
+  const job = insertJob({ projectId: c.projectId, characterId: c.id, kind: 'sheet', provider: 'higgsfield', payload: { target: 'derivative-sheet', derivativeId } })
+  return startHiggsfield(job, async (ctx) => {
+    const model = getImageModel(project.imageModel)
+    const refUrl = await publicUrlFor(baseSheet, ctx.signal)
+    return {
+      endpoint: model.id,
+      body: imageBody(model, prompt, '16:9', [refUrl]),
+      payload: { target: 'derivative-sheet', derivativeId, model: model.id, prompt }
+    }
+  })
+}
+
+export function generateLocationSheet(locationId: string): Job {
+  const l = getLocation(locationId)
+  if (!l) throw new Error('Lokasi tidak ditemukan')
+  const project = getProject(l.projectId)
+  const prompt = locationSheetPrompt(project, l)
+
+  if (isFlow2Api()) {
+    const job = insertJob({ projectId: l.projectId, kind: 'image', provider: 'flow2api', payload: { target: 'location-sheet', locationId } })
+    emit.job(job)
+    return runJob(job, 'flow2api', async (ctx) => {
+      const baseModel = (project.imageModel && !project.imageModel.includes('/') ? project.imageModel : null) ?? getSettings().flow2apiImageModel
+      const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
+
+      ctx.progress(0.04, 'Menyiapkan prompt lembar lokasi Flow2API')
+      const { mediaUrl } = await f2a.generateImage({
+        prompt,
+        model: modelId,
+        signal: ctx.signal,
+        onProgress: (p, msg) => ctx.progress(p, msg)
+      })
+
+      ctx.progress(0.93, 'Mengunduh lembar lokasi')
+      const { bytes, contentType } = await downloadTo(mediaUrl, ctx.signal)
+      if (ctx.signal.aborted) throw new Error('Dibatalkan')
+      const rel = saveFile(project.id, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
+      const abs = assetAbsPath(project.id, rel)
+      const size = await probeSize(abs)
+      if (ctx.signal.aborted) throw new Error('Dibatalkan')
+      const asset = insertAsset({
+        projectId: project.id,
+        locationId: l.id,
+        kind: 'image',
+        provider: 'flow2api',
+        model: modelId,
+        prompt,
+        remoteUrl: mediaUrl,
+        localPath: rel,
+        width: size?.width ?? null,
+        height: size?.height ?? null
+      })
+      setLocationSheet(l.id, asset.id)
+      emit.asset(asset)
+      touchProject(l.projectId)
+      return asset.id
+    })
+  }
+
+  const job = insertJob({ projectId: l.projectId, kind: 'image', provider: 'higgsfield', payload: { target: 'location-sheet', locationId } })
+  return startHiggsfield(job, async () => {
+    const model = getImageModel(project.imageModel)
+    return {
+      endpoint: model.id,
+      body: imageBody(model, prompt, '16:9', []),
+      payload: { target: 'location-sheet', locationId, model: model.id, prompt }
+    }
+  })
+}
+
+export function generatePropSheet(propId: string): Job {
+  const pr = getProp(propId)
+  if (!pr) throw new Error('Prop tidak ditemukan')
+  const project = getProject(pr.projectId)
+  const prompt = propSheetPrompt(project, pr)
+
+  if (isFlow2Api()) {
+    const job = insertJob({ projectId: pr.projectId, kind: 'image', provider: 'flow2api', payload: { target: 'prop-sheet', propId } })
+    emit.job(job)
+    return runJob(job, 'flow2api', async (ctx) => {
+      const baseModel = (project.imageModel && !project.imageModel.includes('/') ? project.imageModel : null) ?? getSettings().flow2apiImageModel
+      const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
+
+      ctx.progress(0.04, 'Menyiapkan prompt lembar prop Flow2API')
+      const { mediaUrl } = await f2a.generateImage({
+        prompt,
+        model: modelId,
+        signal: ctx.signal,
+        onProgress: (p, msg) => ctx.progress(p, msg)
+      })
+
+      ctx.progress(0.93, 'Mengunduh lembar prop')
+      const { bytes, contentType } = await downloadTo(mediaUrl, ctx.signal)
+      if (ctx.signal.aborted) throw new Error('Dibatalkan')
+      const rel = saveFile(project.id, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
+      const abs = assetAbsPath(project.id, rel)
+      const size = await probeSize(abs)
+      if (ctx.signal.aborted) throw new Error('Dibatalkan')
+      const asset = insertAsset({
+        projectId: project.id,
+        propId: pr.id,
+        kind: 'image',
+        provider: 'flow2api',
+        model: modelId,
+        prompt,
+        remoteUrl: mediaUrl,
+        localPath: rel,
+        width: size?.width ?? null,
+        height: size?.height ?? null
+      })
+      setPropSheet(pr.id, asset.id)
+      emit.asset(asset)
+      touchProject(pr.projectId)
+      return asset.id
+    })
+  }
+
+  const job = insertJob({ projectId: pr.projectId, kind: 'image', provider: 'higgsfield', payload: { target: 'prop-sheet', propId } })
+  return startHiggsfield(job, async () => {
+    const model = getImageModel(project.imageModel)
+    return {
+      endpoint: model.id,
+      body: imageBody(model, prompt, '16:9', []),
+      payload: { target: 'prop-sheet', propId, model: model.id, prompt }
     }
   })
 }

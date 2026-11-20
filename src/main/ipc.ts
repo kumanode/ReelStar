@@ -6,12 +6,17 @@ import type {
   ApiProvider,
   AppSettings,
   AspectRatio,
+  Character,
+  CharacterDerivative,
   Episode,
   ExportOptions,
   KeyTestResult,
+  Location,
+  MergeAssetInput,
   ModelSource,
   NewProjectInput,
   ProjectSnapshot,
+  Prop,
   ThumbnailRequest,
   TtsProvider,
   VoiceOption,
@@ -22,6 +27,9 @@ import {
   estimateCredits,
   forgetEstimates,
   generateCharacterSheet,
+  generateDerivativeSheet,
+  generateLocationSheet,
+  generatePropSheet,
   generateClipImage,
   generateClipTts,
   generateThumbnail,
@@ -39,27 +47,52 @@ import { assetAbsPath, sfxDir } from './paths'
 import { detachVoice, splitClip } from './editing'
 import { emit } from './events'
 import {
+  createCharacter,
+  createDerivative,
   createEpisode,
+  createLocation,
   createProject,
+  createProp,
+  derivativesOf,
   duplicateProject,
   getAsset,
+  getAssetUsage,
   getBundle,
+  getCharacter,
   getClip,
+  getDerivative,
+  getLocation,
   getProject,
+  getProp,
   insertAsset,
   listEpisodes,
   listProjects,
+  locationsOf,
+  mergeAssets,
   patchClip,
+  propsOf,
+  removeCharacter,
+  removeDerivative,
   removeEpisode,
+  removeLocation,
   removeProject,
+  removeProp,
   reorderEpisodes,
   saveSnapshot,
+  setCharacterSheet,
+  setDerivativeSheet,
+  setLocationSheet,
+  setPropSheet,
   touchProject,
   updateAssetMeta,
-  updateEpisode
+  updateCharacter,
+  updateDerivative,
+  updateEpisode,
+  updateLocation,
+  updateProp
 } from './repo'
 import { BUILTIN_SFX } from '@shared/sfx'
-import type { Clip, StoryBrief, StoryStyleId } from '@shared/types'
+import type { Clip } from '@shared/types'
 import { clearSecret, keyStatuses, recordCheck, revealSecret, setSecret } from './secrets'
 import { dropCache, getSettings, setSettings } from './settings'
 import { probeDurationMs, probeSize, probeVideoCodec, toYoutubeThumbnail } from './services/audio'
@@ -68,7 +101,7 @@ import * as gemini from './services/gemini'
 import * as f2a from './services/flow2api'
 import * as hf from './services/higgsfield'
 import * as llm from './services/llm'
-import { createStyleProfile, generateBrief, generateChapterPlan, generateHooks, generateOutline, generateScript, generateVisuals, generateMusicPrompt, generateThumbnailConcept, generateYoutubeMetadata, planSmartSfx, reviseScene } from './story'
+import { generateVisuals, generateMusicPrompt, generateThumbnailConcept, generateYoutubeMetadata, planSmartSfx } from './story'
 
 
 type Handler = (...args: any[]) => unknown
@@ -119,13 +152,171 @@ export function registerIpc(): void {
   handle('episodes:remove', (episodeId: string) => removeEpisode(episodeId))
   handle('episodes:reorder', (projectId: string, episodeIds: string[]) => reorderEpisodes(projectId, episodeIds))
 
-  handle('story:brief', (projectId: string) => generateBrief(projectId))
-  handle('story:hooks', (projectId: string, brief?: StoryBrief) => generateHooks(projectId, brief ?? undefined))
-  handle('story:outline', (projectId: string, hook: string, brief?: StoryBrief) => generateOutline(projectId, String(hook ?? ''), brief ?? undefined))
-  handle('story:chapterPlan', (projectId: string, style: StoryStyleId, customOpening?: string) => generateChapterPlan(projectId, style, String(customOpening ?? '')))
-  handle('story:styleProfile', (projectId: string, name: string, examples: string) => createStyleProfile(projectId, String(name ?? ''), String(examples ?? '')))
-  handle('story:script', (projectId: string, episodeId?: string) => generateScript(projectId, episodeId))
-  handle('story:reviseScene', (projectId: string, clipId: string, instruction: string) => reviseScene(projectId, clipId, String(instruction ?? '')))
+  // Lorebook: Characters, Derivatives, Locations, Props, Usage, Merge
+  handle('lorebook:createCharacter', (input: { projectId: string; name: string; description?: string; ttsVoice?: string | null; ttsProvider?: Character['ttsProvider']; voiceStyle?: string; aliases?: string[] }) => {
+    const c = createCharacter(input)
+    emit.character({ characterId: c.id, patch: c })
+    return c
+  })
+  handle('lorebook:updateCharacter', (id: string, patch: Partial<Character>) => {
+    const c = updateCharacter(id, patch)
+    emit.character({ characterId: c.id, patch })
+    return c
+  })
+  handle('lorebook:removeCharacter', (id: string) => {
+    removeCharacter(id)
+  })
+  handle('lorebook:pickCharacterSheet', async (characterId: string) => {
+    const c = getCharacter(characterId)
+    const win = BrowserWindow.getFocusedWindow()
+    const res = await dialog.showOpenDialog(win!, {
+      title: `Pilih lembar karakter untuk ${c.name}`,
+      filters: [{ name: 'Gambar', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      properties: ['openFile']
+    })
+    if (res.canceled || !res.filePaths[0]) return null
+    const src = res.filePaths[0]
+    const ext = extname(src).toLowerCase()
+    const rel = `images/${randomUUID()}${ext}`
+    const abs = assetAbsPath(c.projectId, rel)
+    mkdirSync(dirname(abs), { recursive: true })
+    copyFileSync(src, abs)
+    const size = await probeSize(abs).catch(() => null)
+    const asset = insertAsset({
+      projectId: c.projectId,
+      characterId,
+      kind: 'image',
+      provider: 'local',
+      prompt: basename(src),
+      localPath: rel,
+      width: size?.width ?? null,
+      height: size?.height ?? null,
+      meta: { uploaded: true }
+    })
+    setCharacterSheet(characterId, asset.id)
+    emit.character({ characterId, patch: { sheetAssetId: asset.id } })
+    emit.asset(asset)
+    return asset
+  })
+
+  handle('lorebook:listDerivatives', (projectId: string, characterId?: string) => derivativesOf(projectId, characterId))
+  handle('lorebook:createDerivative', (input: { projectId: string; characterId: string; name: string; promptChange?: string }) => createDerivative(input))
+  handle('lorebook:updateDerivative', (id: string, patch: Partial<CharacterDerivative>) => updateDerivative(id, patch))
+  handle('lorebook:removeDerivative', (id: string) => removeDerivative(id))
+  handle('lorebook:generateDerivativeSheet', (derivativeId: string) => generateDerivativeSheet(derivativeId))
+  handle('lorebook:pickDerivativeSheet', async (derivativeId: string) => {
+    const d = getDerivative(derivativeId)
+    if (!d) throw new Error('Varian tidak ditemukan')
+    const win = BrowserWindow.getFocusedWindow()
+    const res = await dialog.showOpenDialog(win!, {
+      title: `Pilih lembar varian kostum untuk ${d.name}`,
+      filters: [{ name: 'Gambar', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      properties: ['openFile']
+    })
+    if (res.canceled || !res.filePaths[0]) return null
+    const src = res.filePaths[0]
+    const ext = extname(src).toLowerCase()
+    const rel = `images/${randomUUID()}${ext}`
+    const abs = assetAbsPath(d.projectId, rel)
+    mkdirSync(dirname(abs), { recursive: true })
+    copyFileSync(src, abs)
+    const size = await probeSize(abs).catch(() => null)
+    const asset = insertAsset({
+      projectId: d.projectId,
+      characterId: d.characterId,
+      derivativeId: d.id,
+      kind: 'image',
+      provider: 'local',
+      prompt: basename(src),
+      localPath: rel,
+      width: size?.width ?? null,
+      height: size?.height ?? null,
+      meta: { uploaded: true }
+    })
+    setDerivativeSheet(d.id, asset.id)
+    emit.asset(asset)
+    return asset
+  })
+
+  handle('lorebook:listLocations', (projectId: string) => locationsOf(projectId))
+  handle('lorebook:createLocation', (input: { projectId: string; name: string; description?: string; aliases?: string[] }) => createLocation(input))
+  handle('lorebook:updateLocation', (id: string, patch: Partial<Location>) => updateLocation(id, patch))
+  handle('lorebook:removeLocation', (id: string) => removeLocation(id))
+  handle('lorebook:generateLocationSheet', (locationId: string) => generateLocationSheet(locationId))
+  handle('lorebook:pickLocationSheet', async (locationId: string) => {
+    const l = getLocation(locationId)
+    if (!l) throw new Error('Lokasi tidak ditemukan')
+    const win = BrowserWindow.getFocusedWindow()
+    const res = await dialog.showOpenDialog(win!, {
+      title: `Pilih lembar lokasi untuk ${l.name}`,
+      filters: [{ name: 'Gambar', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      properties: ['openFile']
+    })
+    if (res.canceled || !res.filePaths[0]) return null
+    const src = res.filePaths[0]
+    const ext = extname(src).toLowerCase()
+    const rel = `images/${randomUUID()}${ext}`
+    const abs = assetAbsPath(l.projectId, rel)
+    mkdirSync(dirname(abs), { recursive: true })
+    copyFileSync(src, abs)
+    const size = await probeSize(abs).catch(() => null)
+    const asset = insertAsset({
+      projectId: l.projectId,
+      locationId: l.id,
+      kind: 'image',
+      provider: 'local',
+      prompt: basename(src),
+      localPath: rel,
+      width: size?.width ?? null,
+      height: size?.height ?? null,
+      meta: { uploaded: true }
+    })
+    setLocationSheet(l.id, asset.id)
+    emit.asset(asset)
+    return asset
+  })
+
+  handle('lorebook:listProps', (projectId: string) => propsOf(projectId))
+  handle('lorebook:createProp', (input: { projectId: string; name: string; description?: string; aliases?: string[] }) => createProp(input))
+  handle('lorebook:updateProp', (id: string, patch: Partial<Prop>) => updateProp(id, patch))
+  handle('lorebook:removeProp', (id: string) => removeProp(id))
+  handle('lorebook:generatePropSheet', (propId: string) => generatePropSheet(propId))
+  handle('lorebook:pickPropSheet', async (propId: string) => {
+    const pr = getProp(propId)
+    if (!pr) throw new Error('Prop tidak ditemukan')
+    const win = BrowserWindow.getFocusedWindow()
+    const res = await dialog.showOpenDialog(win!, {
+      title: `Pilih lembar prop untuk ${pr.name}`,
+      filters: [{ name: 'Gambar', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      properties: ['openFile']
+    })
+    if (res.canceled || !res.filePaths[0]) return null
+    const src = res.filePaths[0]
+    const ext = extname(src).toLowerCase()
+    const rel = `images/${randomUUID()}${ext}`
+    const abs = assetAbsPath(pr.projectId, rel)
+    mkdirSync(dirname(abs), { recursive: true })
+    copyFileSync(src, abs)
+    const size = await probeSize(abs).catch(() => null)
+    const asset = insertAsset({
+      projectId: pr.projectId,
+      propId: pr.id,
+      kind: 'image',
+      provider: 'local',
+      prompt: basename(src),
+      localPath: rel,
+      width: size?.width ?? null,
+      height: size?.height ?? null,
+      meta: { uploaded: true }
+    })
+    setPropSheet(pr.id, asset.id)
+    emit.asset(asset)
+    return asset
+  })
+
+  handle('lorebook:assetUsage', (projectId: string, kind: 'character' | 'derivative' | 'location' | 'prop', id: string) => getAssetUsage(projectId, kind, id))
+  handle('lorebook:merge', (input: MergeAssetInput) => mergeAssets(input))
+
   handle('story:musicPrompt', (projectId: string, episodeId?: string) => generateMusicPrompt(projectId, episodeId))
   handle('story:planSmartSfx', (projectId: string, episodeId?: string) => planSmartSfx(projectId, episodeId))
   handle('story:generateMusic', async (projectId: string, req: { prompt: string; durationMs: number }) => {

@@ -297,6 +297,7 @@ export function attachDevHarness(win: BrowserWindow): void {
     click?: { selector: string; fx?: number; pointJs?: string }
     /** A real key press, e.g. "s" or "Delete". */
     key?: string
+    resize?: { width: number; height: number }
     wait?: number
     shot?: string
     quit?: boolean
@@ -372,6 +373,9 @@ export function attachDevHarness(win: BrowserWindow): void {
           win.webContents.sendInputEvent({ type: 'keyDown', keyCode: step.key })
           win.webContents.sendInputEvent({ type: 'char', keyCode: step.key })
           win.webContents.sendInputEvent({ type: 'keyUp', keyCode: step.key })
+        }
+        if (step.resize) {
+          win.setContentSize(step.resize.width, step.resize.height)
         }
       } catch (e) {
         if (log) appendFileSync(log, `[harness] step failed: ${(e as Error).message}\n`)

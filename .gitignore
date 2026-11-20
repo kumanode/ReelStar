@@ -10,3 +10,5 @@ dist
 .DS_Store
 .env
 .claude/settings.local.json
+.superpowers/
+bang-story/

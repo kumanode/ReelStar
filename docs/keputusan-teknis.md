@@ -121,13 +121,9 @@ CSS memakai RGB, sedangkan sebagian proses FFmpeg memakai YUV. Brightness FFmpeg
 agar mendekati `brightness()` CSS, dan urutan sepia/hue disamakan. Konversi ruang warna tetap dapat menghasilkan
 perbedaan kecil, terutama pada gradasi kuat.
 
-### Cerita panjang dipecah menjadi kelompok
-Durasi 15–30 menit memakai target sekitar 8 detik per adegan, dengan batas 230 adegan. Naskah di atas 60 adegan
-ditulis dalam kelompok maksimal 30 adegan dari kerangka yang sudah ditinjau; naskah durasi lebih pendek juga
-mengikuti kerangka babak yang sama. Rencana visual dibuat per kelompok 20 adegan. Progres
-setiap kelompok dikirim ke UI. Hasil kelompok naskah yang selesai disimpan sementara di memori proses untuk
-mencoba ulang kelompok yang gagal selama aplikasi tetap terbuka. Visual yang sudah diterapkan ke proyek tersimpan
-per kelompok dan tidak dibuat ulang pada mode adegan yang belum lengkap.
+### [USANG] Cerita panjang dipecah menjadi kelompok
+*Usang sejak Fase 2 (Studio Hub & Lorebook multi-episode).*
+Dulu durasi 15–30 menit memakai target sekitar 8 detik per adegan dan dipecah dalam kelompok bab. Arsitektur baru beralih ke format drama short multi-episode (1–2 menit per episode) di mana setiap episode direncanakan dan dikelola secara mandiri di Episode Studio.
 
 ### Render ekspor bertahap dan dapat dilanjutkan
 Ekspor membuat segmen per klip, menggabungkannya ke blok video 20 klip dengan overlap transisi di batas blok,
@@ -150,21 +146,17 @@ jendela tersambung tanpa celah.
 Klip dengan `meta.editedWords` dilewati saat sinkron caption biasa. UI menunjukkan jumlah klip yang dilindungi;
 aksi paksa meminta konfirmasi dan menghapus penanda edit manual sebelum menulis kata hasil sinkron.
 
-### Alur hook lama dipertahankan untuk proyek tersimpan
-Hook adalah janji cerita, bukan kalimat promosi yang berdiri sendiri. Kreator memilih atau menulis hook terlebih
-dahulu, meninjau kerangka babak yang menjawabnya, lalu naskah dibuat dari kerangka itu. Revisi adegan membawa hook
-dan konteks tetangganya agar perubahan lokal tetap cocok dengan alur utama.
+### [USANG] Alur hook lama dipertahankan untuk proyek tersimpan
+*Usang sejak Fase 2 (Studio Hub & Lorebook multi-episode).*
+Dulu kreator memilih hook dan meninjau kerangka babak. Sekarang struktur cerita dirancang multi-episode lewat Episode Hub dan Planner bertahap.
 
-### Kerangka bab baru membaca sinopsis langsung
-Untuk proyek baru, satu permintaan LLM menghasilkan pertanyaan, pembuka, isi bab, detail kunci, penutup, hal yang
-dihindari, sifat isi, dan fakta yang perlu dicek. Tahap brief dan hook yang terpisah berulang kali meringkas sinopsis
-dan dapat menggeser maksud kreator. Plan lama tidak dimigrasikan; brief dan hook lama dinormalisasi saat penulisan,
-dengan hook lama menjadi kalimat pembuka yang dipertahankan.
+### [USANG] Kerangka bab baru membaca sinopsis langsung
+*Usang sejak Fase 2 (Studio Hub & Lorebook multi-episode).*
+Format bab tunggal untuk video YouTube panjang digantikan oleh sistem naskah multi-episode dengan hook, cliffhanger, dan story beats per episode.
 
-### Profil gaya menyimpan aturan, bukan contoh
-Contoh narasi dikirim sekali ke LLM untuk diringkas menjadi aturan ritme dan teknik. Hanya aturan serta nama profil yang
-disimpan di settings. Prompt naskah berikutnya memakai aturan hasil ekstraksi, bukan kalimat contoh, agar isi contoh
-tidak terbawa atau disalin ke cerita lain.
+### [USANG] Profil gaya menyimpan aturan, bukan contoh
+*Usang sejak Fase 2 (Studio Hub & Lorebook multi-episode).*
+Profil gaya narasi babak lama dihapus demi konsistensi dialog dan narasi drama short.
 
 ### Adegan mengikuti kalimat utuh
 Jumlah adegan dalam outline adalah sasaran tempo. Narasi satu rekaman dipotong pada batas kalimat dan kalimat panjang
@@ -184,3 +176,12 @@ Setiap episode memiliki kolom `editor_json` sendiri yang menyimpan pengaturan ti
 
 ### Episode aktif diingat lewat pengaturan `last_episode`
 Kreator yang berpindah-pindah proyek akan kembali ke episode terakhir yang sedang mereka kerjakan. Posisi ini disimpan di tabel `settings` dengan kunci `last_episode:<projectId>` tanpa menambah status mutabel ke tabel `projects`. Jika belum ada riwayat, sistem otomatis memilih episode pertama berdasarkan urutan `sort`.
+
+### Sidebar Studio 200px dan ciut otomatis di Editor
+Ruang kerja Studio mengadopsi navigasi dua tingkat: sidebar 200px (ciut ke 48px rail) untuk Episode Hub, Lorebook, dan daftar episode serial. Di tab Editor, sidebar otomatis diciutkan agar preview player dan track timeline mendapatkan ruang horizontal maksimal pada layar standar (1180×720).
+
+### Lorebook sentral multi-episode dan varian kostum turunan
+Karakter, lokasi, dan prop didaftarkan di tingkat proyek (serial) dan dirujuk lintas episode. Varian kostum adalah sub-identitas yang berbagi nama, suara, dan identitas dasar karakter induknya. Lembar varian dibuat dengan mengedit lembar dasar (image-to-image), dan menjadi basi jika lembar dasar dibuat ulang. Lembar hasil unggahan mandiri tidak pernah ditandai basi.
+
+### Penggabungan aset atomik dengan analisis dampak
+Aset duplikat dapat digabungkan langsung dengan ringkasan dampak per episode (jumlah rujukan klip yang dialihkan dan media yang menjadi basi). Pengalihan rujukan (`characterIds`, `speakerId`, `costumeIds`, `locationId`, `propIds`) dilakukan dalam satu transaksi database SQLite di level proyek.

@@ -5,6 +5,7 @@ import type {
   Asset,
   AssetKind,
   AssetMeta,
+  AssetUsageSummary,
   Character,
   CharacterDerivative,
   Clip,
@@ -15,6 +16,7 @@ import type {
   JobKind,
   JobStatus,
   Location,
+  MergeAssetInput,
   NewProjectInput,
   Project,
   ProjectBundle,
@@ -308,7 +310,9 @@ export function listProjects(): ProjectSummary[] {
       `SELECT p.*,
         (SELECT COUNT(*) FROM clips c WHERE c.project_id = p.id) AS clip_count,
         (SELECT COALESCE(SUM(duration_ms), 0) FROM clips c WHERE c.project_id = p.id) AS total_ms,
-        (SELECT a.local_path FROM assets a WHERE a.id = p.cover_asset_id) AS cover_path
+        (SELECT a.local_path FROM assets a WHERE a.id = p.cover_asset_id) AS cover_path,
+        (SELECT COUNT(*) FROM episodes ep WHERE ep.project_id = p.id) AS episode_count,
+        (SELECT COUNT(*) FROM episodes ep WHERE ep.project_id = p.id AND ep.status = 'exported') AS exported_count
        FROM projects p ORDER BY p.updated_at DESC`
     )
     .all() as Row[]
@@ -321,7 +325,10 @@ export function listProjects(): ProjectSummary[] {
     clipCount: r.clip_count,
     totalMs: r.total_ms,
     coverUrl: r.cover_path ? assetUrl(r.id, r.cover_path) : null,
-    updatedAt: r.updated_at
+    updatedAt: r.updated_at,
+    aspectRatio: r.aspect_ratio ?? '9:16',
+    episodeCount: Math.max(1, r.episode_count ?? 1),
+    exportedCount: r.exported_count ?? 0
   }))
 }
 
@@ -330,25 +337,31 @@ export function createProject(input: NewProjectInput): Project {
   const now = Date.now()
   const id = randomUUID()
   const tts = input.ttsProvider ?? s.defaultTtsProvider
+  const aspect = input.aspectRatio ?? '9:16'
+  const dialogAudio = input.dialogAudio ?? 'video'
+  const imgModel = input.imageModel ?? (s.defaultVisualProvider === 'flow2api' ? s.flow2apiImageModel : s.imageModel)
+  const vidModel = input.videoModel ?? (s.defaultVisualProvider === 'flow2api' ? s.flow2apiVideoModel : s.videoModel)
+
   const db = getDb()
   db.transaction(() => {
     db.prepare(
       `INSERT INTO projects (id, title, synopsis, duration_sec, language, aspect_ratio, style_id, tts_provider, tts_voice,
         image_model, video_model, status, step, editor_json, source_text, source_kind, dialog_audio, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 1, ?, '', 'novel', 'video', ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 1, ?, '', 'novel', ?, ?, ?)`
     ).run(
       id,
-      'Proyek tanpa judul',
+      input.title?.trim() || 'Serial Baru',
       input.synopsis ?? '',
       input.durationSec ?? 60,
       input.language ?? s.defaultLanguage,
-      input.aspectRatio ?? '16:9',
+      aspect,
       input.styleId ?? 'stickman',
       tts,
       tts === 'gemini' ? 'Charon' : '',
-      s.defaultVisualProvider === 'flow2api' ? s.flow2apiImageModel : s.imageModel,
-      s.defaultVisualProvider === 'flow2api' ? s.flow2apiVideoModel : s.videoModel,
+      imgModel,
+      vidModel,
       JSON.stringify(DEFAULT_EDITOR),
+      dialogAudio,
       now,
       now
     )
@@ -356,7 +369,7 @@ export function createProject(input: NewProjectInput): Project {
     db.prepare(
       `INSERT INTO episodes (id, project_id, episode_num, title, summary, status, duration_sec, sort, editor_json, created_at, updated_at)
        VALUES (?, ?, 1, 'Episode 1', '', 'draft', ?, 0, NULL, ?, ?)`
-    ).run(epId, id, input.durationSec ?? 75, now, now)
+    ).run(epId, id, input.durationSec ?? 60, now, now)
     setStoredSetting(`last_episode:${id}`, epId)
   })()
   projectDir(id)
@@ -1170,8 +1183,513 @@ export function patchClipText(id: string, patch: Partial<Pick<Clip, 'title' | 's
     .run(...entries.map(([, v]) => v), id)
 }
 
-export function setCharacterSheet(id: string, assetId: string): void {
+// ---------- lorebook: characters, derivatives, locations, props ----------
+
+export function createCharacter(input: {
+  projectId: string
+  name: string
+  description?: string
+  ttsVoice?: string | null
+  ttsProvider?: Character['ttsProvider']
+  voiceStyle?: string
+  aliases?: string[]
+}): Character {
+  const db = getDb()
+  const id = randomUUID()
+  const sort = (db.prepare('SELECT COUNT(*) AS n FROM characters WHERE project_id = ?').get(input.projectId) as Row).n as number
+  db.prepare(
+    `INSERT INTO characters (id, project_id, name, description, sort, tts_voice, tts_provider, voice_style, aliases_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    input.projectId,
+    input.name.trim(),
+    input.description?.trim() ?? '',
+    sort,
+    input.ttsVoice ?? null,
+    input.ttsProvider ?? null,
+    input.voiceStyle?.trim() ?? '',
+    JSON.stringify(input.aliases ?? [])
+  )
+  return getCharacter(id)
+}
+
+export function updateCharacter(id: string, patch: Partial<Character>): Character {
+  const db = getDb()
+  const cols: string[] = []
+  const vals: any[] = []
+
+  if (patch.name !== undefined) {
+    cols.push('name = ?')
+    vals.push(patch.name.trim())
+  }
+  if (patch.description !== undefined) {
+    cols.push('description = ?')
+    vals.push(patch.description.trim())
+  }
+  if (patch.ttsVoice !== undefined) {
+    cols.push('tts_voice = ?')
+    vals.push(patch.ttsVoice)
+  }
+  if (patch.ttsProvider !== undefined) {
+    cols.push('tts_provider = ?')
+    vals.push(patch.ttsProvider)
+  }
+  if (patch.voiceStyle !== undefined) {
+    cols.push('voice_style = ?')
+    vals.push(patch.voiceStyle.trim())
+  }
+  if (patch.aliases !== undefined) {
+    cols.push('aliases_json = ?')
+    vals.push(JSON.stringify(patch.aliases))
+  }
+  if (patch.sort !== undefined) {
+    cols.push('sort = ?')
+    vals.push(patch.sort)
+  }
+  if (patch.sheetAssetId !== undefined) {
+    cols.push('sheet_asset_id = ?')
+    vals.push(patch.sheetAssetId)
+  }
+
+  if (cols.length > 0) {
+    vals.push(id)
+    db.prepare(`UPDATE characters SET ${cols.join(', ')} WHERE id = ?`).run(...vals)
+  }
+  return getCharacter(id)
+}
+
+export function removeCharacter(id: string): void {
+  const db = getDb()
+  db.transaction(() => {
+    db.prepare('DELETE FROM character_derivatives WHERE character_id = ?').run(id)
+    db.prepare('DELETE FROM characters WHERE id = ?').run(id)
+  })()
+}
+
+export function setCharacterSheet(id: string, assetId: string | null): void {
   getDb().prepare('UPDATE characters SET sheet_asset_id = ? WHERE id = ?').run(assetId, id)
+}
+
+// --- Derivatives (Costume variants) ---
+
+export function derivativesOf(projectId: string, characterId?: string): CharacterDerivative[] {
+  const db = getDb()
+  if (characterId) {
+    return (db.prepare('SELECT * FROM character_derivatives WHERE project_id = ? AND character_id = ? ORDER BY sort').all(projectId, characterId) as Row[]).map(toCharacterDerivative)
+  }
+  return (db.prepare('SELECT * FROM character_derivatives WHERE project_id = ? ORDER BY sort').all(projectId) as Row[]).map(toCharacterDerivative)
+}
+
+export function getDerivative(id: string): CharacterDerivative | undefined {
+  const r = getDb().prepare('SELECT * FROM character_derivatives WHERE id = ?').get(id) as Row | undefined
+  return r ? toCharacterDerivative(r) : undefined
+}
+
+export function createDerivative(input: { projectId: string; characterId: string; name: string; promptChange?: string }): CharacterDerivative {
+  const db = getDb()
+  const id = randomUUID()
+  const maxSort = (db.prepare('SELECT COALESCE(MAX(sort), -1) AS m FROM character_derivatives WHERE character_id = ?').get(input.characterId) as Row).m as number
+  db.prepare(
+    `INSERT INTO character_derivatives (id, project_id, character_id, name, prompt_change, sheet_asset_id, sort)
+     VALUES (?, ?, ?, ?, ?, null, ?)`
+  ).run(id, input.projectId, input.characterId, input.name.trim(), input.promptChange?.trim() ?? '', maxSort + 1)
+  return getDerivative(id)!
+}
+
+export function updateDerivative(id: string, patch: Partial<CharacterDerivative>): CharacterDerivative {
+  const db = getDb()
+  const cols: string[] = []
+  const vals: any[] = []
+
+  if (patch.name !== undefined) {
+    cols.push('name = ?')
+    vals.push(patch.name.trim())
+  }
+  if (patch.promptChange !== undefined) {
+    cols.push('prompt_change = ?')
+    vals.push(patch.promptChange.trim())
+  }
+  if (patch.sheetAssetId !== undefined) {
+    cols.push('sheet_asset_id = ?')
+    vals.push(patch.sheetAssetId)
+  }
+  if (patch.sort !== undefined) {
+    cols.push('sort = ?')
+    vals.push(patch.sort)
+  }
+
+  if (cols.length > 0) {
+    vals.push(id)
+    db.prepare(`UPDATE character_derivatives SET ${cols.join(', ')} WHERE id = ?`).run(...vals)
+  }
+  return getDerivative(id)!
+}
+
+export function removeDerivative(id: string): void {
+  getDb().prepare('DELETE FROM character_derivatives WHERE id = ?').run(id)
+}
+
+export function setDerivativeSheet(id: string, assetId: string | null): void {
+  getDb().prepare('UPDATE character_derivatives SET sheet_asset_id = ? WHERE id = ?').run(assetId, id)
+}
+
+// --- Locations ---
+
+export function locationsOf(projectId: string): Location[] {
+  return (getDb().prepare('SELECT * FROM locations WHERE project_id = ? ORDER BY sort').all(projectId) as Row[]).map(toLocation)
+}
+
+export function getLocation(id: string): Location | undefined {
+  const r = getDb().prepare('SELECT * FROM locations WHERE id = ?').get(id) as Row | undefined
+  return r ? toLocation(r) : undefined
+}
+
+export function createLocation(input: { projectId: string; name: string; description?: string; aliases?: string[] }): Location {
+  const db = getDb()
+  const id = randomUUID()
+  const maxSort = (db.prepare('SELECT COALESCE(MAX(sort), -1) AS m FROM locations WHERE project_id = ?').get(input.projectId) as Row).m as number
+  db.prepare(
+    `INSERT INTO locations (id, project_id, name, description, aliases_json, sheet_asset_id, sort)
+     VALUES (?, ?, ?, ?, ?, null, ?)`
+  ).run(id, input.projectId, input.name.trim(), input.description?.trim() ?? '', JSON.stringify(input.aliases ?? []), maxSort + 1)
+  return getLocation(id)!
+}
+
+export function updateLocation(id: string, patch: Partial<Location>): Location {
+  const db = getDb()
+  const cols: string[] = []
+  const vals: any[] = []
+
+  if (patch.name !== undefined) {
+    cols.push('name = ?')
+    vals.push(patch.name.trim())
+  }
+  if (patch.description !== undefined) {
+    cols.push('description = ?')
+    vals.push(patch.description.trim())
+  }
+  if (patch.aliases !== undefined) {
+    cols.push('aliases_json = ?')
+    vals.push(JSON.stringify(patch.aliases))
+  }
+  if (patch.sheetAssetId !== undefined) {
+    cols.push('sheet_asset_id = ?')
+    vals.push(patch.sheetAssetId)
+  }
+  if (patch.sort !== undefined) {
+    cols.push('sort = ?')
+    vals.push(patch.sort)
+  }
+
+  if (cols.length > 0) {
+    vals.push(id)
+    db.prepare(`UPDATE locations SET ${cols.join(', ')} WHERE id = ?`).run(...vals)
+  }
+  return getLocation(id)!
+}
+
+export function removeLocation(id: string): void {
+  getDb().prepare('DELETE FROM locations WHERE id = ?').run(id)
+}
+
+export function setLocationSheet(id: string, assetId: string | null): void {
+  getDb().prepare('UPDATE locations SET sheet_asset_id = ? WHERE id = ?').run(assetId, id)
+}
+
+// --- Props ---
+
+export function propsOf(projectId: string): Prop[] {
+  return (getDb().prepare('SELECT * FROM props WHERE project_id = ? ORDER BY sort').all(projectId) as Row[]).map(toProp)
+}
+
+export function getProp(id: string): Prop | undefined {
+  const r = getDb().prepare('SELECT * FROM props WHERE id = ?').get(id) as Row | undefined
+  return r ? toProp(r) : undefined
+}
+
+export function createProp(input: { projectId: string; name: string; description?: string; aliases?: string[] }): Prop {
+  const db = getDb()
+  const id = randomUUID()
+  const maxSort = (db.prepare('SELECT COALESCE(MAX(sort), -1) AS m FROM props WHERE project_id = ?').get(input.projectId) as Row).m as number
+  db.prepare(
+    `INSERT INTO props (id, project_id, name, description, aliases_json, sheet_asset_id, sort)
+     VALUES (?, ?, ?, ?, ?, null, ?)`
+  ).run(id, input.projectId, input.name.trim(), input.description?.trim() ?? '', JSON.stringify(input.aliases ?? []), maxSort + 1)
+  return getProp(id)!
+}
+
+export function updateProp(id: string, patch: Partial<Prop>): Prop {
+  const db = getDb()
+  const cols: string[] = []
+  const vals: any[] = []
+
+  if (patch.name !== undefined) {
+    cols.push('name = ?')
+    vals.push(patch.name.trim())
+  }
+  if (patch.description !== undefined) {
+    cols.push('description = ?')
+    vals.push(patch.description.trim())
+  }
+  if (patch.aliases !== undefined) {
+    cols.push('aliases_json = ?')
+    vals.push(JSON.stringify(patch.aliases))
+  }
+  if (patch.sheetAssetId !== undefined) {
+    cols.push('sheet_asset_id = ?')
+    vals.push(patch.sheetAssetId)
+  }
+  if (patch.sort !== undefined) {
+    cols.push('sort = ?')
+    vals.push(patch.sort)
+  }
+
+  if (cols.length > 0) {
+    vals.push(id)
+    db.prepare(`UPDATE props SET ${cols.join(', ')} WHERE id = ?`).run(...vals)
+  }
+  return getProp(id)!
+}
+
+export function removeProp(id: string): void {
+  getDb().prepare('DELETE FROM props WHERE id = ?').run(id)
+}
+
+export function setPropSheet(id: string, assetId: string | null): void {
+  getDb().prepare('UPDATE props SET sheet_asset_id = ? WHERE id = ?').run(assetId, id)
+}
+
+// --- Asset usage and merge ---
+
+export function getAssetUsage(projectId: string, kind: 'character' | 'derivative' | 'location' | 'prop', id: string): AssetUsageSummary {
+  const db = getDb()
+  const episodes = listEpisodes(projectId)
+  const clips = (db.prepare('SELECT episode_id, character_ids, speaker_id, costume_ids, location_id, prop_ids FROM clips WHERE project_id = ?').all(projectId) as Row[])
+
+  let name = ''
+  if (kind === 'character') {
+    const c = db.prepare('SELECT name FROM characters WHERE id = ?').get(id) as Row | undefined
+    name = c?.name ?? ''
+  } else if (kind === 'derivative') {
+    const d = db.prepare('SELECT name FROM character_derivatives WHERE id = ?').get(id) as Row | undefined
+    name = d?.name ?? ''
+  } else if (kind === 'location') {
+    const l = db.prepare('SELECT name FROM locations WHERE id = ?').get(id) as Row | undefined
+    name = l?.name ?? ''
+  } else if (kind === 'prop') {
+    const pr = db.prepare('SELECT name FROM props WHERE id = ?').get(id) as Row | undefined
+    name = pr?.name ?? ''
+  }
+
+  const epCounts = new Map<string, number>()
+  for (const c of clips) {
+    let matched = false
+    if (kind === 'character') {
+      const charIds: string[] = JSON.parse(c.character_ids || '[]')
+      const costumeIds: Record<string, string> = JSON.parse(c.costume_ids || '{}')
+      if (charIds.includes(id) || c.speaker_id === id || id in costumeIds) {
+        matched = true
+      }
+    } else if (kind === 'derivative') {
+      const costumeIds: Record<string, string> = JSON.parse(c.costume_ids || '{}')
+      if (Object.values(costumeIds).includes(id)) {
+        matched = true
+      }
+    } else if (kind === 'location') {
+      if (c.location_id === id) {
+        matched = true
+      }
+    } else if (kind === 'prop') {
+      const propIds: string[] = JSON.parse(c.prop_ids || '[]')
+      if (propIds.includes(id)) {
+        matched = true
+      }
+    }
+    if (matched) {
+      epCounts.set(c.episode_id, (epCounts.get(c.episode_id) ?? 0) + 1)
+    }
+  }
+
+  const usageEpisodes: { episodeId: string; episodeNum: number; title: string; count: number }[] = []
+  let totalCount = 0
+  for (const ep of episodes) {
+    const count = epCounts.get(ep.id) ?? 0
+    if (count > 0) {
+      usageEpisodes.push({ episodeId: ep.id, episodeNum: ep.episodeNum, title: ep.title, count })
+      totalCount += count
+    }
+  }
+
+  return {
+    kind,
+    id,
+    name,
+    episodes: usageEpisodes,
+    totalCount
+  }
+}
+
+export function mergeAssets(input: MergeAssetInput): { message: string } {
+  const db = getDb()
+  const { projectId, kind, sourceId, targetId, asVariant } = input
+  if (sourceId === targetId) throw new Error('Aset sumber dan tujuan tidak boleh sama')
+
+  return db.transaction(() => {
+    if (kind === 'character') {
+      const source = db.prepare('SELECT * FROM characters WHERE id = ? AND project_id = ?').get(sourceId, projectId) as Row | undefined
+      const target = db.prepare('SELECT * FROM characters WHERE id = ? AND project_id = ?').get(targetId, projectId) as Row | undefined
+      if (!source || !target) throw new Error('Karakter tidak ditemukan')
+
+      const sourceAliases: string[] = JSON.parse(source.aliases_json || '[]')
+      const targetAliases: string[] = JSON.parse(target.aliases_json || '[]')
+      const combinedAliases = [...new Set([...targetAliases, source.name, ...sourceAliases])].filter((a) => a && a.toLowerCase() !== target.name.toLowerCase())
+
+      if (asVariant) {
+        let variant = db.prepare('SELECT * FROM character_derivatives WHERE character_id = ? AND LOWER(name) = LOWER(?)').get(targetId, source.name) as Row | undefined
+        let variantId = variant?.id
+        if (!variantId) {
+          variantId = randomUUID()
+          const maxSort = (db.prepare('SELECT COALESCE(MAX(sort), -1) AS m FROM character_derivatives WHERE character_id = ?').get(targetId) as Row).m as number
+          db.prepare(
+            'INSERT INTO character_derivatives (id, project_id, character_id, name, prompt_change, sheet_asset_id, sort) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          ).run(variantId, projectId, targetId, source.name, source.description, source.sheet_asset_id, maxSort + 1)
+        }
+
+        db.prepare('UPDATE characters SET aliases_json = ? WHERE id = ?').run(JSON.stringify(combinedAliases), targetId)
+        db.prepare('UPDATE character_derivatives SET character_id = ? WHERE character_id = ?').run(targetId, sourceId)
+
+        const allClips = db.prepare('SELECT id, character_ids, speaker_id, costume_ids FROM clips WHERE project_id = ?').all(projectId) as Row[]
+        for (const c of allClips) {
+          let charIds: string[] = JSON.parse(c.character_ids || '[]')
+          let speakerId: string | null = c.speaker_id
+          let costumeIds: Record<string, string> = JSON.parse(c.costume_ids || '{}')
+          let changed = false
+
+          if (charIds.includes(sourceId)) {
+            charIds = charIds.map((id) => (id === sourceId ? targetId : id))
+            charIds = [...new Set(charIds)]
+            costumeIds[targetId] = variantId!
+            delete costumeIds[sourceId]
+            changed = true
+          }
+          if (speakerId === sourceId) {
+            speakerId = targetId
+            changed = true
+          }
+          if (sourceId in costumeIds) {
+            costumeIds[targetId] = variantId!
+            delete costumeIds[sourceId]
+            changed = true
+          }
+
+          if (changed) {
+            db.prepare('UPDATE clips SET character_ids = ?, speaker_id = ?, costume_ids = ? WHERE id = ?').run(
+              JSON.stringify(charIds),
+              speakerId,
+              JSON.stringify(costumeIds),
+              c.id
+            )
+          }
+        }
+
+        db.prepare('DELETE FROM characters WHERE id = ?').run(sourceId)
+        return { message: `Karakter "${source.name}" berhasil digabung sebagai varian "${target.name}".` }
+      } else {
+        db.prepare('UPDATE characters SET aliases_json = ? WHERE id = ?').run(JSON.stringify(combinedAliases), targetId)
+
+        const targetDerivs = (db.prepare('SELECT id, name FROM character_derivatives WHERE character_id = ?').all(targetId) as Row[])
+        const targetDerivByName = new Map<string, string>(targetDerivs.map((d) => [String(d.name).toLowerCase(), d.id as string]))
+
+        const sourceDerivs = (db.prepare('SELECT * FROM character_derivatives WHERE character_id = ?').all(sourceId) as Row[])
+        const derivMap = new Map<string, string>()
+        for (const sd of sourceDerivs) {
+          const matchTargetId = targetDerivByName.get(String(sd.name).toLowerCase())
+          if (matchTargetId) {
+            derivMap.set(sd.id, matchTargetId)
+            db.prepare('DELETE FROM character_derivatives WHERE id = ?').run(sd.id)
+          } else {
+            db.prepare('UPDATE character_derivatives SET character_id = ? WHERE id = ?').run(targetId, sd.id)
+            targetDerivByName.set(String(sd.name).toLowerCase(), sd.id)
+          }
+        }
+
+        const allClips = db.prepare('SELECT id, character_ids, speaker_id, costume_ids FROM clips WHERE project_id = ?').all(projectId) as Row[]
+        for (const c of allClips) {
+          let charIds: string[] = JSON.parse(c.character_ids || '[]')
+          let speakerId: string | null = c.speaker_id
+          let costumeIds: Record<string, string> = JSON.parse(c.costume_ids || '{}')
+          let changed = false
+
+          if (charIds.includes(sourceId)) {
+            charIds = charIds.map((id) => (id === sourceId ? targetId : id))
+            charIds = [...new Set(charIds)]
+            changed = true
+          }
+          if (speakerId === sourceId) {
+            speakerId = targetId
+            changed = true
+          }
+          if (sourceId in costumeIds) {
+            const oldDerivId = costumeIds[sourceId]
+            const newDerivId = derivMap.get(oldDerivId) ?? oldDerivId
+            delete costumeIds[sourceId]
+            costumeIds[targetId] = newDerivId
+            changed = true
+          }
+
+          if (changed) {
+            db.prepare('UPDATE clips SET character_ids = ?, speaker_id = ?, costume_ids = ? WHERE id = ?').run(
+              JSON.stringify(charIds),
+              speakerId,
+              JSON.stringify(costumeIds),
+              c.id
+            )
+          }
+        }
+
+        db.prepare('DELETE FROM characters WHERE id = ?').run(sourceId)
+        return { message: `Karakter "${source.name}" berhasil digabung ke "${target.name}".` }
+      }
+    } else if (kind === 'location') {
+      const source = db.prepare('SELECT * FROM locations WHERE id = ? AND project_id = ?').get(sourceId, projectId) as Row | undefined
+      const target = db.prepare('SELECT * FROM locations WHERE id = ? AND project_id = ?').get(targetId, projectId) as Row | undefined
+      if (!source || !target) throw new Error('Lokasi tidak ditemukan')
+
+      const sourceAliases: string[] = JSON.parse(source.aliases_json || '[]')
+      const targetAliases: string[] = JSON.parse(target.aliases_json || '[]')
+      const combinedAliases = [...new Set([...targetAliases, source.name, ...sourceAliases])].filter((a) => a && a.toLowerCase() !== target.name.toLowerCase())
+
+      db.prepare('UPDATE locations SET aliases_json = ? WHERE id = ?').run(JSON.stringify(combinedAliases), targetId)
+      db.prepare('UPDATE clips SET location_id = ? WHERE project_id = ? AND location_id = ?').run(targetId, projectId, sourceId)
+      db.prepare('DELETE FROM locations WHERE id = ?').run(sourceId)
+      return { message: `Lokasi "${source.name}" berhasil digabung ke "${target.name}".` }
+    } else if (kind === 'prop') {
+      const source = db.prepare('SELECT * FROM props WHERE id = ? AND project_id = ?').get(sourceId, projectId) as Row | undefined
+      const target = db.prepare('SELECT * FROM props WHERE id = ? AND project_id = ?').get(targetId, projectId) as Row | undefined
+      if (!source || !target) throw new Error('Prop tidak ditemukan')
+
+      const sourceAliases: string[] = JSON.parse(source.aliases_json || '[]')
+      const targetAliases: string[] = JSON.parse(target.aliases_json || '[]')
+      const combinedAliases = [...new Set([...targetAliases, source.name, ...sourceAliases])].filter((a) => a && a.toLowerCase() !== target.name.toLowerCase())
+
+      db.prepare('UPDATE props SET aliases_json = ? WHERE id = ?').run(JSON.stringify(combinedAliases), targetId)
+
+      const allClips = db.prepare('SELECT id, prop_ids FROM clips WHERE project_id = ?').all(projectId) as Row[]
+      for (const c of allClips) {
+        let propIds: string[] = JSON.parse(c.prop_ids || '[]')
+        if (propIds.includes(sourceId)) {
+          propIds = propIds.map((id) => (id === sourceId ? targetId : id))
+          propIds = [...new Set(propIds)]
+          db.prepare('UPDATE clips SET prop_ids = ? WHERE id = ?').run(JSON.stringify(propIds), c.id)
+        }
+      }
+
+      db.prepare('DELETE FROM props WHERE id = ?').run(sourceId)
+      return { message: `Prop "${source.name}" berhasil digabung ke "${target.name}".` }
+    }
+    throw new Error(`Jenis aset ${kind} tidak didukung untuk penggabungan`)
+  })()
 }
 
 export function getAsset(id: string | null): Asset | null {

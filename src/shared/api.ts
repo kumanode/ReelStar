@@ -3,7 +3,10 @@ import type {
   AspectRatio,
   AppSettings,
   Asset,
+  AssetUsageSummary,
   BuiltinSfx,
+  Character,
+  CharacterDerivative,
   CharacterPatchEvent,
   ClipPatchEvent,
   CreditEstimate,
@@ -15,6 +18,8 @@ import type {
   Job,
   KeyStatus,
   KeyTestResult,
+  Location,
+  MergeAssetInput,
   ModelList,
   ModelSource,
   MusicPrompt,
@@ -22,12 +27,8 @@ import type {
   ProjectBundle,
   ProjectSnapshot,
   ProjectSummary,
-  SceneRevision,
+  Prop,
   SmartSfxCue,
-  StoryBrief,
-  StoryPlan,
-  StoryStyleId,
-  StoryStyleProfile,
   TtsProvider,
   ThumbnailConcept,
   ThumbnailRequest,
@@ -53,21 +54,37 @@ export interface StudioApi {
     remove(episodeId: string): Promise<void>
     reorder(projectId: string, episodeIds: string[]): Promise<Episode[]>
   }
+  lorebook: {
+    createCharacter(input: { projectId: string; name: string; description?: string; ttsVoice?: string | null; ttsProvider?: Character['ttsProvider']; voiceStyle?: string; aliases?: string[] }): Promise<Character>
+    updateCharacter(id: string, patch: Partial<Character>): Promise<Character>
+    removeCharacter(id: string): Promise<void>
+    pickCharacterSheet(characterId: string): Promise<Asset | null>
+
+    listDerivatives(projectId: string, characterId?: string): Promise<CharacterDerivative[]>
+    createDerivative(input: { projectId: string; characterId: string; name: string; promptChange?: string }): Promise<CharacterDerivative>
+    updateDerivative(id: string, patch: Partial<CharacterDerivative>): Promise<CharacterDerivative>
+    removeDerivative(id: string): Promise<void>
+    generateDerivativeSheet(derivativeId: string): Promise<Job>
+    pickDerivativeSheet(derivativeId: string): Promise<Asset | null>
+
+    listLocations(projectId: string): Promise<Location[]>
+    createLocation(input: { projectId: string; name: string; description?: string; aliases?: string[] }): Promise<Location>
+    updateLocation(id: string, patch: Partial<Location>): Promise<Location>
+    removeLocation(id: string): Promise<void>
+    generateLocationSheet(locationId: string): Promise<Job>
+    pickLocationSheet(locationId: string): Promise<Asset | null>
+
+    listProps(projectId: string): Promise<Prop[]>
+    createProp(input: { projectId: string; name: string; description?: string; aliases?: string[] }): Promise<Prop>
+    updateProp(id: string, patch: Partial<Prop>): Promise<Prop>
+    removeProp(id: string): Promise<void>
+    generatePropSheet(propId: string): Promise<Job>
+    pickPropSheet(propId: string): Promise<Asset | null>
+
+    assetUsage(projectId: string, kind: 'character' | 'derivative' | 'location' | 'prop', id: string): Promise<AssetUsageSummary>
+    merge(input: MergeAssetInput): Promise<{ message: string }>
+  }
   story: {
-    /** Builds the complete editable chapter plan in one LLM request. */
-    chapterPlan(projectId: string, style: StoryStyleId, customOpening?: string): Promise<StoryPlan>
-    /** Extracts reusable style rules from creator supplied narration examples and stores the profile in settings. */
-    styleProfile(projectId: string, name: string, examples: string): Promise<StoryStyleProfile>
-    /** Reads the idea into an editable brief (format, truth mode, must-cover points) that later steps follow. */
-    brief(projectId: string): Promise<StoryBrief>
-    /** Creates hook options that fit the brief; without one, the main process creates it first. */
-    hooks(projectId: string, brief?: StoryBrief): Promise<string[]>
-    /** Creates an editable act outline around the selected hook, assigning each brief point to one act. */
-    outline(projectId: string, hook: string, brief?: StoryBrief): Promise<StoryPlan>
-    /** Idea → scene-by-scene script (story and voice-over), using the reviewed plan. */
-    script(projectId: string): Promise<ProjectBundle>
-    /** Revises one scene while preserving continuity with the surrounding story. */
-    reviseScene(projectId: string, clipId: string, instruction: string): Promise<SceneRevision>
     /** Script → one image plan per scene; "missing" skips scenes whose plan still matches their story. */
     visuals(projectId: string, mode: 'missing' | 'all'): Promise<ProjectBundle>
     /** A background-music prompt that fits the finished script, for use in Suno or another music AI. */

@@ -37,6 +37,35 @@ interface ProjectState {
   canUndo: boolean
   canRedo: boolean
 
+  activeView: 'hub' | 'lorebook' | 'episode'
+  activeTab: 'plan' | 'storyboard' | 'editor'
+  sidebarCollapsed: boolean
+
+  setActiveView(view: 'hub' | 'lorebook' | 'episode'): void
+  setActiveTab(tab: 'plan' | 'storyboard' | 'editor'): void
+  setSidebarCollapsed(collapsed: boolean): void
+  toggleSidebar(): void
+
+  switchEpisode(episodeId: string): Promise<void>
+  createEpisode(input?: Partial<Episode>): Promise<Episode>
+  updateEpisode(id: string, patch: Partial<Episode>): Promise<void>
+  removeEpisode(id: string): Promise<void>
+  reorderEpisodes(episodeIds: string[]): Promise<void>
+
+  addDerivative(input: { characterId: string; name: string; promptChange?: string }): Promise<CharacterDerivative>
+  updateDerivative(id: string, patch: Partial<CharacterDerivative>): Promise<void>
+  removeDerivative(id: string): Promise<void>
+
+  addLocation(input: { name: string; description?: string; aliases?: string[] }): Promise<Location>
+  updateLocation(id: string, patch: Partial<Location>): Promise<void>
+  removeLocation(id: string): Promise<void>
+
+  addProp(input: { name: string; description?: string; aliases?: string[] }): Promise<Prop>
+  updateProp(id: string, patch: Partial<Prop>): Promise<void>
+  removeProp(id: string): Promise<void>
+
+  refreshLorebook(): Promise<void>
+
   load(bundle: ProjectBundle, opts?: { keepHistory?: boolean }): void
   unload(): void
   select(clipId: string | null): void
@@ -187,6 +216,125 @@ export const useProject = create<ProjectState>((set, get) => {
     canUndo: false,
     canRedo: false,
 
+    activeView: 'episode',
+    activeTab: 'storyboard',
+    sidebarCollapsed: false,
+
+    setActiveView: (view) => {
+      set({ activeView: view })
+      const p = get().project
+      if (p) localStorage.setItem(`last_view:${p.id}`, view)
+    },
+    setActiveTab: (tab) => {
+      const willCollapse = tab === 'editor'
+      set({ activeTab: tab, sidebarCollapsed: willCollapse })
+      const p = get().project
+      if (p) localStorage.setItem(`last_tab:${p.id}`, tab)
+    },
+    setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+    toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+
+    switchEpisode: async (episodeId) => {
+      const p = get().project
+      if (!p || get().episode?.id === episodeId) return
+      await get().flush()
+      try {
+        const bundle = await window.api.projects.get(p.id, episodeId)
+        get().load(bundle, { keepHistory: false })
+        localStorage.setItem(`last_episode:${p.id}`, episodeId)
+      } catch (err) {
+        useApp.getState().toast('error', `Gagal membuka episode: ${errorText(err)}`)
+      }
+    },
+    createEpisode: async (input) => {
+      const p = get().project
+      if (!p) throw new Error('Proyek belum dimuat')
+      await get().flush()
+      const ep = await window.api.episodes.create(p.id, input)
+      set({ episodes: [...get().episodes, ep] })
+      return ep
+    },
+    updateEpisode: async (id, patch) => {
+      await window.api.episodes.update(id, patch)
+      set({
+        episodes: get().episodes.map((e) => (e.id === id ? { ...e, ...patch } : e)),
+        ...(get().episode?.id === id ? { episode: { ...get().episode!, ...patch } } : {})
+      })
+    },
+    removeEpisode: async (id) => {
+      const p = get().project
+      if (!p) return
+      await window.api.episodes.remove(id)
+      const remaining = get().episodes.filter((e) => e.id !== id)
+      set({ episodes: remaining })
+      if (get().episode?.id === id) {
+        if (remaining.length > 0) {
+          await get().switchEpisode(remaining[0].id)
+        } else {
+          set({ episode: null, clips: [], activeView: 'hub' })
+        }
+      }
+    },
+    reorderEpisodes: async (episodeIds) => {
+      const p = get().project
+      if (!p) return
+      const updated = await window.api.episodes.reorder(p.id, episodeIds)
+      set({ episodes: updated })
+    },
+
+    addDerivative: async (input) => {
+      const p = get().project!
+      const d = await window.api.lorebook.createDerivative({ projectId: p.id, ...input })
+      set({ derivatives: [...get().derivatives, d] })
+      return d
+    },
+    updateDerivative: async (id, patch) => {
+      const updated = await window.api.lorebook.updateDerivative(id, patch)
+      set({ derivatives: get().derivatives.map((d) => (d.id === id ? updated : d)) })
+    },
+    removeDerivative: async (id) => {
+      await window.api.lorebook.removeDerivative(id)
+      set({ derivatives: get().derivatives.filter((d) => d.id !== id) })
+    },
+    addLocation: async (input) => {
+      const p = get().project!
+      const l = await window.api.lorebook.createLocation({ projectId: p.id, ...input })
+      set({ locations: [...get().locations, l] })
+      return l
+    },
+    updateLocation: async (id, patch) => {
+      const updated = await window.api.lorebook.updateLocation(id, patch)
+      set({ locations: get().locations.map((l) => (l.id === id ? updated : l)) })
+    },
+    removeLocation: async (id) => {
+      await window.api.lorebook.removeLocation(id)
+      set({ locations: get().locations.filter((l) => l.id !== id) })
+    },
+    addProp: async (input) => {
+      const p = get().project!
+      const pr = await window.api.lorebook.createProp({ projectId: p.id, ...input })
+      set({ props: [...get().props, pr] })
+      return pr
+    },
+    updateProp: async (id, patch) => {
+      const updated = await window.api.lorebook.updateProp(id, patch)
+      set({ props: get().props.map((pr) => (pr.id === id ? updated : pr)) })
+    },
+    removeProp: async (id) => {
+      await window.api.lorebook.removeProp(id)
+      set({ props: get().props.filter((pr) => pr.id !== id) })
+    },
+    refreshLorebook: async () => {
+      const p = get().project
+      if (!p) return
+      const [derivatives, locations, props] = await Promise.all([
+        window.api.lorebook.listDerivatives(p.id),
+        window.api.lorebook.listLocations(p.id),
+        window.api.lorebook.listProps(p.id)
+      ])
+      set({ derivatives, locations, props })
+    },
+
     load: (b, opts) => {
       if (!opts?.keepHistory) {
         past = []
@@ -194,6 +342,21 @@ export const useProject = create<ProjectState>((set, get) => {
         historyGestureDepth = 0
         lastHistoryTime = -Infinity
       }
+      const lastView = (localStorage.getItem(`last_view:${b.project.id}`) as 'hub' | 'lorebook' | 'episode') || null
+      const lastTab = (localStorage.getItem(`last_tab:${b.project.id}`) as 'plan' | 'storyboard' | 'editor') || null
+
+      let defaultView: 'hub' | 'lorebook' | 'episode' = 'episode'
+      if (lastView) {
+        defaultView = lastView
+      } else if (!b.episode || (!b.clips.length && b.episodes.length <= 1 && b.episode.status === 'draft')) {
+        defaultView = 'hub'
+      }
+
+      const defaultTab: 'plan' | 'storyboard' | 'editor' =
+        lastTab || (b.episode?.status === 'editing' || b.episode?.status === 'exported' ? 'editor' : 'storyboard')
+
+      const shouldCollapseSidebar = defaultTab === 'editor'
+
       set({
         loaded: true,
         project: b.project,
@@ -211,7 +374,10 @@ export const useProject = create<ProjectState>((set, get) => {
         savedAt: b.project.updatedAt,
         selectedClipId: get().selectedClipId && b.clips.some((c) => c.id === get().selectedClipId) ? get().selectedClipId : (b.clips[0]?.id ?? null),
         canUndo: past.length > 0,
-        canRedo: future.length > 0
+        canRedo: future.length > 0,
+        activeView: defaultView,
+        activeTab: defaultTab,
+        sidebarCollapsed: shouldCollapseSidebar
       })
     },
     unload: () => {
@@ -235,7 +401,10 @@ export const useProject = create<ProjectState>((set, get) => {
         selectedClipId: null,
         saveState: 'saved',
         canUndo: false,
-        canRedo: false
+        canRedo: false,
+        activeView: 'episode',
+        activeTab: 'storyboard',
+        sidebarCollapsed: false
       })
     },
     select: (clipId) => set({ selectedClipId: clipId }),

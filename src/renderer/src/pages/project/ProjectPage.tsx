@@ -1,20 +1,19 @@
 import { useEffect, useState } from 'react'
-import { Download } from 'lucide-react'
-import { needsVisual } from '@shared/script'
-import type { Step } from '@shared/types'
-import { Button, Spinner } from '../../components/ui'
+import { FileText, Clapperboard, SlidersHorizontal } from 'lucide-react'
+import { Segmented, Spinner } from '../../components/ui'
 import { errorText } from '../../lib/format'
 import { useApp } from '../../store/app'
 import { useProject } from '../../store/project'
+import { StudioHeader } from './StudioHeader'
+import { StudioSidebar } from './StudioSidebar'
+import { EpisodeHub } from './EpisodeHub'
+import { LorebookPage } from './LorebookPage'
+import { StoryboardStep } from './StoryboardStep'
 import { EditorStep } from './EditorStep'
 import { ExportDialog } from './ExportDialog'
-import { IdeaStep } from './IdeaStep'
-import { ProjectHeader } from './ProjectHeader'
-import { ScriptStep } from './ScriptStep'
-import { StoryboardStep } from './StoryboardStep'
 
 export function ProjectPage({ id }: { id: string }) {
-  const { load, unload, loaded, project, clips } = useProject()
+  const { load, unload, loaded, project, episode, activeView, activeTab, setActiveTab } = useProject()
   const { toast, go } = useApp()
   const [exportOpen, setExportOpen] = useState(false)
 
@@ -48,32 +47,81 @@ export function ProjectPage({ id }: { id: string }) {
     return (
       <div className="flex h-full items-center justify-center gap-2 text-ink-2">
         <Spinner />
-        Membuka proyek…
+        Membuka serial…
       </div>
     )
 
-  const done: Step[] = []
-  if (clips.length) done.push(1)
-  if (clips.length && !clips.some(needsVisual)) done.push(2)
-  if (clips.length && clips.every((c) => c.imageAssetId)) done.push(3)
-
   return (
-    <div className="flex h-full flex-col">
-      <ProjectHeader
-        doneSteps={done}
-        right={
-          project.step === 4 ? (
-            <Button variant="primary" icon={<Download className="size-[18px]" />} onClick={() => setExportOpen(true)}>
-              Ekspor video
-            </Button>
-          ) : undefined
-        }
-      />
-      <div className="min-h-0 flex-1">
-        {project.step === 1 && <IdeaStep />}
-        {project.step === 2 && <ScriptStep />}
-        {project.step === 3 && <StoryboardStep />}
-        {project.step === 4 && <EditorStep />}
+    <div className="flex h-full flex-col bg-paper">
+      <StudioHeader onOpenExport={() => setExportOpen(true)} />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <StudioSidebar />
+        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          {activeView === 'hub' && <EpisodeHub />}
+          {activeView === 'lorebook' && <LorebookPage />}
+          {activeView === 'episode' && (
+            <div className="flex h-full flex-col overflow-hidden">
+              {/* Studio Episode Subheader Tabs */}
+              <div className="flex h-11 shrink-0 items-center justify-between border-b border-line bg-surface px-4">
+                <div className="flex items-center gap-2">
+                  <span className="font-display text-xs font-bold text-ink">
+                    Ep {episode?.episodeNum ?? '1'}: {episode?.title ?? 'Episode'}
+                  </span>
+                </div>
+
+                <Segmented
+                  value={activeTab}
+                  onChange={setActiveTab}
+                  options={[
+                    {
+                      id: 'plan',
+                      label: (
+                        <span className="flex items-center gap-1.5 text-xs">
+                          <FileText className="size-3.5" /> Rencana & Tinjau
+                        </span>
+                      )
+                    },
+                    {
+                      id: 'storyboard',
+                      label: (
+                        <span className="flex items-center gap-1.5 text-xs">
+                          <Clapperboard className="size-3.5" /> Storyboard
+                        </span>
+                      )
+                    },
+                    {
+                      id: 'editor',
+                      label: (
+                        <span className="flex items-center gap-1.5 text-xs">
+                          <SlidersHorizontal className="size-3.5" /> Editor
+                        </span>
+                      )
+                    }
+                  ]}
+                  size="sm"
+                />
+              </div>
+
+              {/* Workspace Content */}
+              <div className="min-h-0 flex-1 overflow-hidden">
+                {activeTab === 'plan' && (
+                  <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-ink-2">
+                    <FileText className="size-10 text-muted" />
+                    <div>
+                      <h3 className="font-display text-base font-bold text-ink">Rencana & Tinjau Episode</h3>
+                      <p className="mt-1 max-w-md text-xs text-muted">
+                        Fitur peninjauan shot, balon dialog, dan verifikasi aset sebelum generate akan aktif di Fase 3.
+                        Kamu bisa langsung mengedit naskah dan gambar di tab Storyboard sekarang.
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {activeTab === 'storyboard' && <StoryboardStep />}
+                {activeTab === 'editor' && <EditorStep />}
+              </div>
+            </div>
+          )}
+        </main>
       </div>
       <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)} />
     </div>

@@ -282,6 +282,22 @@ export interface Prop {
   sort: number
 }
 
+export interface AssetUsageSummary {
+  kind: 'character' | 'derivative' | 'location' | 'prop'
+  id: string
+  name: string
+  episodes: { episodeId: string; episodeNum: number; title: string; count: number }[]
+  totalCount: number
+}
+
+export interface MergeAssetInput {
+  projectId: string
+  kind: 'character' | 'location' | 'prop'
+  sourceId: string
+  targetId: string
+  asVariant?: boolean
+}
+
 export interface StoryAct {
   title: string
   summary: string
@@ -485,6 +501,9 @@ export interface ProjectSummary {
   totalMs: number
   coverUrl: string | null
   updatedAt: number
+  aspectRatio: AspectRatio
+  episodeCount: number
+  exportedCount: number
 }
 
 /** What the renderer sends on save. Asset links are owned by the main process and never overwritten by a save. */
@@ -497,12 +516,16 @@ export interface ProjectSnapshot {
 }
 
 export interface NewProjectInput {
+  title?: string
   synopsis?: string
   durationSec?: number
   language?: string
   aspectRatio?: AspectRatio
   styleId?: string
   ttsProvider?: TtsProvider
+  dialogAudio?: DialogAudio
+  imageModel?: string
+  videoModel?: string
 }
 
 export interface KeyStatus {
