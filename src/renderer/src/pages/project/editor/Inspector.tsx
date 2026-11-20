@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { dialogVoiceNote } from '@shared/validation'
 import { AudioLines, Check, Clapperboard, Copy, ExternalLink, Film, FolderOpen, Layers, Mic, Move, Music, Play, Sparkles, Type, Volume2, X } from 'lucide-react'
 import {
   CAPTION_FONTS,
@@ -395,7 +396,7 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
                 <span className="size-4 shrink-0 rounded-full border border-ink/20 shadow-xs" style={{ backgroundColor: f.swatch }} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-xs font-semibold text-ink">{f.name}</div>
-                  <div className="truncate text-[10px] text-muted">{f.description}</div>
+                  <div className="truncate text-[11px] text-muted">{f.description}</div>
                 </div>
                 {on && <Check className="size-3.5 shrink-0 text-accent" />}
               </button>
@@ -537,6 +538,7 @@ function VoiceTab({ clip, index }: { clip: Clip; index: number }) {
   const stale = !!voice && (voice.prompt ?? '').trim() !== clip.narration.trim()
   const voiceId = typeof voice?.meta.voice === 'string' ? voice.meta.voice : ''
   const voiceName = voiceId && voice?.provider === 'gemini' ? geminiVoiceName(voiceId) : voiceId
+  const dialogNote = dialogVoiceNote(project, clip, assets)
   return (
     <>
       <ClipHeader clip={clip} index={index} />
@@ -545,10 +547,9 @@ function VoiceTab({ clip, index }: { clip: Clip; index: number }) {
         {/* Voices come from one take of the whole script, so a change is fixed by re-recording that take. */}
         {narration.running ? (
           <span className="text-xs text-sun-ink">Suara narasi sedang dibuat…</span>
-        ) : clip.speakerId && project.dialogAudio === 'video' && !voice ? (
-          <div className="flex flex-col items-start gap-2">
-            <span className="text-xs text-ink-2">Klip dialog video: suara dan gerak bibir dibuat langsung oleh AI video saat generate video.</span>
-          </div>
+        ) : dialogNote ? (
+          // Narration skips lines the video model speaks, so re-recording would do nothing here.
+          <span className={cx('text-xs', dialogNote.tone === 'warn' ? 'text-accent-dark' : 'text-ink-2')}>{dialogNote.text}</span>
         ) : !voice || stale ? (
           <div className="flex flex-col items-start gap-2">
             <span className="text-xs text-ink-2">{voice ? 'Naskah berubah sejak suara dibuat.' : 'Klip ini belum punya suara.'}</span>
@@ -1071,7 +1072,7 @@ function MusicPromptSection() {
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1.5 text-xs font-semibold text-ink">
                 <Music className="size-3.5 text-accent" />
-                Generate dengan ElevenLabs
+                Buat dengan ElevenLabs
               </span>
               <div className="flex items-center gap-1 rounded-lg border border-line bg-surface p-0.5">
                 {([30, 60, 120] as const).map((sec) => (
@@ -1100,7 +1101,7 @@ function MusicPromptSection() {
               loading={generatingMusic}
               onClick={() => void generateMusicWithElevenLabs()}
             >
-              Generate Musik Latar ({durationSec}s)
+              Buat musik latar ({durationSec} dtk)
             </Button>
           </div>
 

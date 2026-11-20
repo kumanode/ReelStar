@@ -3,12 +3,14 @@ import {
   ArrowLeft,
   ArrowRight,
   Bookmark,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Clapperboard,
   Download,
   Film,
   Image as ImageIcon,
+  Mic,
   MoreHorizontal,
   Move,
   Pause,
@@ -26,14 +28,14 @@ import { effectiveResolution, fitDuration, getImageModel, getVideoModel } from '
 import { CAMERA_PRESETS, MOTION_STRENGTHS, cameraAt, cameraCss } from '@shared/motion'
 import { needsVisual } from '@shared/script'
 import { geminiVoiceName, geminiVoiceTone } from '@shared/models'
-import { getClipImageStatus, getClipVideoStatus, type GenerationPrerequisitesContext } from '@shared/validation'
+import { dialogVoiceNote, getClipImageStatus, getClipVideoStatus, isVideoDialogue, type GenerationPrerequisitesContext } from '@shared/validation'
 import type { AppSettings, Asset, Clip, Job, Project } from '@shared/types'
 import { AutoTextarea } from '../../components/AutoTextarea'
 import { CharacterAvatar } from '../../components/CharacterAvatar'
 import { ClipVisual } from '../../components/ClipVisual'
 import { Badge, Button, Chip, IconButton, Menu, Modal, Progress, Segmented, confirmDialog, cx, inputCls } from '../../components/ui'
 import { Select } from '../../components/Select'
-import { clipNumber, errorText, mmss, secLabel } from '../../lib/format'
+import { clipNumber, errorText, secLabel } from '../../lib/format'
 import { useNarration } from '../../lib/useNarration'
 import { useApp } from '../../store/app'
 import { isRunning, jobFor, useProject } from '../../store/project'
@@ -216,9 +218,9 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
     <aside className="flex min-h-0 flex-col border-l border-line bg-surface">
       <div className="flex h-16 shrink-0 items-center gap-2.5 border-b border-line pl-5 pr-4">
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-xs text-muted">
-              Klip {clipNumber(index)} · {mmss(start)} – {mmss(start + clip.durationMs)}
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="shrink-0 whitespace-nowrap text-xs text-muted tabular-nums" title={`Mulai di detik ${secLabel(start)}`}>
+              Klip {clipNumber(index)} · {secLabel(clip.durationMs)}
             </span>
             <Badge
               tone={
@@ -233,12 +235,12 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
               title={imgStatus.blockers.join('\n')}
             >
               {imgStatus.status === 'blocked'
-                ? 'Gbr Terblokir'
+                ? 'Gambar terblokir'
                 : imgStatus.status === 'stale'
-                  ? 'Gbr Basi'
+                  ? 'Gambar basi'
                   : imgStatus.status === 'current'
-                    ? 'Gbr Terkini'
-                    : 'Gbr Belum Ada'}
+                    ? 'Gambar terbaru'
+                    : 'Belum ada gambar'}
             </Badge>
             {clip.motionType === 'video' && (
               <Badge
@@ -254,12 +256,12 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
                 title={vidStatus.blockers.join('\n')}
               >
                 {vidStatus.status === 'blocked'
-                  ? 'Vid Terblokir'
+                  ? 'Video terblokir'
                   : vidStatus.status === 'stale'
-                    ? 'Vid Basi'
+                    ? 'Video basi'
                     : vidStatus.status === 'current'
-                      ? 'Vid Terkini'
-                      : 'Vid Belum Ada'}
+                      ? 'Video terbaru'
+                      : 'Belum ada video'}
               </Badge>
             )}
           </div>
@@ -308,7 +310,7 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
                 title={imgStatus.status === 'blocked' ? imgStatus.blockers.join('\n') : undefined}
                 onClick={() => void run(() => window.api.generate.clipImage(clip.id))}
               >
-                Generate gambar
+                Buat gambar
               </Button>
             </div>
           )}
@@ -336,7 +338,7 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
         </div>
       </div>
 
-      <div className="scroll-thin flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
+      <div className="scroll-thin flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4 pb-20">
         {project.aspectRatio === '16:9' && (image || video) && (
           <div className="flex items-center justify-between rounded-xl border border-line bg-sand/60 px-3.5 py-2.5">
             <div className="min-w-0 pr-2">
@@ -379,7 +381,7 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
               title={imgStatus.status === 'blocked' ? imgStatus.blockers.join('\n') : undefined}
               onClick={() => void run(() => window.api.generate.clipImage(clip.id))}
             >
-              Generate ulang
+              Buat ulang
             </Button>
           )}
           <Button size="sm" icon={<Pencil className="size-4" />} onClick={() => setEditPrompt(!editPrompt)}>
@@ -496,8 +498,11 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
             {/* Voices come from one take of the whole script (toolbar button), never per scene. */}
             {narration.running ? (
               <span className="text-xs text-sun-ink">Suara narasi sedang dibuat…</span>
-            ) : clip.speakerId && project.dialogAudio === 'video' ? (
-              <span className="text-xs text-muted">Klip dialog video: suara dan gerak bibir dibuat saat video digenerate.</span>
+            ) : isVideoDialogue(project, clip) ? (
+              (() => {
+                const note = dialogVoiceNote(project, clip, assets)
+                return note ? <span className={cx('text-xs', note.tone === 'warn' ? 'text-accent-dark' : 'text-muted')}>{note.text}</span> : null
+              })()
             ) : narrationChanged ? (
               <span className="text-xs text-accent-dark">
                 Naskah berubah.{' '}
@@ -810,7 +815,7 @@ function VideoSelectModal({
                   {image ? (
                     <img src={image.url} alt="" className="size-full object-cover" />
                   ) : (
-                    <div className="flex size-full items-center justify-center text-[10px] text-muted">Tanpa gambar</div>
+                    <div className="flex size-full items-center justify-center text-[11px] text-muted">Tanpa gambar</div>
                   )}
                 </div>
 
@@ -823,7 +828,7 @@ function VideoSelectModal({
                 </div>
 
                 <div className="flex shrink-0 items-center gap-2">
-                  <span className="font-mono text-xs text-muted">{mmss(c.durationMs)}</span>
+                  <span className="text-xs text-muted tabular-nums">{secLabel(c.durationMs)}</span>
                   {isVideoRunning ? (
                     <Badge tone="warn">Proses…</Badge>
                   ) : hasVideo ? (
@@ -842,7 +847,7 @@ function VideoSelectModal({
         <div className="flex items-center justify-between border-t border-line pt-3">
           <div className="flex flex-col text-xs text-ink-2">
             <span className="font-medium">
-              Terpilih: <strong className="text-ink">{selectedIds.size} klip</strong> ({mmss(totalDurationMs)})
+              Terpilih: <strong className="text-ink">{selectedIds.size} klip</strong> ({secLabel(totalDurationMs)})
             </span>
             {!isFlow2Video && totalCredits != null && selectedIds.size > 0 && (
               <span className="text-muted">Perkiraan biaya: ≈ {Math.round(totalCredits * 10) / 10} kredit Higgsfield</span>
@@ -859,7 +864,7 @@ function VideoSelectModal({
               disabled={selectedIds.size === 0 || busy}
               onClick={() => void handleStart()}
             >
-              Generate {selectedIds.size} Video AI
+              Buat {selectedIds.size} video AI
             </Button>
           </div>
         </div>
@@ -883,6 +888,7 @@ export function StoryboardStep() {
     select,
     addClip,
     updateProject,
+    setActiveTab,
     flush,
     load
   } = useProject()
@@ -1108,17 +1114,23 @@ export function StoryboardStep() {
                 ? `Perbarui suara narasi (${narration.stale})`
                 : 'Rekam ulang suara narasi'}
         </Button>
-        <Button
-          className="border-[1.5px] border-ink font-semibold"
-          icon={<ImageIcon className="size-[17px]" />}
-          disabled={!stats.needImg}
-          onClick={() => setBatchKind('image')}
-        >
-          Generate {stats.needImg} gambar
-          {credits != null && stats.needImg > 0 && (
-            <span className="font-normal text-ink-2">≈ {Math.round(credits * stats.needImg * 10) / 10} kr</span>
-          )}
-        </Button>
+        {stats.needImg === 0 ? (
+          <div className="flex h-10 items-center gap-1.5 rounded-xl border border-line bg-sand px-3 text-xs font-semibold text-muted">
+            <CheckCircle2 className="size-4 text-ok-ink" />
+            <span>Semua gambar siap</span>
+          </div>
+        ) : (
+          <Button
+            className="border-[1.5px] border-ink font-semibold"
+            icon={<ImageIcon className="size-[17px]" />}
+            onClick={() => setBatchKind('image')}
+          >
+            Buat {stats.needImg} gambar
+            {credits != null && stats.needImg > 0 && (
+              <span className="font-normal text-ink-2 tabular-nums">≈ {Math.round(credits * stats.needImg * 10) / 10} kr</span>
+            )}
+          </Button>
+        )}
 
         {stats.videoRunning > 0 ? (
           <div className="flex items-center gap-2">
@@ -1164,26 +1176,29 @@ export function StoryboardStep() {
         ) : null}
       </div>
 
-      <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_540px]">
+      <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_clamp(360px,34vw,480px)]">
         <section className="scroll-thin flex min-h-0 flex-col gap-3.5 overflow-y-auto px-6 pb-6 pt-[18px]">
-          <div className="flex items-center gap-3">
-            <h1 className="font-display text-2xl font-bold">Storyboard</h1>
-            <span className="text-sm text-muted">
-              {clips.length} klip · {mmss(stats.total)}
-            </span>
-            <div className="flex-1" />
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={<Sparkles className="size-3.5 text-sun" />}
-              loading={planning}
-              onClick={() => void planVisuals()}
-            >
-              Tulis prompt visual
-            </Button>
-            <Button variant="ghost" icon={<Plus className="size-[17px]" />} onClick={() => addClip(sel?.id ?? null)}>
-              Tambah klip
-            </Button>
+          <div className="flex flex-wrap items-center justify-between gap-3 min-w-0">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <h1 className="font-display text-2xl font-bold">Storyboard</h1>
+              <span className="whitespace-nowrap text-sm text-muted tabular-nums">
+                {clips.length} klip · {secLabel(stats.total)}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<Sparkles className="size-3.5 text-sun" />}
+                loading={planning}
+                onClick={() => void planVisuals()}
+              >
+                Tulis prompt visual
+              </Button>
+              <Button variant="ghost" icon={<Plus className="size-[17px]" />} onClick={() => addClip(sel?.id ?? null)}>
+                Tambah klip
+              </Button>
+            </div>
           </div>
           {stale > 0 && (
             <div className="flex items-center gap-3 rounded-2xl border border-sun bg-sun-soft px-4 py-3 text-sm text-sun-ink">
@@ -1196,7 +1211,7 @@ export function StoryboardStep() {
               </Button>
             </div>
           )}
-          <div className={cx('grid gap-3.5', project.aspectRatio === '9:16' ? 'grid-cols-4' : 'grid-cols-3')}>
+          <div className={cx('grid gap-3.5', project.aspectRatio === '9:16' ? 'grid-cols-[repeat(auto-fill,minmax(140px,1fr))]' : 'grid-cols-[repeat(auto-fill,minmax(180px,1fr))]')}>
             {clips.slice(0, visibleCount).map((c, i) => {
               const on = c.id === sel?.id
               const imageJob = jobFor(jobs, 'image', { clipId: c.id })
@@ -1217,13 +1232,13 @@ export function StoryboardStep() {
                       ? vidStatus.status === 'blocked'
                         ? { label: 'Video Terblokir', tone: 'bad' as const, title: vidStatus.blockers.join('\n') }
                         : vidStatus.status === 'stale'
-                          ? { label: 'Video Basi', tone: 'warn' as const, title: 'Input berubah sejak video dibuat' }
+                          ? { label: 'Video basi', tone: 'warn' as const, title: 'Input berubah sejak video dibuat' }
                           : { label: 'Video Siap', tone: 'ok' as const, title: undefined }
                       : c.imageAssetId
                         ? imgStatus.status === 'blocked'
                           ? { label: 'Gambar Terblokir', tone: 'bad' as const, title: imgStatus.blockers.join('\n') }
                           : imgStatus.status === 'stale'
-                            ? { label: 'Gambar Basi', tone: 'warn' as const, title: 'Input berubah sejak gambar dibuat' }
+                            ? { label: 'Gambar basi', tone: 'warn' as const, title: 'Input berubah sejak gambar dibuat' }
                             : { label: 'Siap', tone: 'ok' as const, title: undefined }
                         : imgStatus.status === 'blocked'
                           ? { label: 'Terblokir', tone: 'bad' as const, title: imgStatus.blockers.join('\n') }
@@ -1235,8 +1250,8 @@ export function StoryboardStep() {
                   aria-pressed={on}
                   onClick={() => select(c.id)}
                   className={cx(
-                    'flex flex-col overflow-hidden rounded-[14px] bg-surface text-left',
-                    on ? 'border-2 border-accent shadow-ink-md' : 'border border-line hover:border-line-3'
+                    'flex flex-col overflow-hidden rounded-[14px] bg-surface text-left border-2 transition-colors',
+                    on ? 'border-accent shadow-ink-md' : 'border-line hover:border-line-3'
                   )}
                 >
                   <div className={cx('relative w-full overflow-hidden bg-paper', project.aspectRatio === '9:16' ? 'aspect-[9/16]' : 'aspect-video')}>
@@ -1246,43 +1261,46 @@ export function StoryboardStep() {
                       video={c.videoAssetId ? assets[c.videoAssetId] : null}
                       job={imageJob || videoJob}
                     />
-                    <div className="absolute left-2 top-2 flex items-center gap-1">
-                      <span className="rounded-md bg-ink px-[7px] py-0.5 font-mono text-xs text-paper">{clipNumber(i)}</span>
-                      {c.motionType === 'video' && c.videoAssetId ? (
-                        <span className="rounded-md bg-accent px-1.5 py-0.5 text-[10px] font-semibold text-white shadow-sm">VIDEO AI</span>
-                      ) : c.imageAssetId ? (
-                        <span className="rounded-md border border-line-2 bg-surface/90 px-1.5 py-0.5 text-[10px] font-semibold text-ink shadow-sm">GAMBAR</span>
-                      ) : null}
-                    </div>
-                    <div className="absolute right-2 top-2 flex items-center gap-1">
+                    <div className="absolute inset-x-0 top-0 flex items-center justify-between p-2 pointer-events-none gap-1">
+                      <div className="flex items-center gap-1 min-w-0">
+                        <span className="rounded-md bg-ink px-[7px] py-0.5 font-mono text-xs text-paper shrink-0">{clipNumber(i)}</span>
+                        {c.motionType === 'video' && c.videoAssetId ? (
+                          <span className="rounded-md bg-accent px-1.5 py-0.5 text-[11px] font-semibold text-white shadow-sm shrink-0">Video AI</span>
+                        ) : c.imageAssetId ? (
+                          <span className="rounded-md border border-line-2 bg-surface/90 px-1.5 py-0.5 text-[11px] font-semibold text-ink shadow-sm shrink-0">Gambar</span>
+                        ) : null}
+                      </div>
                       {c.audioAssetId && (
                         <span
                           className={cx(
-                            'rounded-md px-1.5 py-0.5 text-[10px] font-semibold shadow-sm',
+                            'rounded-md px-1.5 py-0.5 text-[11px] font-semibold shadow-sm shrink-0',
                             synced ? 'border border-ok-soft bg-ok-soft text-ok-ink' : 'border border-sun-soft bg-sun-soft text-sun-ink'
                           )}
                           title={synced ? 'Kata caption sudah sinkron dengan Whisper' : 'Waktu caption masih estimasi'}
                         >
-                          {synced ? 'SYNCED' : 'ESTIMATE'}
+                          {synced ? 'Sinkron' : 'Estimasi'}
                         </span>
                       )}
                     </div>
-                    <span className="absolute bottom-2 right-2 rounded-md border border-ink bg-surface px-[7px] py-px font-mono text-xs">
-                      {mmss(c.durationMs)}
+                    <span className="absolute bottom-2 right-2 rounded-md border border-line bg-surface/90 px-1.5 py-0.5 text-[11px] tabular-nums font-semibold">
+                      {secLabel(c.durationMs)}
                     </span>
                   </div>
                   <div className="flex w-full flex-col gap-2 px-3 pb-3 pt-2.5">
                     <span className="truncate text-sm font-semibold">{c.title || 'Tanpa judul'}</span>
-                    <div className="flex items-center gap-2">
+                    {/* Wraps as whole chips: a narrow card puts the voice status on its own line instead of
+                        breaking "Belum ada suara" over three. */}
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <Badge tone={status.tone} title={status.title}>{status.label}</Badge>
                       {c.speakerId && (
                         <span className="inline-flex max-w-[120px] items-center gap-1 truncate rounded bg-sand px-1.5 py-0.5 text-[11px] font-medium text-ink-2" title={`Disuarakan oleh: ${characters.find((ch) => ch.id === c.speakerId)?.name ?? 'Tokoh'}`}>
-                          🗣️ {characters.find((ch) => ch.id === c.speakerId)?.name ?? 'Tokoh'}
+                          <Mic className="size-3 shrink-0" />
+                          <span className="truncate">{characters.find((ch) => ch.id === c.speakerId)?.name ?? 'Tokoh'}</span>
                         </span>
                       )}
-                      <span className={cx('inline-flex items-center gap-1 text-xs', c.audioAssetId ? 'text-ok-ink' : 'text-muted')}>
-                        <Volume2 className="size-3.5" />
-                        {ttsRunning ? 'Membuat suara…' : c.audioAssetId ? 'Suara siap' : 'Belum ada suara'}
+                      <span className={cx('inline-flex items-center gap-1 whitespace-nowrap text-xs', c.audioAssetId ? 'text-ok-ink' : 'text-muted')}>
+                        <Volume2 className="size-3.5 shrink-0" />
+                        {c.audioAssetId ? 'Suara siap' : isVideoDialogue(project, c) ? 'Suara dari video' : ttsRunning ? 'Membuat suara…' : 'Belum ada suara'}
                       </span>
                     </div>
                   </div>
@@ -1295,28 +1313,35 @@ export function StoryboardStep() {
         {sel && <ClipPanel key={sel.id} clip={sel} index={selIndex} total={clips.length} prereqCtx={prereqCtx} />}
       </div>
 
-      <footer className="flex items-center gap-4 border-t border-line bg-surface px-6">
-        <div className="flex w-[320px] flex-col gap-1.5">
-          <div className="flex justify-between text-[13px]">
-            <span className="font-semibold">
-              {stats.imgs} dari {clips.length} gambar siap
-            </span>
-            <span className="text-muted">
-              {stats.voices} dari {clips.length} suara siap
-            </span>
+      <footer className="flex h-16 shrink-0 items-center gap-6 border-t border-line bg-surface px-6">
+        <div className="flex items-center gap-4">
+          <div className="flex w-36 flex-col gap-1">
+            <div className="flex justify-between text-xs">
+              <span className="font-semibold">Gambar</span>
+              <span className="tabular-nums text-muted">{stats.imgs}/{clips.length}</span>
+            </div>
+            <Progress value={clips.length ? stats.imgs / clips.length : 0} />
           </div>
-          <Progress value={clips.length ? (stats.imgs + stats.voices) / (clips.length * 2) : 0} />
+          <div className="flex w-36 flex-col gap-1">
+            <div className="flex justify-between text-xs">
+              <span className="font-semibold">Suara</span>
+              <span className="tabular-nums text-muted">{stats.voices}/{clips.length}</span>
+            </div>
+            <Progress value={clips.length ? stats.voices / clips.length : 0} />
+          </div>
         </div>
-        <span className="text-[13px] text-muted">Klip yang belum siap tetap bisa dibuka di editor.</span>
+        <span className="hidden text-xs text-muted xl:inline">Klip yang belum siap tetap bisa dibuka di editor.</span>
         <div className="flex-1" />
-        <Button size="lg" onClick={() => updateProject({ step: 2 })}>
-          Kembali ke naskah
+        <Button size="lg" onClick={() => { updateProject({ step: 2 }); setActiveTab('plan') }}>
+          Kembali ke rencana
         </Button>
         <Button
           variant="primary"
           size="lg"
-          className="h-[50px]"
-          onClick={() => updateProject({ step: 4, status: project.status === 'exported' ? 'exported' : 'editing' })}
+          onClick={() => {
+            updateProject({ step: 4, status: project.status === 'exported' ? 'exported' : 'editing' })
+            setActiveTab('editor')
+          }}
         >
           Lanjut ke editor
           <ArrowRight className="size-[18px]" />

@@ -228,7 +228,7 @@ export function getClipImageStatus(clip: Clip, project: Project, ctx: Generation
 
 /** Status of a clip video (§6.J). */
 export function getClipVideoStatus(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): ClipStatusResult {
-  const basisHash = computeClipVideoBasisHash({ project, clip, characters: ctx.characters })
+  const basisHash = computeClipVideoBasisHash({ project, clip, characters: ctx.characters, seconds: videoSecondsFor(project, clip, ctx).seconds })
   return resultStatus(ctx.assets, clip.videoAssetId, basisHash, checkClipVideoPrerequisites(clip, project, ctx))
 }
 
@@ -249,4 +249,27 @@ export function planBatch<T extends { status: ClipStatusResult }>(items: T[], in
   const targets = items.filter((i) => i.status.status === 'missing' || (includeStale && i.status.status === 'stale'))
   const blocking = items.filter((i) => i.status.status === 'blocked' && (!i.status.hasResult || includeStale))
   return { targets, blocking }
+}
+
+/**
+ * What the storyboard and inspector say about the voice of a clip the video model speaks, or null for any other
+ * clip. Narration never voices these clips, so a missing or outdated voice is fixed by remaking the video.
+ */
+export function dialogVoiceNote(
+  project: Pick<Project, 'dialogAudio'>,
+  clip: Pick<Clip, 'speakerId' | 'narration' | 'audioAssetId' | 'videoAssetId'>,
+  assets: Record<string, Asset>
+): { tone: 'info' | 'warn'; text: string } | null {
+  if (!isVideoDialogue(project, clip)) return null
+  const voice = clip.audioAssetId ? assets[clip.audioAssetId] : null
+  const video = clip.videoAssetId ? assets[clip.videoAssetId] : null
+  const error = video?.meta.dialogAudioError
+  if (typeof error === 'string' && (!voice || voice.meta.videoAssetId !== video?.id)) {
+    return { tone: 'warn', text: `Suara dialog tidak bisa diambil dari video ini (${error}). Buat ulang videonya.` }
+  }
+  if (voice && (voice.prompt ?? '').trim() !== clip.narration.trim()) {
+    return { tone: 'warn', text: 'Teks dialog berubah sejak video dibuat. Buat ulang videonya supaya ucapan dan gerak bibir ikut berubah.' }
+  }
+  if (!voice) return { tone: 'info', text: 'Klip dialog video: suara dan gerak bibir dibuat langsung oleh AI video saat generate video.' }
+  return null
 }

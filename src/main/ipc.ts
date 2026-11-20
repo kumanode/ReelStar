@@ -138,7 +138,7 @@ async function testProvider(provider: ApiProvider, key?: string): Promise<KeyTes
 }
 
 function defaultExportFolder(): string {
-  return getSettings().exportFolder ?? join(app.getPath('videos'), 'Bang Story')
+  return getSettings().exportFolder ?? join(app.getPath('videos'), 'ReelStar')
 }
 
 export function registerIpc(): void {

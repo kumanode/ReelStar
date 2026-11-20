@@ -68,6 +68,9 @@ export interface ClipVideoBasisParams {
   }
   clip: Clip
   characters: Character[]
+  /** The video length actually requested (videoSecondsFor), not the clip length: a dialogue clip takes the
+   *  video's length afterwards, and that must not make the same video look stale. */
+  seconds: number
 }
 
 /**
@@ -75,9 +78,9 @@ export interface ClipVideoBasisParams {
  * compiled video prompt, initial image asset id, clip duration, model, and speech dialogue.
  */
 export function computeClipVideoBasisHash(params: ClipVideoBasisParams): string {
-  const { project, clip, characters } = params
+  const { project, clip, characters, seconds } = params
   const compiledVideoPrompt = compileClipVideoPrompt(project, clip, characters)
-  const durationSec = Math.max(1, Math.round(clip.durationMs / 1000))
+  const durationSec = seconds
 
   return fnv1a(
     JSON.stringify([

@@ -20,6 +20,7 @@ import {
   clipImageBasis,
   getClipImageStatus,
   getClipVideoStatus,
+  isVideoDialogue,
   planBatch,
   referenceLimit,
   videoSecondsFor,
@@ -210,69 +211,61 @@ interface HfPayload {
 }
 
 /**
- * Extracts dialogue audio from a generated video clip and aligns caption word timings (§6.C).
- * Called after video generation completes when clip has dialogue and project has dialogAudio = 'video'.
+ * Takes the spoken line out of a freshly generated dialogue video and makes it the clip's voice (§6.C), with
+ * caption words timed by Whisper. The clip takes the video's length so the line is never cut at the old clip end.
+ * When the video has no usable sound the reason is stored on the video asset, so the storyboard can say so instead
+ * of leaving a silent clip (narration skips dialogue clips, so nothing else would voice it).
  */
-export async function extractVideoDialogueAudio(
-  projectId: string,
-  clipId: string,
-  videoAbsPath: string,
-  signal?: AbortSignal
-): Promise<Asset | null> {
+export async function extractVideoDialogueAudio(projectId: string, clipId: string, video: Asset, signal?: AbortSignal): Promise<Asset | null> {
   const project = getProject(projectId)
   const clip = getClip(clipId)
-  if (!clip.speakerId || project.dialogAudio !== 'video' || !clip.narration.trim()) return null
+  if (!isVideoDialogue(project, clip)) return null
+  const videoAbs = assetAbsPath(project.id, video.localPath)
 
-  const hasAudio = await probeHasAudio(videoAbsPath).catch(() => false)
-  if (!hasAudio) {
-    console.warn(`[videoDialogue] Video file has no audio stream: ${videoAbsPath}`)
+  const fail = (reason: string): null => {
+    console.warn(`[videoDialogue] ${reason}`)
+    const fresh = getAsset(video.id)
+    if (fresh) {
+      updateAssetMeta(fresh.id, { ...fresh.meta, dialogAudioError: reason })
+      const updated = getAsset(fresh.id)
+      if (updated) emit.asset(updated)
+    }
     return null
   }
+
+  if (!(await probeHasAudio(videoAbs).catch(() => false))) return fail('video tidak punya jalur suara')
 
   const rel = `audio/${randomUUID()}.wav`
   const abs = assetAbsPath(project.id, rel)
   mkdirSync(dirname(abs), { recursive: true })
-
   try {
-    await extractAudio(videoAbsPath, abs, signal)
+    await extractAudio(videoAbs, abs, signal)
   } catch (err) {
-    console.warn(`[videoDialogue] Failed to extract audio: ${(err as Error).message}`)
-    return null
+    if (signal?.aborted) throw err
+    return fail((err as Error).message)
   }
 
   const durationMs = await probeDurationMs(abs).catch(() => null)
   const durationSec = durationMs ? durationMs / 1000 : 0
   const scriptWords = spokenWords(clip.narration)
 
-  let words: WordTiming[] = []
+  let words: WordTiming[] = estimateWordTimings(clip.narration, durationSec)
   let estimated = true
   let timedBy: string | undefined
-
-  const tmp = join(dataDir(), 'tmp', `dialog-align-${Date.now()}`)
-  try {
-    if (getSettings().whisperAuto && whisperReady() && scriptWords.length && durationSec > 0) {
-      try {
-        const timed = await timeScript(abs, scriptWords, project.language, durationSec, tmp, signal)
-        if (timed && timed.length) {
-          words = timed
-          estimated = false
-          timedBy = WHISPER_TIMING
-        } else {
-          words = estimateWordTimings(clip.narration, durationSec)
-        }
-      } catch (e) {
-        if (signal?.aborted) throw e
-        console.warn('[whisper-dialog]', (e as Error).message)
-        words = estimateWordTimings(clip.narration, durationSec)
-      }
-    } else {
-      words = estimateWordTimings(clip.narration, durationSec)
-    }
-  } finally {
+  if (getSettings().whisperAuto && whisperReady() && scriptWords.length && durationSec > 0) {
+    const tmp = join(dataDir(), 'tmp', `dialog-align-${randomUUID()}`)
     try {
+      const timed = await timeScript(abs, scriptWords, project.language, durationSec, tmp, signal)
+      if (timed?.length) {
+        words = timed
+        estimated = false
+        timedBy = WHISPER_TIMING
+      }
+    } catch (e) {
+      if (signal?.aborted) throw e
+      console.warn('[whisper-dialog]', (e as Error).message)
+    } finally {
       rmSync(tmp, { recursive: true, force: true })
-    } catch {
-      // ignore
     }
   }
 
@@ -284,17 +277,14 @@ export async function extractVideoDialogueAudio(
     prompt: clip.narration,
     localPath: rel,
     durationMs,
-    meta: {
-      words,
-      estimatedTimings: estimated,
-      source: 'video',
-      ...(timedBy ? { timedBy } : {})
-    }
+    // videoAssetId pairs the voice with its video, so picking an older video from history brings its voice back.
+    meta: { words, estimatedTimings: estimated, source: 'video', videoAssetId: video.id, ...(timedBy ? { timedBy } : {}) }
   })
   emit.asset(asset)
 
   const patch: Partial<Clip> = {
     audioAssetId: asset.id,
+    durationMs: Math.max(1000, video.durationMs ?? durationMs ?? clip.durationMs),
     voiceInMs: 0,
     voiceOutMs: null,
     voiceStartMs: 0
@@ -302,7 +292,6 @@ export async function extractVideoDialogueAudio(
   patchClip(clip.id, patch)
   emit.clip({ clipId: clip.id, patch })
   touchProject(project.id)
-
   return asset
 }
 
@@ -382,8 +371,7 @@ async function finishHiggsfield(ctx: TaskCtx, job: Job, requestId: string, paylo
     const patch = { videoAssetId: asset.id, motionType: 'video' as const, mediaInMs: 0 }
     patchClip(job.clipId, patch)
     emit.clip({ clipId: job.clipId, patch })
-    const videoAbs = assetAbsPath(job.projectId, asset.localPath)
-    await extractVideoDialogueAudio(job.projectId, job.clipId, videoAbs, ctx.signal)
+    await extractVideoDialogueAudio(job.projectId, job.clipId, asset, ctx.signal)
   }
   touchProject(job.projectId)
   return asset.id
@@ -958,11 +946,7 @@ export function generateClipVideo(clipId: string): Job {
       const modelId = video.model
 
       const prompt = compileClipVideoPrompt(project, fresh, allChars, 2000)
-      const basisHash = computeClipVideoBasisHash({
-        project,
-        clip: fresh,
-        characters: allChars
-      })
+      const basisHash = computeClipVideoBasisHash({ project, clip: fresh, characters: allChars, seconds: durationSec })
 
       ctx.progress(0.04, 'Menyiapkan video Flow2API (Veo)')
       const { mediaUrl } = await f2a.generateVideo({
@@ -1004,7 +988,7 @@ export function generateClipVideo(clipId: string): Job {
       patchClip(clipId, patch)
       emit.clip({ clipId, patch })
       touchProject(project.id)
-      await extractVideoDialogueAudio(project.id, clipId, abs, ctx.signal)
+      await extractVideoDialogueAudio(project.id, clipId, asset, ctx.signal)
       return asset.id
     })
   }
@@ -1024,19 +1008,16 @@ export function generateClipVideo(clipId: string): Job {
     if (model.input.mode === 'reference') {
       prompt = `Open on the exact scene of the reference image and keep its art style, characters and composition. ${prompt}`
     }
-    const basisHash = computeClipVideoBasisHash({
-      project,
-      clip: fresh,
-      characters: allChars
-    })
-    const isVideoDialog = !!(fresh.speakerId && project.dialogAudio === 'video' && fresh.narration.trim())
+    const seconds = videoSecondsFor(project, fresh, prereqContext(project.id)).seconds
+    const basisHash = computeClipVideoBasisHash({ project, clip: fresh, characters: allChars, seconds })
+    const isVideoDialog = isVideoDialogue(project, fresh)
     return {
       endpoint: model.id,
       body: videoBody(
         model,
         prompt,
         url,
-        videoSecondsFor(project, fresh, prereqContext(project.id)).seconds,
+        seconds,
         project.aspectRatio,
         project.videoResolution,
         null,
@@ -1145,8 +1126,9 @@ export function generateMissingVideos(projectId: string, episodeId?: string, inc
 }
 
 export function generateMissingTts(projectId: string, episodeId?: string): Job[] {
+  const project = getProject(projectId)
   return clipsOf(projectId, episodeId)
-    .filter((c) => !c.audioAssetId && c.narration.trim())
+    .filter((c) => !c.audioAssetId && c.narration.trim() && !isVideoDialogue(project, c))
     .map((c) => generateClipTts(c.id))
 }
 
@@ -1244,6 +1226,10 @@ export async function setActiveAsset(clipId: string, assetId: string): Promise<v
         : asset.kind === 'audio'
           ? { audioAssetId: asset.id, durationMs: Math.max(1500, (asset.durationMs ?? 0) + 400), voiceInMs: 0, voiceOutMs: null, voiceStartMs: 0 }
           : {}
+  if (asset.kind === 'video') {
+    const voice = assetsOf(asset.projectId).find((a) => a.kind === 'audio' && a.clipId === clipId && a.meta.videoAssetId === asset.id)
+    if (voice) Object.assign(patch, { audioAssetId: voice.id, durationMs: Math.max(1000, asset.durationMs ?? voice.durationMs ?? 0), voiceInMs: 0, voiceOutMs: null, voiceStartMs: 0 })
+  }
   patchClip(clipId, patch)
   emit.clip({ clipId, patch })
 }

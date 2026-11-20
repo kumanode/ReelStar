@@ -469,17 +469,17 @@ export function Player({
               <OverlayItem key={o.id} o={o} asset={null} box={box} editable={editOverlays} />
             ))}
         {showShortsGuide && aspect === '9:16' && (
-          <div className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-between border-2 border-dashed border-accent/70 font-mono text-[10px] text-white">
+          <div className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-between border-2 border-dashed border-accent/70 text-[11px] text-white">
             <div className="flex h-[15%] w-full items-start justify-center bg-accent/15 p-1">
-              <span className="rounded bg-ink/80 px-1.5 py-0.5 text-[9px] text-paper">Batas Header & Suara</span>
+              <span className="rounded bg-ink/80 px-1.5 py-0.5 text-[11px] text-paper">Batas Header & Suara</span>
             </div>
             <div className="flex flex-1 items-center justify-end pr-1">
               <div className="flex h-[55%] w-[18%] flex-col items-center justify-center rounded-lg border border-accent/50 bg-accent/20 p-0.5 text-center leading-tight">
-                <span className="rounded bg-ink/80 px-1 py-0.5 text-[8px] text-paper">Ikon Interaksi</span>
+                <span className="rounded bg-ink/80 px-1 py-0.5 text-[11px] text-paper">Ikon Interaksi</span>
               </div>
             </div>
             <div className="flex h-[22%] w-full items-end justify-start bg-accent/15 p-2">
-              <span className="rounded bg-ink/80 px-1.5 py-0.5 text-[9px] text-paper">Batas Judul & Akun</span>
+              <span className="rounded bg-ink/80 px-1.5 py-0.5 text-[11px] text-paper">Batas Judul & Akun</span>
             </div>
           </div>
         )}
@@ -542,7 +542,7 @@ export function Player({
               )}
             >
               <Smartphone className="size-3.5" />
-              <span>Shorts Guide</span>
+              <span>Panduan Shorts</span>
             </button>
           )}
           <IconButton

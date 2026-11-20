@@ -23,8 +23,8 @@ export function StylePicker({ value, onChange }: { value: string; onChange: (id:
               aria-pressed={on}
               onClick={() => onChange(s.id)}
               className={cx(
-                'group relative flex flex-col overflow-hidden rounded-[14px] bg-surface text-left transition-shadow',
-                on ? 'border-2 border-accent shadow-ink-md' : 'border border-line hover:border-line-3'
+                'group relative flex flex-col overflow-hidden rounded-[14px] bg-surface text-left border-2 transition-shadow',
+                on ? 'border-accent shadow-ink-md' : 'border-line hover:border-line-3'
               )}
             >
               <span className="relative block aspect-video w-full overflow-hidden border-b border-line bg-sand">

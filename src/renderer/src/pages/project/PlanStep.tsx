@@ -597,15 +597,17 @@ export function PlanStep() {
             </div>
           )}
 
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={isPlanning ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5 text-sun" />}
-            disabled={isPlanning || isConfirming}
-            onClick={() => void handlePlanScript()}
-          >
-            {draft ? 'Susun ulang rencana AI' : 'Buat rencana AI'}
-          </Button>
+          {draft && (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={isPlanning ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5 text-sun" />}
+              disabled={isPlanning || isConfirming}
+              onClick={() => void handlePlanScript()}
+            >
+              Susun ulang rencana AI
+            </Button>
+          )}
 
           {draft && (
             <Button
@@ -1048,7 +1050,7 @@ export function PlanStep() {
                   )}
 
                   <div className="flex flex-col gap-1 pt-1">
-                    <label className="text-[10px] font-semibold text-muted">Aksi Konfirmasi</label>
+                    <label className="text-[11px] font-semibold text-muted">Aksi Konfirmasi</label>
                     <Select
                       label="Aksi aset"
                       value={asset.action}
@@ -1066,7 +1068,7 @@ export function PlanStep() {
                   {/* Target picker for merge or derivative */}
                   {(asset.action === 'merge' || asset.action === 'derivative') && (
                     <div className="flex flex-col gap-1 pt-1">
-                      <label className="text-[10px] font-semibold text-muted">
+                      <label className="text-[11px] font-semibold text-muted">
                         {asset.action === 'merge' ? 'Target Aset Penggabungan:' : 'Karakter Induk:'}
                       </label>
                       <Select

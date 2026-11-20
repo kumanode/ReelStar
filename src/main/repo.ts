@@ -961,11 +961,19 @@ export function replaceStory(
       Date.now(),
       epId
     )
-    db.prepare("UPDATE projects SET title = ?, status = 'storyboard', step = 3, updated_at = ? WHERE id = ?").run(
-      title,
-      Date.now(),
-      projectId
-    )
+    const epCount = listEpisodes(projectId).length
+    if (epCount <= 1) {
+      db.prepare("UPDATE projects SET title = ?, status = 'storyboard', step = 3, updated_at = ? WHERE id = ?").run(
+        title,
+        Date.now(),
+        projectId
+      )
+    } else {
+      db.prepare("UPDATE projects SET status = 'storyboard', step = 3, updated_at = ? WHERE id = ?").run(
+        Date.now(),
+        projectId
+      )
+    }
   })()
 }
 

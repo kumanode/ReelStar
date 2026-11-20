@@ -19,7 +19,15 @@ const KIND_LABEL: Record<string, string> = {
 export function App() {
   const route = useApp((s) => s.route)
 
-  useEffect(() => useTheme.getState().init(), [])
+  useEffect(() => {
+    useTheme.getState().init()
+    if (import.meta.env.DEV) {
+      const w = window as unknown as Record<string, unknown>
+      w.useApp = useApp
+      w.useProject = useProject
+      w.useTheme = useTheme
+    }
+  }, [])
 
   useEffect(() => {
     const p = useProject.getState

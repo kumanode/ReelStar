@@ -80,6 +80,11 @@ export function LorebookPage() {
   const selectedLocation = locations.find((l) => l.id === selectedId)
   const selectedProp = props.find((p) => p.id === selectedId)
 
+  const hasSelection =
+    (activeTab === 'character' && !!selectedCharacter) ||
+    (activeTab === 'location' && !!selectedLocation) ||
+    (activeTab === 'prop' && !!selectedProp)
+
   // Filtered lists by search query
   const filteredCharacters = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
@@ -382,7 +387,7 @@ export function LorebookPage() {
             <input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={`Cari ${activeTab} atau alias...`}
+              placeholder={`Cari ${activeTab === 'character' ? 'karakter' : activeTab === 'location' ? 'lokasi' : 'prop'} atau alias...`}
               className="h-8 w-56 rounded-lg border border-line-2 bg-paper pl-8 pr-2.5 text-xs text-ink outline-none transition-colors focus:border-ink"
             />
           </div>
@@ -480,7 +485,7 @@ export function LorebookPage() {
                           {char.name}
                         </span>
                         {char.aliases?.[0] && (
-                          <span className="max-w-[100px] truncate rounded bg-sand px-1.5 py-0.5 text-[10px] text-muted">
+                          <span className="max-w-[100px] truncate rounded bg-sand px-1.5 py-0.5 text-[11px] text-muted">
                             aka {char.aliases[0]}
                           </span>
                         )}
@@ -663,8 +668,9 @@ export function LorebookPage() {
         </div>
 
         {/* Right: Detail Panel */}
-        <div className="scroll-thin w-[420px] shrink-0 border-l border-line bg-surface p-5 overflow-y-auto">
-          {/* Detail Panel for Character */}
+        {hasSelection && (
+          <div className="scroll-thin w-[420px] shrink-0 border-l border-line bg-surface p-5 overflow-y-auto">
+            {/* Detail Panel for Character */}
           {activeTab === 'character' && selectedCharacter && (
             <div className="flex flex-col gap-5">
               <div className="flex items-center justify-between border-b border-line pb-3">
@@ -865,7 +871,7 @@ export function LorebookPage() {
                             />
                             <div className="flex items-center gap-1">
                               {isStale && (
-                                <Badge tone="warn" className="text-[10px]">
+                                <Badge tone="warn" className="text-[11px]">
                                   Basi
                                 </Badge>
                               )}
@@ -1252,18 +1258,9 @@ export function LorebookPage() {
               </div>
             </div>
           )}
-
-          {/* Placeholder when nothing is selected */}
-          {((activeTab === 'character' && !selectedCharacter) ||
-            (activeTab === 'location' && !selectedLocation) ||
-            (activeTab === 'prop' && !selectedProp)) && (
-            <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-xs text-muted">
-              <span className="font-semibold text-ink">Pilih item untuk melihat detail</span>
-              <span>Klik salah satu kartu di sebelah kiri untuk melihat lembar, deskripsi, varian, dan pemakaian.</span>
-            </div>
-          )}
         </div>
-      </div>
+      )}
+    </div>
 
       {/* Merge Modal */}
       <MergeAssetModal

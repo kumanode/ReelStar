@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app, type BrowserWindow } from 'electron'
@@ -7,7 +8,7 @@ import { estimateWordTimings } from '@shared/captions'
 import { anchorPoint } from '@shared/overlays'
 import { NO_MUSIC, NO_MUSIC_DIALOG, modelSupportsNativeAudio } from '@shared/higgsfield'
 import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt } from '@shared/prompts'
-import { computeClipImageBasisHash } from '@shared/hash'
+import { computeClipImageBasisHash, computeClipVideoBasisHash } from '@shared/hash'
 import { checkClipImagePrerequisites, checkClipVideoPrerequisites, clipImageBasis, getClipImageStatus, getClipVideoStatus, planBatch, referenceLimit, videoSecondsFor } from '@shared/validation'
 import { startExport } from './exporter'
 import { assetAbsPath, binPath } from './paths'
@@ -32,9 +33,9 @@ import {
 } from './repo'
 import { getSettings, setSettings } from './settings'
 import { planEpisodes, writePrompts } from './story'
-import { batchEstimate, extractVideoDialogueAudio, generateMissingImages } from './generation'
+import { batchEstimate, extractVideoDialogueAudio, generateMissingImages, setActiveAsset } from './generation'
 import { recordCheck, setSecret } from './secrets'
-import type { ApiProvider, Character, Clip, EpisodeScriptDraft, ExportOptions } from '@shared/types'
+import type { ApiProvider, Asset, Character, Clip, EpisodeScriptDraft, ExportOptions } from '@shared/types'
 
 /**
  * Real speech for the demo clips (Windows' built-in English voice) with estimated caption timings, so
@@ -96,7 +97,7 @@ function addDemoOverlays(projectId: string): void {
           {
             id: 'ov-text',
             kind: 'text',
-            text: 'Bang Story\nby Bang Tutorial',
+            text: 'ReelStar\nshort drama ai',
             anchor: 5,
             x: 0.5,
             y: 0.42,
@@ -691,17 +692,56 @@ async function checkPhase4(projectId: string): Promise<boolean> {
   const testClip = after.clips[0]
   const speakerId = testClip.characterIds[0] ?? bundle.characters[0]?.id
   saveSnapshot({ ...bundle, episodeId: ep.id, project: { ...bundle.project, dialogAudio: 'video' } })
-  patchClip(testClip.id, { speakerId, narration: 'Satu dua tiga empat' })
+  patchClip(testClip.id, { speakerId, narration: 'Satu dua tiga empat', durationMs: 1000 })
 
-  const extractedAsset = await extractVideoDialogueAudio(project.id, testClip.id, tmpVideo)
+  // A generated dialogue video lives in the project folder like any other asset: 3 s, with sound.
+  const addVideo = (withSound: boolean): Asset => {
+    const rel = `videos/uji-dialog-${randomUUID()}.mp4`
+    const abs = assetAbsPath(project.id, rel)
+    mkdirSync(dirname(abs), { recursive: true })
+    const input = withSound ? ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=3'] : []
+    execFileSync(ff, ['-y', '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25:duration=3', ...input, '-c:v', 'mpeg4', ...(withSound ? ['-c:a', 'aac'] : ['-an']), '-t', '3', abs], { windowsHide: true })
+    return insertAsset({ projectId: project.id, clipId: testClip.id, kind: 'video', localPath: rel, durationMs: 3000 })
+  }
+  const video = addVideo(true)
+  patchClip(testClip.id, { videoAssetId: video.id })
+
+  const extractedAsset = await extractVideoDialogueAudio(project.id, testClip.id, video)
   if (!extractedAsset) throw new Error('extractVideoDialogueAudio gagal menghasilkan aset audio')
   if (extractedAsset.kind !== 'audio' || extractedAsset.provider !== 'video' || extractedAsset.meta.source !== 'video') {
     throw new Error(`Aset hasil ekstraksi tidak valid: kind=${extractedAsset.kind}, provider=${extractedAsset.provider}`)
   }
+  if (extractedAsset.meta.videoAssetId !== video.id) throw new Error('Suara hasil ekstraksi harus mencatat video asalnya')
+  // The voice is the final audio of the clip: it must keep full quality, not Whisper's 16 kHz mono.
+  const info = spawnSync(ff, ['-hide_banner', '-i', assetAbsPath(project.id, extractedAsset.localPath)], { encoding: 'utf8', windowsHide: true }).stderr
+  if (!/48000 Hz, (stereo|2 channels)/.test(info)) throw new Error(`Suara dialog harus 48 kHz stereo: ${info.split('\n').find((l) => l.includes('Audio:'))}`)
 
   const patchedClip = getClip(testClip.id)
-  if (patchedClip.audioAssetId !== extractedAsset.id) {
-    throw new Error('Clip audioAssetId harus mengarah ke aset audio yang diekstrak')
+  if (patchedClip.audioAssetId !== extractedAsset.id) throw new Error('Clip audioAssetId harus mengarah ke aset audio yang diekstrak')
+  if (patchedClip.durationMs !== 3000) throw new Error(`Klip dialog harus ikut panjang video (3000 ms), didapat ${patchedClip.durationMs}`)
+
+  // Picking another video from history swaps the voice only when that video has its own extracted voice.
+  const silent = addVideo(false)
+  const none = await extractVideoDialogueAudio(project.id, testClip.id, silent)
+  if (none) throw new Error('Video tanpa suara tidak boleh menghasilkan aset audio')
+  const silentMeta = getBundle(projectId, ep.id).assets.find((a) => a.id === silent.id)?.meta
+  if (typeof silentMeta?.dialogAudioError !== 'string') throw new Error('Video tanpa suara harus dicatat alasannya di aset video')
+  await setActiveAsset(testClip.id, silent.id)
+  if (getClip(testClip.id).audioAssetId !== extractedAsset.id) throw new Error('Video tanpa suara pasangan tidak boleh mengganti suara klip')
+  patchClip(testClip.id, { audioAssetId: null })
+  await setActiveAsset(testClip.id, video.id)
+  if (getClip(testClip.id).audioAssetId !== extractedAsset.id) throw new Error('Memilih video lama harus mengembalikan suara pasangannya')
+
+  // The video stays current after the clip took the video's length (the hash uses the requested length).
+  const dialogProject = { ...getBundle(projectId, ep.id).project, videoModel: 'veo-3.1-fast-i2v', dialogAudio: 'video' as const }
+  const beforeClip = { ...getClip(testClip.id), durationMs: 2500 }
+  const askCtx = { ...vctx, assets: getBundle(projectId, ep.id).assets }
+  const requested = videoSecondsFor(dialogProject, beforeClip, askCtx).seconds
+  const hash = computeClipVideoBasisHash({ project: dialogProject, clip: beforeClip, characters: askCtx.characters, seconds: requested })
+  const stamped = insertAsset({ projectId: project.id, clipId: testClip.id, kind: 'video', localPath: video.localPath, durationMs: requested * 1000, meta: { basisHash: hash } })
+  const grown = { ...beforeClip, videoAssetId: stamped.id, durationMs: requested * 1000 }
+  if (getClipVideoStatus(grown, dialogProject, { ...askCtx, assets: getBundle(projectId, ep.id).assets }).status !== 'current') {
+    throw new Error('Video dialog tidak boleh jadi basi hanya karena klip mengikuti panjang videonya')
   }
   console.log(`[checkPhase4] Ekstraksi audio video OK: asset ${extractedAsset.id}, durasi: ${extractedAsset.durationMs}ms`)
 

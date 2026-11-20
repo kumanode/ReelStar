@@ -59,7 +59,6 @@ export function Home() {
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('9:16')
   const [styleId, setStyleId] = useState('stickman')
   const [tts, setTts] = useState<TtsProvider>('gemini')
-  const [creating, setCreating] = useState(false)
   const [newModalOpen, setNewModalOpen] = useState(false)
 
   const refresh = (): void => {
@@ -148,15 +147,8 @@ export function Home() {
     return (projects ?? []).filter((p) => f.match(p.status) && (!q || p.title.toLowerCase().includes(q)))
   }, [projects, filter, query])
 
-  const start = async (): Promise<void> => {
-    setCreating(true)
-    try {
-      const b = await window.api.projects.create({ synopsis, durationSec, language, aspectRatio, styleId, ttsProvider: tts })
-      go({ name: 'project', id: b.project.id })
-    } catch (e) {
-      toast('error', errorText(e))
-      setCreating(false)
-    }
+  const start = (): void => {
+    setNewModalOpen(true)
   }
 
   const remove = async (p: ProjectSummary): Promise<void> => {
@@ -280,7 +272,7 @@ export function Home() {
               <StyleMenu value={styleId} onChange={setStyleId} />
               <Select variant="pill" label="Suara narator" value={tts} onChange={setTts} options={ttsOptions} menuWidth={280} />
               <div className="flex-1" />
-              <Button variant="primary" size="lg" loading={creating} onClick={() => void start()}>
+              <Button variant="primary" size="lg" onClick={start}>
                 Mulai
                 <ArrowRight className="size-[18px]" />
               </Button>
@@ -405,6 +397,10 @@ export function Home() {
         open={newModalOpen}
         onClose={() => setNewModalOpen(false)}
         onCreated={(id) => go({ name: 'project', id })}
+        initialSynopsis={synopsis}
+        initialDurationSec={durationSec}
+        initialAspectRatio={aspectRatio}
+        initialStyleId={styleId}
       />
     </div>
   )
@@ -413,24 +409,46 @@ export function Home() {
 function NewSerialModal({
   open,
   onClose,
-  onCreated
+  onCreated,
+  initialSynopsis = '',
+  initialDurationSec = 60,
+  initialAspectRatio = '9:16',
+  initialStyleId = 'stickman'
 }: {
   open: boolean
   onClose: () => void
   onCreated: (projectId: string) => void
+  initialSynopsis?: string
+  initialDurationSec?: number
+  initialAspectRatio?: AspectRatio
+  initialStyleId?: string
 }) {
   const [title, setTitle] = useState('')
-  const [aspectRatio, setAspectRatio] = useState<AspectRatio>('9:16')
-  const [styleId, setStyleId] = useState('stickman')
+  const [synopsis, setSynopsis] = useState(initialSynopsis)
+  const [durationSec, setDurationSec] = useState(initialDurationSec)
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>(initialAspectRatio)
+  const [styleId, setStyleId] = useState(initialStyleId)
   const [dialogAudio, setDialogAudio] = useState<DialogAudio>('video')
   const [creating, setCreating] = useState(false)
   const { toast } = useApp()
+
+  useEffect(() => {
+    if (open) {
+      setSynopsis(initialSynopsis)
+      setDurationSec(initialDurationSec)
+      setAspectRatio(initialAspectRatio)
+      setStyleId(initialStyleId)
+      setTitle('')
+    }
+  }, [open, initialSynopsis, initialDurationSec, initialAspectRatio, initialStyleId])
 
   const handleCreate = async () => {
     setCreating(true)
     try {
       const bundle = await window.api.projects.create({
-        title: title.trim() || 'Serial Baru',
+        title: title.trim() || synopsis.slice(0, 30).trim() || 'Serial Baru',
+        synopsis: synopsis.trim(),
+        durationSec,
         aspectRatio,
         styleId,
         dialogAudio
@@ -449,11 +467,11 @@ function NewSerialModal({
       open={open}
       onClose={onClose}
       title="Buat Serial Baru"
-      subtitle="Atur judul, rasio aspek, gaya visual, dan sumber dialog untuk serial drama kamu."
+      subtitle="Atur judul, naskah sumber, rasio aspek, gaya visual, dan sumber dialog untuk serial drama kamu."
       width={680}
     >
       <div className="flex flex-col gap-4 text-sm text-ink">
-        <Field label="Judul Serial">
+        <Field label="Judul Serial" hint="Opsional, akan otomatis dinamai dari sinopsis jika dikosongkan.">
           <input
             autoFocus
             value={title}
@@ -463,33 +481,59 @@ function NewSerialModal({
           />
         </Field>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field label="Ide Cerita atau Sinopsis" hint="AI akan menggunakan ide ini untuk merencanakan alur dan adegan serial kamu.">
+          <textarea
+            rows={3}
+            value={synopsis}
+            onChange={(e) => setSynopsis(e.target.value)}
+            placeholder="Contoh: Gajah Mada bersumpah tidak akan menikmati palapa sebelum Nusantara bersatu..."
+            className={cx(inputCls, 'resize-none py-2.5 leading-relaxed')}
+          />
+        </Field>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Field label="Rasio Aspek">
             <Segmented<AspectRatio>
               value={aspectRatio}
               onChange={setAspectRatio}
               options={[
-                { id: '9:16', label: '9:16 · Vertikal (Shorts)' },
-                { id: '16:9', label: '16:9 · Horizontal' }
+                { id: '9:16', label: '9:16 (Shorts)' },
+                { id: '16:9', label: '16:9' }
+              ]}
+              size="md"
+            />
+          </Field>
+
+          <Field label="Target Durasi">
+            <Select
+              label="Target durasi"
+              value={durationSec}
+              onChange={(v) => setDurationSec(Number(v))}
+              options={[
+                { value: 45, label: '45 detik' },
+                { value: 60, label: '60 detik' },
+                { value: 75, label: '75 detik' },
+                { value: 90, label: '90 detik' },
+                { value: 120, label: '120 detik' }
               ]}
               size="md"
             />
           </Field>
 
           <Field
-            label="Sumber Suara Dialog"
+            label="Suara Dialog"
             hint={
               dialogAudio === 'video'
-                ? 'Suara dan gerak bibir dihasilkan langsung dari video AI (Veo).'
-                : 'Dialog diucapkan lewat suara narator atau TTS.'
+                ? 'Veo AI video'
+                : 'TTS narator'
             }
           >
             <Segmented<DialogAudio>
               value={dialogAudio}
               onChange={setDialogAudio}
               options={[
-                { id: 'video', label: 'Dari video (Veo)' },
-                { id: 'tts', label: 'Suara TTS' }
+                { id: 'video', label: 'Dari video' },
+                { id: 'tts', label: 'TTS' }
               ]}
               size="md"
             />
@@ -497,9 +541,7 @@ function NewSerialModal({
         </div>
 
         <Field label="Gaya Visual Serial" hint="Gaya seni ilustrasi yang akan digunakan pada semua lembar karakter dan adegan.">
-          <div className="scroll-thin max-h-60 overflow-y-auto pr-1">
-            <StylePicker value={styleId} onChange={setStyleId} />
-          </div>
+          <StylePicker value={styleId} onChange={setStyleId} />
         </Field>
 
         <div className="flex items-center justify-end gap-2.5 border-t border-line pt-4">

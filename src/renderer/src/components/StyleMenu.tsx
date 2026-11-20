@@ -107,7 +107,7 @@ export function StyleMenu({ value, onChange }: { value: string; onChange: (id: s
                   )}
                 >
                   <StyleSwatch styleId={s.id} className="size-full transition-transform duration-500 ease-out group-hover:scale-[1.07]" iconSize={24} />
-                  <span className="absolute left-1.5 top-1.5 rounded-full bg-ink/75 px-1.5 py-px text-[10px] font-semibold text-paper">
+                  <span className="absolute left-1.5 top-1.5 rounded-full bg-ink/75 px-1.5 py-px text-[11px] font-semibold text-paper">
                     {CATEGORY_LABEL[s.category]}
                   </span>
                   {on && (

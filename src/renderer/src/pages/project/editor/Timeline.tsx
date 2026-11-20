@@ -37,7 +37,7 @@ import { CustomSfxModal } from './CustomSfxModal'
 import { SmartSfxModal } from './SmartSfxModal'
 import { Waveform } from './Waveform'
 
-const LABEL_W = 140
+const LABEL_W = 164
 /** Space between the track labels and the start of the time axis. */
 const PAD = 8
 const ORIGIN = LABEL_W + PAD
@@ -783,20 +783,20 @@ export function Timeline({
                     {it.audio && (
                       <span
                         className={cx(
-                          'rounded-[4px] px-1 font-mono text-[9px] font-bold shadow-sm',
+                          'rounded-[4px] px-1 text-[11px] font-semibold shadow-sm',
                           it.audio.meta.words?.length && !it.audio.meta.estimatedTimings
                             ? 'border border-ok-soft bg-ok-soft text-ok-ink'
                             : 'border border-sun-soft bg-sun-soft text-sun-ink'
                         )}
                         title={it.audio.meta.words?.length && !it.audio.meta.estimatedTimings ? 'Caption sinkron (Whisper)' : 'Caption estimasi'}
                       >
-                        {it.audio.meta.words?.length && !it.audio.meta.estimatedTimings ? 'SYNC' : 'EST'}
+                        {it.audio.meta.words?.length && !it.audio.meta.estimatedTimings ? 'Sinkron' : 'Estimasi'}
                       </span>
                     )}
                   </span>
                   <div className="pointer-events-none flex w-full items-end justify-between gap-1">
                     <span className="max-w-[70%] truncate rounded bg-surface/85 px-1 text-xs font-semibold">{it.clip.title}</span>
-                    <span className="rounded bg-ink/75 px-1 font-mono text-[10px] text-paper">{secs(it.clip.durationMs)}</span>
+                    <span className="rounded bg-ink/75 px-1 text-[11px] tabular-nums text-paper">{secs(it.clip.durationMs)}</span>
                   </div>
                   {held > 0 && (
                     <span
@@ -981,7 +981,7 @@ export function Timeline({
           </Row>
 
           <Row
-            label="Efek Suara"
+            label="Efek"
             icon={<AudioLines className="size-4" />}
             height={30}
             trackId="sfx"
@@ -1029,7 +1029,7 @@ export function Timeline({
                       className="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-xs font-semibold text-accent-dark hover:bg-accent/10"
                     >
                       <Sparkles className="size-3.5 text-accent" />
-                      <span>AI Auto-SFX Cerita (ElevenLabs)</span>
+                      <span>Efek suara otomatis dari cerita (ElevenLabs)</span>
                     </button>
                     <button
                       type="button"
@@ -1037,7 +1037,7 @@ export function Timeline({
                         setShowSfxMenu(false)
                         setShowCustomSfxModal(true)
                       }}
-                      title="Generate efek suara kustom dari deskripsi teks (ElevenLabs)"
+                      title="Buat efek suara kustom dari deskripsi teks (ElevenLabs)"
                       className="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-xs font-semibold text-accent-dark hover:bg-accent/10"
                     >
                       <AudioLines className="size-3.5 text-accent" />
@@ -1051,7 +1051,7 @@ export function Timeline({
                       className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs font-medium text-ink hover:bg-sand-2"
                     >
                       <span>SFX Otomatis (Gratis)</span>
-                      <span className="text-[10px] text-muted">Lokal</span>
+                      <span className="text-[11px] text-muted">Lokal</span>
                     </button>
                     <div className="my-1 border-t border-line" />
                     <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted">
@@ -1065,7 +1065,7 @@ export function Timeline({
                         className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs text-ink hover:bg-sand-2"
                       >
                         <span className="font-medium">{s.name}</span>
-                        <span className="text-[10px] text-muted">{(s.durationMs / 1000).toFixed(1)}s</span>
+                        <span className="text-[11px] tabular-nums text-muted">{(s.durationMs / 1000).toFixed(1)}s</span>
                       </button>
                     ))}
                     <div className="my-1 border-t border-line" />

@@ -15,13 +15,17 @@ import { warmUpEncryption } from './secrets'
 function useDataFolder(): void {
   if (!app.isPackaged && process.env.STUDIO_USER_DATA) return app.setPath('userData', process.env.STUDIO_USER_DATA)
   const appData = app.getPath('appData')
-  const current = join(appData, 'Bang Story')
-  const legacy = join(appData, 'Studio Cerita')
-  if (!existsSync(current) && existsSync(join(legacy, 'studio.db'))) {
-    try {
-      renameSync(legacy, current)
-    } catch {
-      return app.setPath('userData', legacy)
+  const current = join(appData, 'ReelStar')
+  const legacy1 = join(appData, 'Bang Story')
+  const legacy2 = join(appData, 'Studio Cerita')
+  if (!existsSync(current)) {
+    const prev = existsSync(join(legacy1, 'studio.db')) ? legacy1 : existsSync(join(legacy2, 'studio.db')) ? legacy2 : null
+    if (prev) {
+      try {
+        renameSync(prev, current)
+      } catch {
+        return app.setPath('userData', prev)
+      }
     }
   }
   app.setPath('userData', current)
@@ -47,6 +51,10 @@ function identifyToYouTube(): void {
 }
 
 function createWindow(): void {
+  const iconPath = process.platform === 'win32'
+    ? join(__dirname, '../../build/icon.ico')
+    : join(__dirname, '../../build/icon.png')
+
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -55,7 +63,8 @@ function createWindow(): void {
     show: false,
     backgroundColor: '#FAF7F2',
     autoHideMenuBar: true,
-    title: 'Bang Story',
+    title: 'ReelStar',
+    icon: existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,

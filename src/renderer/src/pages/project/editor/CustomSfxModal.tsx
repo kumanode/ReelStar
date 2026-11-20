@@ -178,7 +178,7 @@ export function CustomSfxModal({ open, onClose, projectId, onAdd }: CustomSfxMod
             icon={<Sparkles className="size-4" />}
             onClick={() => void generate()}
           >
-            {asset ? 'Generate Ulang' : 'Buat & Dengarkan'}
+            {asset ? 'Buat ulang' : 'Buat & dengarkan'}
           </Button>
 
           <div className="flex items-center gap-2">

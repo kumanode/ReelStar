@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FileText, Clapperboard, SlidersHorizontal } from 'lucide-react'
-import { Segmented, Spinner } from '../../components/ui'
+import { Spinner } from '../../components/ui'
 import { errorText } from '../../lib/format'
 import { useApp } from '../../store/app'
 import { useProject } from '../../store/project'
@@ -14,7 +13,7 @@ import { EditorStep } from './EditorStep'
 import { ExportDialog } from './ExportDialog'
 
 export function ProjectPage({ id }: { id: string }) {
-  const { load, unload, loaded, project, episode, activeView, activeTab, setActiveTab } = useProject()
+  const { load, unload, loaded, project, activeView, activeTab } = useProject()
   const { toast, go } = useApp()
   const [exportOpen, setExportOpen] = useState(false)
 
@@ -61,54 +60,10 @@ export function ProjectPage({ id }: { id: string }) {
           {activeView === 'hub' && <EpisodeHub />}
           {activeView === 'lorebook' && <LorebookPage />}
           {activeView === 'episode' && (
-            <div className="flex h-full flex-col overflow-hidden">
-              {/* Studio Episode Subheader Tabs */}
-              <div className="flex h-11 shrink-0 items-center justify-between border-b border-line bg-surface px-4">
-                <div className="flex items-center gap-2">
-                  <span className="font-display text-xs font-bold text-ink">
-                    Ep {episode?.episodeNum ?? '1'}: {episode?.title ?? 'Episode'}
-                  </span>
-                </div>
-
-                <Segmented
-                  value={activeTab}
-                  onChange={setActiveTab}
-                  options={[
-                    {
-                      id: 'plan',
-                      label: (
-                        <span className="flex items-center gap-1.5 text-xs">
-                          <FileText className="size-3.5" /> Rencana & Tinjau
-                        </span>
-                      )
-                    },
-                    {
-                      id: 'storyboard',
-                      label: (
-                        <span className="flex items-center gap-1.5 text-xs">
-                          <Clapperboard className="size-3.5" /> Storyboard
-                        </span>
-                      )
-                    },
-                    {
-                      id: 'editor',
-                      label: (
-                        <span className="flex items-center gap-1.5 text-xs">
-                          <SlidersHorizontal className="size-3.5" /> Editor
-                        </span>
-                      )
-                    }
-                  ]}
-                  size="sm"
-                />
-              </div>
-
-              {/* Workspace Content */}
-              <div className="min-h-0 flex-1 overflow-hidden">
-                {activeTab === 'plan' && <PlanStep />}
-                {activeTab === 'storyboard' && <StoryboardStep />}
-                {activeTab === 'editor' && <EditorStep />}
-              </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {activeTab === 'plan' && <PlanStep />}
+              {activeTab === 'storyboard' && <StoryboardStep />}
+              {activeTab === 'editor' && <EditorStep />}
             </div>
           )}
         </main>

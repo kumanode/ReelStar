@@ -275,8 +275,10 @@ export function EditorStep() {
 
   return (
     <div className={`grid h-full grid-cols-[minmax(0,1fr)]${draggingTimeline ? ' select-none' : ''}`} style={{ gridTemplateRows: `minmax(0,1fr) auto ${timelineHeight}px` }}>
-      <div className="grid min-h-0 grid-cols-[84px_minmax(0,1fr)_360px] grid-rows-[minmax(0,1fr)]">
-        <nav aria-label="Panel editor" className="flex min-h-0 flex-col items-center gap-1 overflow-y-auto [&>*]:shrink-0 border-r border-line bg-surface py-3">
+      <div className="grid min-h-0 grid-cols-[72px_minmax(0,1fr)_340px] grid-rows-[minmax(0,1fr)]">
+        {/* Tabs share the rail's height (36–48 px each) so all of them fit at 1180×720 without a scrollbar;
+            scrolling stays only as a fallback when the timeline is dragged very tall. */}
+        <nav aria-label="Panel editor" className="scroll-thin flex min-h-0 flex-col items-center gap-0.5 overflow-y-auto border-r border-line bg-surface py-1.5">
           {INSPECTOR_TABS.map((t) => {
             const Icon = t.icon
             const on = tab === t.id
@@ -287,11 +289,11 @@ export function EditorStep() {
                 aria-pressed={on}
                 onClick={() => setTab(t.id)}
                 className={cx(
-                  'flex h-[62px] w-[68px] flex-col items-center justify-center gap-1 rounded-xl text-xs',
+                  'flex max-h-12 min-h-9 w-14 flex-1 basis-0 flex-col items-center justify-center gap-0.5 rounded-lg text-[11px] leading-tight',
                   on ? 'border-[1.5px] border-ink bg-sun-soft font-semibold text-ink' : 'font-medium text-ink-2 hover:bg-sand'
                 )}
               >
-                <Icon className="size-5" />
+                <Icon className="size-4" />
                 {t.label}
               </button>
             )

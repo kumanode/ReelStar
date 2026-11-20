@@ -74,10 +74,11 @@ export async function probeHasAudio(absPath: string): Promise<boolean> {
 }
 
 /**
- * Extracts the audio track from a video into a 16kHz mono WAV file suitable for Whisper and editor.
+ * Extracts the audio track of a video into a 48 kHz stereo WAV. The file becomes the clip's voice in preview and
+ * export, so it keeps full quality; Whisper makes its own 16 kHz copy when it times the words.
  */
 export function extractAudio(videoAbsPath: string, outWavAbsPath: string, signal?: AbortSignal): Promise<void> {
-  const args = ['-hide_banner', '-y', '-i', videoAbsPath, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', outWavAbsPath]
+  const args = ['-hide_banner', '-y', '-i', videoAbsPath, '-vn', '-acodec', 'pcm_s16le', '-ar', '48000', '-ac', '2', outWavAbsPath]
   return new Promise((resolve, reject) => {
     const p = execFile(binPath(ffmpegStatic!), args, { windowsHide: true }, (err, _stdout, stderr) => {
       if (err) reject(new Error(`Gagal mengekstrak audio: ${String(stderr).trim().split('\n').pop() ?? err.message}`))

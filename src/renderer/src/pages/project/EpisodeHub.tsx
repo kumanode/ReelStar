@@ -14,7 +14,7 @@ import {
   Loader2
 } from 'lucide-react'
 import type { Episode, EpisodeStatus, SourceKind } from '@shared/types'
-import { Badge, Button, IconButton, Menu, Segmented, confirmDialog } from '../../components/ui'
+import { Badge, Button, IconButton, Menu, Segmented, confirmDialog, cx } from '../../components/ui'
 import { Select } from '../../components/Select'
 import { AutoTextarea } from '../../components/AutoTextarea'
 import { useApp } from '../../store/app'
@@ -361,7 +361,7 @@ export function EpisodeHub() {
               )}
             </div>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className={cx('grid gap-4', episodes.length === 1 ? 'grid-cols-1 max-w-3xl' : 'grid-cols-1 md:grid-cols-2')}>
               {episodes.map((ep, idx) => {
                 const badgeInfo = STATUS_BADGE[ep.status] || STATUS_BADGE.draft
                 return (
@@ -444,7 +444,7 @@ export function EpisodeHub() {
                     <div className="flex flex-col gap-2.5 rounded-xl border border-line-2/60 bg-paper p-3 text-xs">
                       {/* Hook */}
                       <div className="flex items-center gap-2">
-                        <span className="shrink-0 rounded bg-sand px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-muted border border-line-2/60">
+                        <span className="w-24 shrink-0 rounded bg-sand px-1.5 py-0.5 text-center text-[11px] font-bold uppercase tracking-wider text-muted border border-line-2/60">
                           Hook
                         </span>
                         <input
@@ -457,7 +457,7 @@ export function EpisodeHub() {
 
                       {/* Cliffhanger */}
                       <div className="flex items-center gap-2">
-                        <span className="shrink-0 rounded bg-sand px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-muted border border-line-2/60">
+                        <span className="w-24 shrink-0 rounded bg-sand px-1.5 py-0.5 text-center text-[11px] font-bold uppercase tracking-wider text-muted border border-line-2/60">
                           Cliffhanger
                         </span>
                         <input
@@ -484,7 +484,7 @@ export function EpisodeHub() {
 
                     {/* Footer: duration and Open button */}
                     <div className="flex items-center justify-between border-t border-line pt-2.5 text-xs">
-                      <div className="flex items-center gap-1.5 text-muted font-mono">
+                      <div className="flex items-center gap-1.5 text-xs text-muted tabular-nums">
                         <Clock className="size-3" />
                         <span>{ep.durationSec || project.durationSec || 60} dtk</span>
                       </div>

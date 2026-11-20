@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef } from 'react'
-import { ArrowLeft, CheckCircle2, AlertCircle, Loader2, Pencil, MoreVertical, Copy, Download, Trash2, Coins } from 'lucide-react'
-import { Button, IconButton, Menu, confirmDialog, cx } from '../../components/ui'
+import { ArrowLeft, CheckCircle2, AlertCircle, Loader2, Pencil, MoreVertical, Copy, Download, Trash2, Coins, FileText, Clapperboard, SlidersHorizontal } from 'lucide-react'
+import { Button, IconButton, Menu, Segmented, confirmDialog, cx } from '../../components/ui'
 import { Select } from '../../components/Select'
 import { Popover } from '../../components/Popover'
 import { ThemeToggle } from '../../components/ThemeToggle'
@@ -38,15 +38,17 @@ function SaveStatus() {
     )
   }
   return (
-    <span className="flex items-center gap-1.5 text-xs text-ok-ink">
-      <CheckCircle2 className="size-3.5" />
-      Tersimpan · {savedAt ? relativeTime(savedAt) : 'baru saja'}
+    // The time hides on narrow windows so the status stays on one line next to the step tabs.
+    <span className="flex items-center gap-1.5 whitespace-nowrap text-xs text-ok-ink" title={savedAt ? `Tersimpan ${relativeTime(savedAt)}` : undefined}>
+      <CheckCircle2 className="size-3.5 shrink-0" />
+      <span className="sr-only min-[1280px]:not-sr-only min-[1280px]:inline">Tersimpan</span>
+      <span className="hidden min-[1400px]:inline">· {savedAt ? relativeTime(savedAt) : 'baru saja'}</span>
     </span>
   )
 }
 
 export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
-  const { project, episode, episodes, switchEpisode, updateProject, flush, jobs } = useProject()
+  const { project, episode, episodes, switchEpisode, updateProject, flush, jobs, activeView, activeTab, setActiveTab } = useProject()
   const { go, toast } = useApp()
   const [editingTitle, setEditingTitle] = useState(false)
   const [creditOpen, setCreditOpen] = useState(false)
@@ -55,7 +57,8 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
   const episodeOptions = useMemo(() => {
     return episodes.map((ep) => ({
       value: ep.id,
-      label: `Ep ${ep.episodeNum}: ${ep.title}`
+      // Titles like "Episode 1: Awal Mula" would read "Ep 1: Episode 1: …", so the repeated number is dropped.
+      label: `Ep ${ep.episodeNum} · ${ep.title.replace(/^\s*(episode|ep)\.?\s*\d+\s*[:\-–—·]?\s*/i, '') || ep.title}`
     }))
   }, [episodes])
 
@@ -123,7 +126,7 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
           <ArrowLeft className="size-[18px]" />
         </IconButton>
 
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           {editingTitle ? (
             <input
               autoFocus
@@ -140,10 +143,10 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
               className="h-8 w-56 rounded-lg border border-line-2 bg-paper px-2.5 font-display text-base font-bold text-ink outline-none transition-colors focus:border-ink"
             />
           ) : (
-            <div className="flex items-center gap-1.5">
+            <div className="flex min-w-0 items-center gap-1.5">
               <span
                 onClick={() => setEditingTitle(true)}
-                className="cursor-pointer truncate font-display text-base font-bold text-ink hover:underline"
+                className="block min-w-0 max-w-[220px] cursor-pointer truncate font-display text-base font-bold text-ink hover:underline"
                 title="Klik untuk mengubah judul serial"
               >
                 {project.title}
@@ -159,14 +162,14 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
             </div>
           )}
 
-          <span className="rounded-md border border-line-2 bg-sand px-2 py-0.5 font-mono text-[11px] font-bold text-ink-2">
+          <span className="shrink-0 rounded-md border border-line-2 bg-sand px-2 py-0.5 font-mono text-[11px] font-bold text-ink-2">
             {project.aspectRatio}
           </span>
         </div>
 
         {/* Episode selector */}
         {episodes.length > 0 && episode && (
-          <div className="min-w-[180px] max-w-[260px]">
+          <div className="w-[180px] shrink-0">
             <Select
               label="Pilih episode"
               value={episode.id}
@@ -178,8 +181,41 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
         )}
       </div>
 
-      {/* Middle: Save status */}
-      <div className="flex items-center justify-center">
+      {/* Middle: Step Tabs (when in episode view) & Save status */}
+      <div className="flex items-center justify-center gap-3">
+        {activeView === 'episode' && episode && (
+          <Segmented
+            value={activeTab}
+            onChange={setActiveTab}
+            options={[
+              {
+                id: 'plan',
+                label: (
+                  <span className="flex items-center gap-1.5 text-xs">
+                    <FileText className="size-3.5" /> Rencana
+                  </span>
+                )
+              },
+              {
+                id: 'storyboard',
+                label: (
+                  <span className="flex items-center gap-1.5 text-xs">
+                    <Clapperboard className="size-3.5" /> Storyboard
+                  </span>
+                )
+              },
+              {
+                id: 'editor',
+                label: (
+                  <span className="flex items-center gap-1.5 text-xs">
+                    <SlidersHorizontal className="size-3.5" /> Editor
+                  </span>
+                )
+              }
+            ]}
+            size="sm"
+          />
+        )}
         <SaveStatus />
       </div>
 
@@ -194,9 +230,9 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
             title={`Total kredit terpakai di Ep ${episode?.episodeNum ?? 1}: ${currentEpisodeCredits}. Klik untuk rincian semua episode.`}
           >
             <span className="text-accent-dark">◆</span>
-            <span>{currentEpisodeCredits.toLocaleString('id-ID')} kredit</span>
+            <span className="tabular-nums">{currentEpisodeCredits.toLocaleString('id-ID')} kredit</span>
             {episode && (
-              <span className="font-mono text-[10px] text-muted">(Ep {episode.episodeNum})</span>
+              <span className="hidden text-xs text-muted tabular-nums min-[1400px]:inline">(Ep {episode.episodeNum})</span>
             )}
           </button>
           <Popover

@@ -190,10 +190,10 @@ export function SmartSfxModal({ open, onClose, projectId, items, onBatchAdd }: S
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-bold text-ink">{cue.name}</span>
-                      <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] font-semibold text-muted border border-line">
+                      <span className="rounded bg-surface px-1.5 py-0.5 text-[11px] tabular-nums font-semibold text-muted border border-line">
                         Adegan {clipIndex || '?'} (+{cue.timeOffsetSec.toFixed(1)}s)
                       </span>
-                      <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] font-medium text-muted border border-line">
+                      <span className="rounded bg-surface px-1.5 py-0.5 text-[11px] tabular-nums font-medium text-muted border border-line">
                         {cue.durationSec.toFixed(1)}s
                       </span>
                     </div>
@@ -234,7 +234,7 @@ export function SmartSfxModal({ open, onClose, projectId, items, onBatchAdd }: S
                 icon={<Sparkles className="size-4" />}
                 onClick={() => void handleGenerate()}
               >
-                Generate Terpilih ({selected.size})
+                Buat yang dipilih ({selected.size})
               </Button>
             </div>
           </div>
