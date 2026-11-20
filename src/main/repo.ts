@@ -428,7 +428,7 @@ export function createProject(input: NewProjectInput): Project {
       input.durationSec ?? 60,
       input.language ?? s.defaultLanguage,
       aspect,
-      input.styleId ?? 'stickman',
+      input.styleId ?? 'premium_drama',
       tts,
       tts === 'gemini' ? 'Charon' : '',
       imgModel,

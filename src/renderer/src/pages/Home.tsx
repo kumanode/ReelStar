@@ -57,7 +57,7 @@ export function Home() {
   const [longImageCredit, setLongImageCredit] = useState<number | null>(null)
   const [language, setLanguage] = useState('id')
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('9:16')
-  const [styleId, setStyleId] = useState('stickman')
+  const [styleId, setStyleId] = useState('premium_drama')
   const [tts, setTts] = useState<TtsProvider>('gemini')
   const [newModalOpen, setNewModalOpen] = useState(false)
 
@@ -413,7 +413,7 @@ function NewSerialModal({
   initialSynopsis = '',
   initialDurationSec = 60,
   initialAspectRatio = '9:16',
-  initialStyleId = 'stickman'
+  initialStyleId = 'premium_drama'
 }: {
   open: boolean
   onClose: () => void

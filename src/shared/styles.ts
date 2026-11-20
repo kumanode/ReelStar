@@ -1,4 +1,4 @@
-export type StyleCategory = '2d' | '3d' | 'realistis'
+export type StyleCategory = 'liveaction' | 'animation' | 'custom'
 
 export interface VisualStyle {
   id: string
@@ -16,287 +16,467 @@ export interface VisualStyle {
 
 export const STYLE_CATEGORIES: { id: StyleCategory | 'all'; label: string }[] = [
   { id: 'all', label: 'Semua' },
-  { id: '2d', label: '2D' },
-  { id: '3d', label: '3D' },
-  { id: 'realistis', label: 'Realistis' }
+  { id: 'liveaction', label: 'Live Action' },
+  { id: 'animation', label: 'Animasi' },
+  { id: 'custom', label: 'Kustom' }
 ]
 
 /** Shared by every style; thumbnails with a text hook remove it again. */
 export const NO_TEXT = 'No text, no letters, no captions, no watermark, no logo.'
 
 export const VISUAL_STYLES: VisualStyle[] = [
+  // ==========================================
+  // LIVE ACTION (16 styles)
+  // ==========================================
   {
-    id: 'stickman',
-    name: 'Stickman berwarna',
-    category: '2d',
-    niche: 'Sejarah, kisah nyata',
-    swatch: '#F2B266',
-    ink: '#1F1D1A',
+    id: 'premium_drama',
+    name: 'Premium Drama',
+    category: 'liveaction',
+    niche: 'TV drama · Master framing',
+    swatch: '#3D342D',
+    ink: '#F5EBE6',
     prompt:
-      '2D flat vector illustration frame for a YouTube storytelling video. Colorful, detailed flat background (never plain white). ALL characters are simple STICKMAN figures: thin black line bodies, arms and legs, plain round white heads with minimal cartoon faces (dot eyes, small eyebrows, simple mouth), no realistic anatomy. Each stickman wears only small costume pieces that match their role (hat, crown, sash, headcloth, props) while the stick body stays visible. Clean bold outlines, flat colors with light soft shading, every character in the same consistent stickman style, cinematic composition with depth. ' +
+      'High-end prestige TV drama cinematography, master framing, Arri Alexa LF cinema camera, naturalistic motivated interior lighting, shallow depth of field, sophisticated wardrobe, subtle elegant color grading, crisp 4K texture, television broadcast quality. ' +
       NO_TEXT,
-    characterHint: 'a stickman figure with a round white head and thin black line limbs, wearing role-specific costume pieces'
+    characterHint: 'a character in high-end prestige television drama attire, naturalistic cinematic lighting and elegant styling'
   },
   {
-    id: 'oversimplified',
-    name: 'Stickman OverSimplified',
-    category: '2d',
-    niche: 'Sejarah, biografi, perang',
-    swatch: '#EAB308',
-    ink: '#1F1D1A',
+    id: 'cinematic_historical',
+    name: 'Cinematic Historical',
+    category: 'liveaction',
+    niche: 'Pro lighting · TV quality',
+    swatch: '#4A3326',
+    ink: '#EAD7C5',
     prompt:
-      '2D flat vector storytelling illustration frame. Simple stylized stickman characters with round white heads, cute bean-shaped capsule bodies, and thick black noodle limbs. Minimalist cartoon faces with expressive dot eyes and small mouths. Characters wear neat miniature role-specific costume accessories (crowns, hats, uniforms, headcloths) over their capsule bodies. Clean bold outlines, flat colors with light soft shading, detailed historical vector background with depth, no realistic human anatomy. ' +
+      'High-budget historical period drama cinematography, authentic period costumes and ornate imperial set decoration, warm dramatic side lighting, atmospheric candle and lantern glow, soft atmospheric haze, cinematic depth, television broadcast production value. ' +
       NO_TEXT,
-    characterHint: 'a stylized stickman with a round white head, a simple bean-shaped capsule body, thick noodle limbs, wearing role-specific miniature attire'
+    characterHint: 'a historical period drama character in elaborate traditional royal or noble attire, cinematic side lighting'
   },
   {
-    id: 'stickman_comic',
-    name: 'Stickman komedi ekspresif',
-    category: '2d',
-    niche: 'Komedi, santai, cerita viral',
-    swatch: '#EF4444',
-    ink: '#FFFFFF',
+    id: 'zhang_yimou',
+    name: 'Zhang Yimou',
+    category: 'liveaction',
+    niche: 'Bold colors · Ritual',
+    swatch: '#8B1E1E',
+    ink: '#FBE8A6',
     prompt:
-      'Humorous 2D YouTube storytelling illustration. Stylized white stickman characters with thick bold black contour outlines and a clean white sticker halo border. Exaggerated hilarious facial expressions (wide comical cartoon eyes, open screaming or laughing mouths, dramatic eyebrows). Simple expressive stick limbs in dynamic poses. Vibrant colorful cartoon background with subtle comic action lines, bright energetic mood. ' +
+      'Zhang Yimou cinematic aesthetic, rich saturated primary colors, lavish crimson and gold silks, grand architectural symmetry, ritualistic composition, flowing fabrics, intense atmospheric mood, poetic dramatic lighting, monumental scale. ' +
       NO_TEXT,
-    characterHint: 'an expressive white cartoon stickman with thick black outlines, a subtle white sticker halo, and an exaggerated funny facial expression'
+    characterHint: 'a character draped in lavish ceremonial silk with striking bold monochromatic accents in the style of Zhang Yimou'
   },
   {
-    id: 'stickman_modern',
-    name: 'Stickman modern explainer',
-    category: '2d',
-    niche: 'Sains, teknologi, edukasi',
-    swatch: '#6366F1',
-    ink: '#FFFFFF',
+    id: 'ancient_xianxia',
+    name: 'Ancient Xianxia',
+    category: 'liveaction',
+    niche: 'Linjiangxian · Soft filter',
+    swatch: '#3A506B',
+    ink: '#E0FBFC',
     prompt:
-      'Sleek modern 2D flat vector explainer frame. Elegant minimalist geometric stickman silhouette characters with clean proportions and glowing neon accent edge lighting. Harmonious deep color palette, volumetric ambient glow, cinematic atmospheric lighting, stylish vector infographic background with soft depth of field. ' +
+      'Ethereal ancient Chinese Xianxia fantasy live-action drama still, flowing white silk robes, misty heavenly peaks and ethereal glowing particles, soft focus romantic bloom filter, celestial atmospheric lighting, serene mythological fantasy tone. ' +
       NO_TEXT,
-    characterHint: 'a sleek minimalist geometric stickman silhouette with subtle glowing accent outlines'
+    characterHint: 'a graceful immortal Xianxia practitioner with pristine flowing robes and ethereal magical glow'
   },
   {
-    id: 'islamic_storybook',
-    name: 'Buku cerita Islami',
-    category: '2d',
-    niche: 'Kisah nabi, sirah, religi',
-    swatch: '#D99B52',
-    ink: '#1F1D1A',
+    id: 'theatrical_film',
+    name: 'Theatrical Film',
+    category: 'liveaction',
+    niche: 'DaVinci grade · Filmic',
+    swatch: '#242B35',
+    ink: '#F0F3F4',
     prompt:
-      'Warm 2D Islamic storybook illustration, soft gouache painting textures on vintage aged parchment paper, warm desert palette of golden sand, terracotta, and gentle lapis lazuli blue. Ancient Middle Eastern oasis setting with date palm trees, clay architecture, and peaceful atmosphere. Holy figures and prophets are respectfully depicted from behind in pure white garments with a soft radiant golden light aura around them, strictly no facial features. Friendly community characters with modest traditional attire, cinematic storybook depth. ' +
+      'Theatrical film still, master DaVinci Resolve color grading, organic 35mm film grain, anamorphic lens flare, rich shadow roll-off, cinematic filmic contrast, dramatic storytelling framing, blockbuster film aesthetic. ' +
       NO_TEXT,
-    characterHint: 'a respectful character in ancient Middle Eastern modest attire, or a holy figure seen from behind in glowing white garments with a soft golden light aura'
+    characterHint: 'a cinematic character in a dramatic film scene, nuanced expression and rich cinematic grading'
   },
   {
-    id: 'whiteboard',
-    name: 'Whiteboard doodle',
-    category: '2d',
-    niche: 'Tutorial, bisnis',
-    swatch: '#FFFFFF',
-    ink: '#1F1D1A',
+    id: 'spartan_epic',
+    name: 'Spartan Epic',
+    category: 'liveaction',
+    niche: 'Gladiator · High contrast',
+    swatch: '#5C2D1E',
+    ink: '#F5D6BA',
     prompt:
-      'Hand-drawn whiteboard doodle, black marker line art on a clean white board, one accent color used sparingly (red or blue), simple sketchy characters, arrows and small icons, like a whiteboard animation explainer. ' +
+      'Gritty Spartan epic film still, Gladiator aesthetic, harsh dramatic contrast, battle-worn leather and bronze armor, sweat and battlefield dust, fiery embers in the smoke, intense muscular dynamism, epic historical warfare atmosphere. ' +
       NO_TEXT,
-    characterHint: 'a simple hand-drawn marker doodle character'
+    characterHint: 'a fierce battle-tested warrior in weathered bronze armor and crimson cloak with grit and scars'
   },
   {
-    id: 'anime',
-    name: 'Anime',
-    category: '2d',
-    niche: 'Drama, motivasi, fiksi',
-    swatch: '#F5C3CD',
-    ink: '#1F1D1A',
+    id: 'blade_runner',
+    name: 'Blade Runner',
+    category: 'liveaction',
+    niche: 'Minimalist · Cyber particle',
+    swatch: '#0E3B43',
+    ink: '#48E5C2',
     prompt:
-      'High-quality anime film still, clean cel shading, expressive characters, detailed painted background, cinematic lighting and color. ' +
+      'Blade Runner 2049 aesthetic, neo-noir cyberpunk live action still, minimalist monolithic brutalist architecture, neon billboard reflections in rainy streets, floating volumetric dust and cyber particles, anamorphic lens flares, moody cyan and amber lighting. ' +
       NO_TEXT,
-    characterHint: 'an anime character with clean cel shading'
+    characterHint: 'a futuristic cyber-noir investigator in a heavy trench coat against neon-lit rainy reflections'
   },
   {
-    id: 'pixel',
-    name: 'Pixel art',
-    category: '2d',
-    niche: 'Gaming, nostalgia',
-    swatch: '#8FD694',
-    ink: '#1F1D1A',
-    prompt: 'Detailed 16-bit pixel art scene, crisp pixels, limited retro palette, video game aesthetic, no blur. ' + NO_TEXT,
-    characterHint: 'a 16-bit pixel art character sprite'
+    id: 'game_of_thrones',
+    name: 'Game of Thrones',
+    category: 'liveaction',
+    niche: 'Cold epic · Intrigue',
+    swatch: '#2B2D42',
+    ink: '#EDF2F4',
+    prompt:
+      'Grimdark medieval fantasy live action film still, Game of Thrones aesthetic, heavy fur cloaks and weathered iron plate armor, cold desaturated slate-gray and muted earth tones, stone fortress interior, flickering torchlight, somber political intrigue mood. ' +
+      NO_TEXT,
+    characterHint: 'a rugged noble lord or warrior in heavy layered fur cloak and weathered chainmail, somber gaze'
+  },
+  {
+    id: 'breaking_bad',
+    name: 'Breaking Bad',
+    category: 'liveaction',
+    niche: 'Latin filter · Crime aesthetic',
+    swatch: '#8C5A24',
+    ink: '#FDE68A',
+    prompt:
+      'Crime drama cinematography, iconic New Mexico Latin yellow-orange sun-bleached color grade, harsh desert sun and sharp desert shadows, asphalt highway, gritty realism, high-tension crime thriller atmosphere. ' +
+      NO_TEXT,
+    characterHint: 'an intense grounded character with weathered features and rimmed glasses under harsh desert sunlight'
+  },
+  {
+    id: 'kdrama_idol',
+    name: 'K-Drama Idol',
+    category: 'liveaction',
+    niche: 'Soft light · Romance',
+    swatch: '#D4A373',
+    ink: '#FEFAE0',
+    prompt:
+      'Korean romantic drama close-up film still, soft diffused beauty lighting, pastel knit sweater, porcelain skin, shallow depth of field with sunlit sheer curtains, tender romantic atmosphere, pristine modern Seoul aesthetic. ' +
+      NO_TEXT,
+    characterHint: 'an attractive stylish Korean drama protagonist with soft styled hair and gentle warm gaze'
+  },
+  {
+    id: 'kurosawa',
+    name: 'Kurosawa',
+    category: 'liveaction',
+    niche: 'B&W contrast · Epic',
+    swatch: '#262626',
+    ink: '#F5F5F5',
+    prompt:
+      'Akira Kurosawa cinema still, deep high-contrast black and white 35mm cinematography, wind-swept pampas grass fields, stoic samurai warrior in traditional armor, dramatic storm clouds, dynamic staging, legendary Japanese cinematic realism. ' +
+      NO_TEXT,
+    characterHint: 'a stoic weathered samurai warrior with tied hair in ornate traditional armor, dramatic black and white'
+  },
+  {
+    id: 'nolan',
+    name: 'Nolan',
+    category: 'liveaction',
+    niche: 'IMAX · Cool blue-gray',
+    swatch: '#1E293B',
+    ink: '#E2E8F0',
+    prompt:
+      'Christopher Nolan film still, 70mm IMAX cinematography, clean cool blue-gray color palette, modern glass skyscraper reflections, tailored bespoke dark suit, crisp realistic lighting, intense cerebral atmosphere, practical cinematic scale. ' +
+      NO_TEXT,
+    characterHint: 'a sharp-eyed professional in a tailored dark suit and tie, sleek modern architectural backdrop'
+  },
+  {
+    id: 'tarantino',
+    name: 'Tarantino',
+    category: 'liveaction',
+    niche: 'High contrast · Violent / Retro',
+    swatch: '#7F1D1D',
+    ink: '#FEF08A',
+    prompt:
+      'Quentin Tarantino retro cinema still, vibrant 1970s Technicolor aesthetic, retro American neon diner booth, high-contrast saturated red and yellow tones, snappy wide-angle framing, edgy pulp crime atmosphere. ' +
+      NO_TEXT,
+    characterHint: 'a charismatic sharp-dressed mobster or gangster in a vibrant collared shirt and blazer inside a retro diner'
+  },
+  {
+    id: 'david_lynch',
+    name: 'David Lynch',
+    category: 'liveaction',
+    niche: 'Banal · Surreal nightmare',
+    swatch: '#31101E',
+    ink: '#FCA5A5',
+    prompt:
+      'David Lynch surrealist film still, eerie unsettling dreamlike atmosphere, uncanny vintage hotel room, red velvet lampshade casting sinister shadows, deep enigmatic contrast, haunting subconscious thriller aesthetic. ' +
+      NO_TEXT,
+    characterHint: 'a character with an enigmatic haunting expression, stylized vintage makeup, dramatic moody red lamp lighting'
+  },
+  {
+    id: 'wes_anderson',
+    name: 'Wes Anderson',
+    category: 'liveaction',
+    niche: 'Candy · Macaron',
+    swatch: '#BE185D',
+    ink: '#FCE7F3',
+    prompt:
+      'Wes Anderson whimsical film still, perfect center-framed symmetrical composition, quirky color-blocked pastel palette of pistachio green, pale candy pink and mustard yellow, eccentric tailored costume, deadpan vintage aesthetic. ' +
+      NO_TEXT,
+    characterHint: 'an eccentric quirky character in a sharply pressed retro suit standing dead-center with a deadpan expression'
+  },
+  {
+    id: 'wong_kar_wai',
+    name: 'Wong Kar-wai',
+    category: 'liveaction',
+    niche: 'Film grain · Eastern city',
+    swatch: '#1C312E',
+    ink: '#6EE7B7',
+    prompt:
+      'Wong Kar-wai film still, In the Mood for Love aesthetic, heavy 35mm film grain, moody neon-lit Hong Kong alleyway at night, glowing tea house signs, cigarette smoke haze, emerald green and crimson tones, deep romantic nostalgia. ' +
+      NO_TEXT,
+    characterHint: 'an elegant woman in an ornate traditional floral cheongsam qipao amidst moody neon lights and soft smoke'
+  },
+  {
+    id: 'shaw_brothers',
+    name: 'Shaw Brothers',
+    category: 'liveaction',
+    niche: 'HK wuxia · Cinematic',
+    swatch: '#78350F',
+    ink: '#FEF3C7',
+    prompt:
+      'Classic Shaw Brothers Hong Kong wuxia cinema still, retro 1970s kung fu film look, saturated color palette, authentic martial arts staging, dramatic tavern interior, theatrical lighting, cinematic vintage action aesthetic. ' +
+      NO_TEXT,
+    characterHint: 'a traditional Hong Kong martial arts hero with classic kung fu attire and focused combat gaze'
+  },
+  {
+    id: 'live_cyberpunk',
+    name: 'Live Cyberpunk',
+    category: 'liveaction',
+    niche: 'Cinematic · Ultra HD',
+    swatch: '#0284C7',
+    ink: '#E0F2FE',
+    prompt:
+      'Live-action cyberpunk film still, photorealistic cinematic realism, towering holographic skyscrapers in rain, neon-lit alley reflections, cybernetic implants, ultra high-definition 8K texture, atmospheric volumetric haze. ' +
+      NO_TEXT,
+    characterHint: 'a live-action cyberpunk protagonist with subtle glowing cyberware and high-tech leather jacket'
+  },
+
+  // ==========================================
+  // ANIMATION (18 styles)
+  // ==========================================
+  {
+    id: 'game_cg_3d',
+    name: '3D Game CG',
+    category: 'animation',
+    niche: 'Cinematic · Unreal Engine',
+    swatch: '#1F2937',
+    ink: '#38BDF8',
+    prompt:
+      'AAA next-gen video game cinematic cutscene render, Unreal Engine 5, hyper-detailed carbon fiber sci-fi nanosuit armor, chromatic iridescence, futuristic spaceship corridor, ray-traced reflections, volumetric fog. ' +
+      NO_TEXT,
+    characterHint: 'a futuristic soldier in high-tech iridescent carbon-fiber exoskeleton armor, volumetric sci-fi lighting'
+  },
+  {
+    id: 'chinese_3d',
+    name: 'Chinese 3D',
+    category: 'animation',
+    niche: 'Cinematic · Unreal Engine',
+    swatch: '#2D3A34',
+    ink: '#A7F3D0',
+    prompt:
+      'Chinese 3D donghua animation film render, Unreal Engine 5 aesthetic, photorealistic stylized character, traditional ancient water town background, canal with stone bridge, delicate green hanfu silk dress, cinematic natural lighting. ' +
+      NO_TEXT,
+    characterHint: 'an ancient Chinese donghua heroine with ornate updo hairstyle and elegant pastel green hanfu silk'
+  },
+  {
+    id: 'kyoto_animation',
+    name: 'Kyoto Animation',
+    category: 'animation',
+    niche: 'Soft cel · Tateishi',
+    swatch: '#FDA4AF',
+    ink: '#4C0519',
+    prompt:
+      'Kyoto Animation film still, exquisite soft cel animation, fluttering cherry blossom petals, sun-dappled school pathway, delicate expressive eyes, subtle wind motion, warm nostalgic afternoon lighting, masterfully painted background. ' +
+      NO_TEXT,
+    characterHint: 'a schoolgirl in sailor uniform with soft flowing dark hair and bright expressive eyes under cherry blossom trees'
+  },
+  {
+    id: 'arcane_oil',
+    name: 'Arcane (Oil 3D)',
+    category: 'animation',
+    niche: 'Arcane · Fortiche',
+    swatch: '#7C2D12',
+    ink: '#FED7AA',
+    prompt:
+      'Fortiche Arcane animation style, stylized 3D character with hand-painted oil brush stroke textures, dramatic glowing hextech crystals in background, steampunk leather jacket, dynamic gritty line work, vibrant painterly lighting. ' +
+      NO_TEXT,
+    characterHint: 'a rebellious steampunk character with vibrant colored hair, expressive facial tattoos, and weathered leather jacket'
+  },
+  {
+    id: 'us_3d_animation',
+    name: 'US 3D Animation',
+    category: 'animation',
+    niche: 'Cinematic · Pixar',
+    swatch: '#1E3A8A',
+    ink: '#DBEAFE',
+    prompt:
+      'Pixar and Disney style 3D animation movie render, endearing toddler character with big round sparkling brown eyes, chubby cheeks, soft subsurface scattering skin, colorful whimsical enchanted forest with bioluminescent trees. ' +
+      NO_TEXT,
+    characterHint: 'an adorable stylized 3D animated toddler with big curious eyes and joyful expressive smile'
+  },
+  {
+    id: 'hardcore_ink',
+    name: 'Hardcore Ink',
+    category: 'animation',
+    niche: 'Wushan · Dry brush',
+    swatch: '#18181B',
+    ink: '#E4E4E7',
+    prompt:
+      'Traditional Chinese wuxia ink wash painting, dynamic dry brush calligraphy strokes, fierce swordsman in flowing black hanfu holding a katana blade, swirling black smoke and mist, dramatic mountain peak backdrop, high contrast monochrome with splash ink. ' +
+      NO_TEXT,
+    characterHint: 'a fierce wuxia swordsman with flowing black ink robes, swirling dry brush calligraphy effects'
+  },
+  {
+    id: 'ink_papercut',
+    name: 'Ink & Papercut',
+    category: 'animation',
+    niche: 'Wushan · Rich color',
+    swatch: '#991B1B',
+    ink: '#FEF2F2',
+    prompt:
+      'Traditional Chinese papercut and ink painting hybrid art, bold fiery crimson sun, layered shadow papercut mountains, dynamic martial artist in crimson kung fu robes, crisp silhouette edges, rich textured folk art aesthetic. ' +
+      NO_TEXT,
+    characterHint: 'a martial artist in crimson robes performing a dynamic kung fu stance against a giant crimson sun'
+  },
+  {
+    id: 'felt_stopmotion',
+    name: 'Felt Stopmotion',
+    category: 'animation',
+    niche: 'Stopmotion · Realistic lighting',
+    swatch: '#78350F',
+    ink: '#FEF3C7',
+    prompt:
+      'Handmade needle felted wool stop-motion puppet, visible fuzzy yarn and felt fiber texture, charming handcrafted doll face with glass bead eyes, cozy hearth fireplace with warm glowing embers, tactile artisanal lighting. ' +
+      NO_TEXT,
+    characterHint: 'a cute handcrafted needle-felted wool puppet child with soft wool hair and big glass bead eyes'
+  },
+  {
+    id: 'clay_stopmotion',
+    name: 'Clay Stopmotion',
+    category: 'animation',
+    niche: 'Stopmotion · Master framing',
+    swatch: '#C2410C',
+    ink: '#FFEDD5',
+    prompt:
+      'Claymation stop-motion animation still, Wallace and Gromit and Aardman aesthetic, handcrafted plasticine character with exaggerated toothy grin, visible fingerprint textures, detailed colorful miniature market stall set, studio spotlighting. ' +
+      NO_TEXT,
+    characterHint: 'a goofy humorous plasticine clay figure with visible handcrafted fingerprints and wide comical grin'
+  },
+  {
+    id: 'jp_horror',
+    name: 'JP Horror',
+    category: 'animation',
+    niche: 'Low saturation · Anime horror',
+    swatch: '#27272A',
+    ink: '#F4F4F5',
+    prompt:
+      'Chilling Japanese anime horror still, desaturated muted ghostly palette, pale girl with hollow blank eyes and disheveled long hair in an abandoned decaying wooden house, eerie quiet dread, gloomy atmospheric shadows. ' +
+      NO_TEXT,
+    characterHint: 'a pale spectral girl with vacant white eyes in a tattered white dress, eerie horror atmosphere'
+  },
+  {
+    id: 'kr_webtoon',
+    name: 'KR Webtoon',
+    category: 'animation',
+    niche: 'Semi-realistic · Romantic',
+    swatch: '#312E81',
+    ink: '#E0E7FF',
+    prompt:
+      'Top-ranking Korean manhwa romance webtoon digital art, semi-realistic handsome male lead, stylish parted soft wavy hair, glowing golden sunset overlooking city skyline from high-rise penthouse, sharp digital shading, romantic atmosphere. ' +
+      NO_TEXT,
+    characterHint: 'a glamorous semi-realistic Korean webtoon male lead with refined features and soft glowing sunset lighting'
+  },
+  {
+    id: 'zenless_zone_zero',
+    name: 'Zenless Zone Zero',
+    category: 'animation',
+    niche: 'Zenless Zone Zero · Neo-cyber',
+    swatch: '#1E1B4B',
+    ink: '#A5B4FC',
+    prompt:
+      'Zenless Zone Zero game anime visual style, stylish neo-cyberpunk cel-shaded anime heroine, silver long hair, futuristic tech jacket with combat harness, vibrant neon signs and holographic city streets, high-contrast dynamic action framing. ' +
+      NO_TEXT,
+    characterHint: 'a cool anime combat operative with silver hair and tactical sci-fi jacket against holographic neon lights'
   },
   {
     id: 'ghibli',
-    name: 'Ghibli anime hangat',
-    category: '2d',
-    niche: 'Cerita santai, dongeng, petualangan',
-    swatch: '#A2D5C6',
-    ink: '#1F1D1A',
+    name: 'Ghibli',
+    category: 'animation',
+    niche: 'Miyazaki · Warm texture',
+    swatch: '#065F46',
+    ink: '#D1FAE5',
     prompt:
-      'Studio Ghibli inspired hand-painted anime film still, lush green landscapes, fluffy painterly cumulus clouds, warm nostalgic natural sunlight, charming expressive characters, gentle gouache watercolor textures, peaceful storybook atmosphere. ' +
+      'Studio Ghibli Hayao Miyazaki anime still, lush painterly green meadow under blue summer sky, fluffy gouache clouds, charming girl in a simple white summer dress, gentle breeze blowing hair, warm nostalgic storybook wonder. ' +
       NO_TEXT,
-    characterHint: 'a charming hand-painted Ghibli-inspired character with gentle expressive features'
+    characterHint: 'a charming gentle anime girl with windblown hair in a sunlit grassy field, hand-painted Ghibli warmth'
   },
   {
-    id: 'manhwa',
-    name: 'Manhwa webtoon aksi',
-    category: '2d',
-    niche: 'Aksi, fantasi modern, reinkarnasi',
-    swatch: '#2B1A4A',
-    ink: '#C084FC',
+    id: 'demon_slayer',
+    name: 'Demon Slayer',
+    category: 'animation',
+    niche: 'Bold outline · Action',
+    swatch: '#991B1B',
+    ink: '#FEE2E2',
     prompt:
-      'High-end Korean manhwa webtoon digital art style, glowing vibrant energy aura, sharp dynamic digital ink outlines, dramatic high-contrast lighting, sleek character design, intense expressive eyes, cinematic webtoon panel composition. ' +
+      'Ufotable anime aesthetic, Demon Slayer style, thick bold black calligraphy contour lines, intense determined swordsman under a blood-red moon, dark misty forest, vibrant glowing flame sparks, dramatic dynamic action lighting. ' +
       NO_TEXT,
-    characterHint: 'a sharp Korean webtoon hero character with subtle glowing aura and stylish hair'
+    characterHint: 'a fierce anime demon hunter with spiky hair and dark haori robe, glowing elemental embers'
   },
   {
-    id: 'woodcut',
-    name: 'Ukiran kayu klasik',
-    category: '2d',
-    niche: 'Filsafat, mitologi kuno, sejarah',
-    swatch: '#D7C4A5',
-    ink: '#2C1E14',
+    id: 'anim_cyberpunk',
+    name: 'Anim Cyberpunk',
+    category: 'animation',
+    niche: 'Cinematic · HD',
+    swatch: '#4C1D95',
+    ink: '#EDE9FE',
     prompt:
-      'Detailed antique woodcut engraving print, fine cross-hatched black ink linework, vintage Renaissance etching, textured aged parchment paper background, dramatic chiaroscuro contrast, historical intellectual aesthetic. ' +
+      'High-definition cyberpunk anime film still, detailed robotic cybernetic prosthetic arm, rain-soaked asphalt with neon reflections, anime cyborg woman in high-collar tech jacket, glowing teal cybernetic eyes, futuristic Tokyo night. ' +
       NO_TEXT,
-    characterHint: 'a classical figure rendered in vintage cross-hatched woodcut engraving style'
+    characterHint: 'an anime cyborg heroine with an intricate chrome cybernetic arm standing on a rainy neon-lit street'
   },
   {
-    id: 'horror2d',
-    name: 'Horor 2D sinematik',
-    category: '2d',
-    niche: 'Horor, misteri, cerita seram',
-    swatch: '#1E1B22',
-    ink: '#D94B4B',
+    id: 'bloodborne',
+    name: 'Bloodborne',
+    category: 'animation',
+    niche: 'Gothic · Cold mist',
+    swatch: '#18181B',
+    ink: '#A1A1AA',
     prompt:
-      'Cinematic 2D horror illustration, painterly digital art, deep shadows and desaturated cold palette with a single sickly accent color (red or green), dramatic low-key lighting, fog and dust in the air, unsettling composition with negative space, subtle film grain, eerie suspenseful mood. ' +
+      'Dark Victorian gothic dark fantasy concept art, Bloodborne aesthetic, hunter in a weathered black leather tricorn hat and long duster coat, cobblestone streets of a cursed cathedral city, chilling cold mist and pale moonlight. ' +
       NO_TEXT,
-    characterHint: 'a 2D painterly horror character with a tense expression, lit by harsh low-key light'
+    characterHint: 'a grim gothic hunter wearing a tricorn hat and heavy weathered duster coat amidst cold mist and gothic spires'
   },
   {
-    id: 'webcomic',
-    name: 'Webcomic barat',
-    category: '2d',
-    niche: 'Komedi, drama remaja, slice of life',
-    swatch: '#FFB4A2',
-    ink: '#1F1D1A',
+    id: 'junji_ito',
+    name: 'Junji Ito',
+    category: 'animation',
+    niche: 'Horror · Sharp lines',
+    swatch: '#111827',
+    ink: '#F3F4F6',
     prompt:
-      'Western webcomic style 2D illustration, clean confident digital line art, flat colors with simple cel shading, expressive exaggerated faces and poses, bright friendly palette, simple readable backgrounds, modern webcomic panel look. ' +
+      'Junji Ito classic horror manga aesthetic, intense detailed pen and ink cross-hatching, sharp claustrophobic dark corridor, gaunt shadowed figure with intense piercing stare, ominous heavy ink shadows, psychological body horror atmosphere. ' +
       NO_TEXT,
-    characterHint: 'an expressive western webcomic character with clean line art and flat colors'
+    characterHint: 'a haunting gaunt figure with sunken eyes and dense eerie ink hatching in a dark oppressive corridor'
   },
   {
-    id: 'animehorror',
-    name: 'Anime horor Jepang',
-    category: '2d',
-    niche: 'Cerita seram Jepang, urban legend',
-    swatch: '#2A2626',
-    ink: '#E5E0D8',
+    id: 'retro_anime_90s',
+    name: '90s Retro Anime',
+    category: 'animation',
+    niche: 'Watanabe · Kamiyama',
+    swatch: '#831843',
+    ink: '#FCE7F3',
     prompt:
-      'Dark Japanese horror anime film still, detailed ink linework with eerie cross-hatching, muted desaturated palette with deep blacks and a faint crimson accent, unsettling distorted perspective, empty quiet Japanese settings (old houses, shrines, school hallways, rainy streets), dim flickering light, creeping dread atmosphere. ' +
+      'Authentic 1990s retro anime film cel still, Shinichiro Watanabe and Kenji Kamiyama aesthetic, rooftop sunset overlooking 90s Tokyo skyline with glowing neon kanji, sharp hand-drawn cel line work, film grain, nostalgic evening glow. ' +
       NO_TEXT,
-    characterHint: 'a Japanese horror anime character with pale skin, hollow shadowed eyes, drawn with fine eerie ink lines'
+    characterHint: 'a cool 90s anime heroine with dark bob hair standing on a rooftop at dusk overlooking city lights'
   },
+
+  // ==========================================
+  // CUSTOM
+  // ==========================================
   {
-    id: 'nusantara',
-    name: 'Ilustrasi Nusantara',
-    category: '2d',
-    niche: 'Cerita rakyat, legenda, sejarah Indonesia',
-    swatch: '#8B4A2B',
-    ink: '#F3D9A4',
-    prompt:
-      'Traditional Indonesian folklore illustration, inspired by wayang kulit shadow puppet silhouettes and batik motifs, ornate carved decorative patterns, earthy palette of sogan brown, deep indigo, gold and cream, elegant stylized figures in Javanese and Balinese traditional attire, layered decorative backgrounds with tropical nature and temples, rich cultural storybook mood. ' +
-      NO_TEXT,
-    characterHint: 'a stylized Indonesian folklore figure in traditional attire with wayang-inspired ornate details and batik patterns'
-  },
-  {
-    id: 'animation3d',
-    name: 'Animasi 3D',
-    category: '3d',
-    niche: 'Fabel, keluarga, anak',
-    swatch: '#FFD66B',
-    ink: '#1F1D1A',
-    prompt:
-      '3D animated feature film render, stylized characters with big expressive faces, soft global illumination, subsurface scattering, vibrant colors, cinematic depth of field. ' +
-      NO_TEXT,
-    characterHint: 'a stylized 3D animated film character with an expressive face'
-  },
-  {
-    id: 'clay',
-    name: 'Claymation',
-    category: '3d',
-    niche: 'Komedi, cerita anak',
-    swatch: '#F4A988',
-    ink: '#1F1D1A',
-    prompt:
-      'Claymation stop-motion scene, handcrafted plasticine characters and miniature sets, visible fingerprints and clay texture, soft studio lighting. ' +
-      NO_TEXT,
-    characterHint: 'a handcrafted plasticine clay character'
-  },
-  {
-    id: 'lowpoly',
-    name: 'Low-poly 3D',
-    category: '3d',
-    niche: 'Teknologi, sains',
-    swatch: '#A7C7E7',
-    ink: '#1F1D1A',
-    prompt:
-      'Low-poly 3D render, faceted geometric shapes, flat-shaded polygons, clean pastel colors, soft ambient lighting. ' + NO_TEXT,
-    characterHint: 'a low-poly 3D character with faceted shapes'
-  },
-  {
-    id: 'cinematic',
-    name: 'Sinematik realistis',
-    category: 'realistis',
-    niche: 'Misteri, sejarah, drama',
-    swatch: '#56607A',
-    ink: '#FAF7F2',
-    prompt:
-      'Photorealistic cinematic film still, dramatic natural lighting, shallow depth of field, anamorphic lens look, rich color grading, subtle 35mm film grain. ' +
-      NO_TEXT,
-    characterHint: 'a photorealistic person, cinematic lighting'
-  },
-  {
-    id: 'archival',
-    name: 'Arsip sejarah',
-    category: 'realistis',
-    niche: 'Sejarah, perang, tokoh',
-    swatch: '#B9A488',
-    ink: '#1F1D1A',
-    prompt:
-      'Vintage archival photograph, faded sepia or black and white, film grain, light scratches and dust, historical documentary look. ' +
-      NO_TEXT,
-    characterHint: 'a person in a vintage archival sepia photograph'
-  },
-  {
-    id: 'epic',
-    name: 'Fantasi epik',
-    category: 'realistis',
-    niche: 'Mitologi, legenda',
-    swatch: '#6C5B8E',
-    ink: '#FAF7F2',
-    prompt:
-      'Epic realistic fantasy concept art, highly detailed, volumetric light, grand scale, painterly realism, cinematic composition. ' +
-      NO_TEXT,
-    characterHint: 'an epic realistic fantasy character, concept art'
-  },
-  {
-    id: 'darkfantasy',
-    name: 'Dark fantasy mistis',
-    category: 'realistis',
-    niche: 'Horor, mitologi, legenda gelap',
-    swatch: '#242028',
-    ink: '#E8D7B8',
-    prompt:
-      'Dark fantasy cinematic photograph, dramatic chiaroscuro lighting, deep atmospheric shadows, volumetric fog and mist, gothic folklore tone, weathered textures, rich cinematic mood. ' +
-      NO_TEXT,
-    characterHint: 'a dark fantasy figure with weathered clothing in moody dramatic lighting'
-  },
-  {
-    id: 'analoghorror',
-    name: 'Analog horror VHS',
-    category: 'realistis',
-    niche: 'Horor, misteri, konspirasi, SCP',
-    swatch: '#1A1D1A',
-    ink: '#4ADE80',
-    prompt:
-      'Authentic 1990s analog found-footage camcorder video still, CRT monitor scanlines, magnetic VHS tape noise and tracking distortion, eerie flashlight lighting, muted retro color grading, grainy low-light realism, uncanny suspenseful atmosphere. ' +
-      NO_TEXT,
-    characterHint: 'a person in an eerie found-footage VHS recording, harsh direct flashlight illumination'
+    id: 'custom_style',
+    name: 'Gaya Kustom',
+    category: 'custom',
+    niche: 'Prompt bebas pengguna',
+    swatch: '#4F46E5',
+    ink: '#FFFFFF',
+    prompt: NO_TEXT,
+    characterHint: 'sesuai deskripsi karakter kustom'
   }
 ]
 

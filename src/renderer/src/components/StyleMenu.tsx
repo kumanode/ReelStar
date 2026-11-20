@@ -5,7 +5,7 @@ import { Popover } from './Popover'
 import { StyleSwatch } from './StyleArt'
 import { cx } from './ui'
 
-const CATEGORY_LABEL: Record<StyleCategory, string> = { '2d': '2D', '3d': '3D', realistis: 'Realistis' }
+const CATEGORY_LABEL: Record<StyleCategory, string> = { liveaction: 'Live Action', animation: 'Animasi', custom: 'Kustom' }
 const COLUMNS = 8
 
 /** A pill that opens every visual style as a grid of square previews, so the look is clear before picking. */

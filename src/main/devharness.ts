@@ -133,7 +133,7 @@ function addDemoVideos(projectId: string): void {
 /** Builds a small project from synthetic media so storyboard, editor and export can be tested without API keys. */
 function seedDemo(): string {
   const ff = binPath(ffmpegStatic!)
-  const p = createProject({ synopsis: 'Demo: Gajah Mada dan Sumpah Palapa', durationSec: 30, styleId: 'stickman', language: 'id' })
+  const p = createProject({ synopsis: 'Demo: Gajah Mada dan Sumpah Palapa', durationSec: 30, styleId: 'premium_drama', language: 'id' })
   const lines = [
     { t: 'Senja di Majapahit', n: 'Tahun 1336. Senja turun di ibu kota Majapahit, dan istana bersiap untuk upacara penting.', cam: 'zoomin' },
     { t: 'Gajah Mada maju', n: 'Di tengah balairung, patih yang baru dilantik melangkah maju. Namanya Gajah Mada.', cam: 'panright' },
@@ -199,7 +199,7 @@ function seedDemo(): string {
 
 /** Builds a project with 2 episodes, each with 3 clips, to test multi-episode isolation. */
 export function seedEpisodes(): { projectId: string; ep1Id: string; ep2Id: string } {
-  const p = createProject({ synopsis: 'Demo Multi-Episode Drama', durationSec: 60, styleId: 'stickman', language: 'id' })
+  const p = createProject({ synopsis: 'Demo Multi-Episode Drama', durationSec: 60, styleId: 'premium_drama', language: 'id' })
   const episodes = listEpisodes(p.id)
   const ep1 = episodes[0]
   const ep2 = createEpisode(p.id, { title: 'Episode 2: Pengkhianatan' })
