@@ -26,6 +26,7 @@ import type {
 } from '@shared/types'
 import { clearExportCache, nvencAvailable, startExport } from './exporter'
 import {
+  batchEstimate,
   estimateCredits,
   forgetEstimates,
   generateCharacterSheet,
@@ -378,9 +379,16 @@ export function registerIpc(): void {
   handle('generate:clipVideo', (clipId: string) => generateClipVideo(clipId))
   handle('generate:clipTts', (clipId: string) => generateClipTts(clipId))
   handle('generate:characterSheet', (characterId: string) => generateCharacterSheet(characterId))
-  handle('generate:missingImages', (projectId: string, episodeId?: string) => generateMissingImages(projectId, episodeId))
-  handle('generate:missingVideos', (projectId: string, episodeId?: string) => generateMissingVideos(projectId, episodeId))
+  handle('generate:missingImages', (projectId: string, episodeId?: string, includeStale?: boolean) =>
+    generateMissingImages(projectId, episodeId, includeStale)
+  )
+  handle('generate:missingVideos', (projectId: string, episodeId?: string, includeStale?: boolean) =>
+    generateMissingVideos(projectId, episodeId, includeStale)
+  )
   handle('generate:clipsVideo', (clipIds: string[]) => generateClipsVideo(clipIds))
+  handle('generate:batchEstimate', (projectId: string, episodeId: string | undefined, kind: 'image' | 'video', includeStale?: boolean) =>
+    batchEstimate(projectId, episodeId, kind, includeStale)
+  )
   handle('generate:cancelProject', (projectId: string, kind?: string) => cancelProjectJobs(projectId, kind))
   handle('generate:missingTts', (projectId: string, episodeId?: string) => generateMissingTts(projectId, episodeId))
   handle('generate:narration', (projectId: string, mode: 'missing' | 'all', episodeId?: string) => generateNarration(projectId, mode === 'all' ? 'all' : 'missing', episodeId))

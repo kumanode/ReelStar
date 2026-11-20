@@ -5,15 +5,50 @@ import { estimateWordTimings } from '@shared/captions'
 import { stripVoiceTags } from '@shared/speech'
 import { getImageModel, getVideoModel, imageBody, maxRefs, promptLimit, resolutionOptions, videoBody, type HfModel } from '@shared/higgsfield'
 import { getStyle, NO_TEXT } from '@shared/styles'
-import type { AspectRatio, Asset, Character, CharacterDerivative, Clip, CreditEstimate, Job, Location, Project, Prop, ThumbnailRequest, WordTiming } from '@shared/types'
+import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt } from '@shared/prompts'
+import {
+  computeCharacterSheetBasisHash,
+  computeClipImageBasisHash,
+  computeClipTtsBasisHash,
+  computeClipVideoBasisHash,
+  computeDerivativeSheetBasisHash,
+  computeLocationSheetBasisHash,
+  computePropSheetBasisHash
+} from '@shared/hash'
+import {
+  checkClipImagePrerequisites,
+  checkClipVideoPrerequisites,
+  getClipImageStatus,
+  getClipVideoStatus,
+  type GenerationPrerequisitesContext
+} from '@shared/validation'
+import type {
+  AspectRatio,
+  Asset,
+  BatchEstimateItem,
+  BatchEstimateResult,
+  Character,
+  CharacterDerivative,
+  Clip,
+  CreditEstimate,
+  Job,
+  Location,
+  Project,
+  Prop,
+  ThumbnailRequest,
+  WordTiming
+} from '@shared/types'
 import { getDb } from './db'
 import { emit } from './events'
 import { runJob, type TaskCtx } from './jobs'
 import { assetAbsPath } from './paths'
 import {
   activeJobFor,
+  activeJobsOf,
+  assetsOf,
   charactersOf,
   clipsOf,
+  derivativesOf,
   firstClipOf,
   getAsset,
   getCharacter,
@@ -25,7 +60,9 @@ import {
   getProp,
   insertAsset,
   insertJob,
+  locationsOf,
   patchClip,
+  propsOf,
   setCharacterSheet,
   setDerivativeSheet,
   setLocationSheet,
@@ -87,49 +124,6 @@ function characterLine(c: Character): string {
   return `${c.name}: ${c.description}`
 }
 
-/** Splits the storyboard's "Avoid:" line off the scene, so it can be phrased as a clear instruction. */
-function splitAvoid(visual: string): { scene: string; avoid: string } {
-  const lines = visual.split('\n')
-  const i = lines.findIndex((l) => /^\s*avoid\s*:/i.test(l))
-  if (i < 0) return { scene: visual.trim(), avoid: '' }
-  const avoid = lines[i].replace(/^\s*avoid\s*:\s*/i, '').replace(/\.$/, '').trim()
-  lines.splice(i, 1)
-  return { scene: lines.join('\n').trim(), avoid }
-}
-
-/**
- * The image prompt for a clip. The scene comes first so the model gets the content right, then who the
- * characters are, then the art style. Clothing follows the scene's Wardrobe line when it has one, so a
- * character can change out of the outfit on their reference sheet (no spacesuit indoors).
- */
-function clipPrompt(project: Project, clip: Clip, chars: Character[], refNames: string[], limit: number): string {
-  const style = getStyle(project.styleId)
-  const { scene, avoid } = splitAvoid(clip.visualPrompt)
-  const wardrobe = /^\s*wardrobe\s*:/im.test(scene)
-  const parts = [`Scene:\n${scene}`]
-  if (chars.length)
-    parts.push(
-      `Recurring characters in this scene. Keep each one's body, face, hair and skin exactly as described${refNames.length ? ' and as on their reference sheet' : ''}.` +
-        (wardrobe
-          ? ' Their clothing follows the Wardrobe line of the scene: the default outfit only where it says so, otherwise the custom outfit.'
-          : ' They wear their default outfit.') +
-        `\n${chars.map(characterLine).join('\n')}`
-    )
-  if (refNames.length)
-    parts.push(
-      `Reference images are character sheets, in this order: ${refNames.join(', ')}. Use them for each character's identity, proportions and colors. ` +
-        (wardrobe ? 'Copy the costume from a sheet only for characters whose Wardrobe line says "default outfit". ' : 'Match the costume to the sheet. ') +
-        'Do not copy the sheet layout, poses or plain background.'
-    )
-  parts.push(`Art style: ${style.prompt}`)
-  if (avoid) parts.push(`Must not appear in the image: ${avoid}.`)
-  parts.push(`Frame format ${project.aspectRatio}, full-bleed composition.`)
-  const full = parts.join('\n\n')
-  if (full.length <= limit) return full
-  // Models with short prompt limits get the scene first, so trimming only loses style detail.
-  return [scene, chars.map(characterLine).join('; '), avoid && `Must not appear: ${avoid}.`, style.prompt].filter(Boolean).join('\n\n')
-}
-
 function sheetPrompt(project: Project, c: Character): string {
   const style = getStyle(project.styleId)
   return [
@@ -177,21 +171,21 @@ async function waitForSheets(characterIds: string[], signal: AbortSignal): Promi
   }
 }
 
-async function referenceUrls(model: HfModel, chars: Character[], signal: AbortSignal): Promise<{ urls: string[]; names: string[] }> {
+async function resolveReferenceUrls(
+  model: HfModel,
+  items: { sheetAssetId: string; name: string }[],
+  signal: AbortSignal
+): Promise<{ urls: string[]; names: string[] }> {
   const limit = maxRefs(model)
-  if (limit === 0) return { urls: [], names: [] }
-  await waitForSheets(
-    chars.map((c) => c.id),
-    signal
-  )
+  if (limit === 0 || !items.length) return { urls: [], names: [] }
   const urls: string[] = []
   const names: string[] = []
-  for (const c of chars) {
-    const fresh = getCharacter(c.id)
-    const sheet = getAsset(fresh.sheetAssetId)
-    if (!sheet || urls.length >= limit) continue
+  for (const it of items) {
+    if (urls.length >= limit) break
+    const sheet = getAsset(it.sheetAssetId)
+    if (!sheet) continue
     urls.push(await publicUrlFor(sheet, signal))
-    names.push(fresh.name)
+    names.push(it.name)
   }
   return { urls, names }
 }
@@ -206,6 +200,8 @@ interface HfPayload {
   derivativeId?: string
   locationId?: string
   propId?: string
+  basisHash?: string
+  credits?: number
 }
 
 async function finishHiggsfield(ctx: TaskCtx, job: Job, requestId: string, payload: HfPayload): Promise<string> {
@@ -258,7 +254,11 @@ async function finishHiggsfield(ctx: TaskCtx, job: Job, requestId: string, paylo
     width: size?.width ?? null,
     height: size?.height ?? null,
     // Thumbnails have no clip; the flag is how the export dialog finds them again.
-    meta: { ...(payload.target === 'thumbnail' ? { thumbnail: true } : {}), ...(payload.resolution ? { resolution: payload.resolution } : {}) }
+    meta: {
+      ...(payload.target === 'thumbnail' ? { thumbnail: true } : {}),
+      ...(payload.resolution ? { resolution: payload.resolution } : {}),
+      ...(payload.basisHash ? { basisHash: payload.basisHash } : {})
+    }
   })
   emit.asset(asset)
   if (payload.target === 'sheet' && job.characterId) {
@@ -319,19 +319,43 @@ export function generateClipImage(clipId: string): Job {
   const existing = activeJobFor({ clipId }, 'image')
   if (existing) return existing
   const clip = getClip(clipId)
+  const project = getProject(clip.projectId)
+  const chars = charactersOf(project.id)
+  const derivs = derivativesOf(project.id)
+  const locs = locationsOf(project.id)
+  const props = propsOf(project.id)
+  const assets = assetsOf(project.id)
+  const activeJobs = activeJobsOf(project.id)
+
+  const prereqs = checkClipImagePrerequisites(clip, project, {
+    characters: chars,
+    derivatives: derivs,
+    locations: locs,
+    props,
+    assets,
+    activeJobs,
+    isFlow2Api: isFlow2Api()
+  })
+  if (!prereqs.ok) {
+    throw new Error(`Syarat generate gambar tidak terpenuhi:\n- ${prereqs.blockers.join('\n- ')}`)
+  }
+
   if (isFlow2Api()) {
     const job = insertJob({ projectId: clip.projectId, clipId, kind: 'image', provider: 'flow2api' })
     emit.job(job)
     return runJob(job, 'flow2api', async (ctx) => {
       const fresh = getClip(clipId)
       const project = getProject(fresh.projectId)
-      const chars = charactersOf(project.id).filter((c) => fresh.characterIds.includes(c.id))
-      await waitForSheets(chars.map((c) => c.id), ctx.signal)
+      const allChars = charactersOf(project.id)
+      const allDerivs = derivativesOf(project.id)
+      const allLocs = locationsOf(project.id)
+      const allProps = propsOf(project.id)
+
+      const refItems = collectReferenceSheets(fresh, allChars, allDerivs, allLocs, allProps, 3)
 
       const refBuffers: Buffer[] = []
-      for (const c of chars) {
-        const freshChar = getCharacter(c.id)
-        const sheet = getAsset(freshChar.sheetAssetId)
+      for (const it of refItems) {
+        const sheet = getAsset(it.sheetAssetId)
         if (sheet && refBuffers.length < 3) {
           const abs = assetAbsPath(project.id, sheet.localPath)
           if (existsSync(abs)) refBuffers.push(readFileSync(abs))
@@ -340,7 +364,25 @@ export function generateClipImage(clipId: string): Job {
 
       const baseModel = (project.imageModel && !project.imageModel.includes('/') ? project.imageModel : null) ?? getSettings().flow2apiImageModel
       const modelId = resolveFlow2ApiModelId(baseModel, project.aspectRatio)
-      const prompt = clipPrompt(project, fresh, chars, chars.map((c) => c.name), 4000)
+      const prompt = compileClipPrompt({
+        project,
+        clip: fresh,
+        characters: allChars.filter((c) => fresh.characterIds.includes(c.id)),
+        derivatives: allDerivs,
+        locations: allLocs,
+        props: allProps,
+        refNames: refItems.map((r) => r.name),
+        limit: 4000
+      })
+      const basisHash = computeClipImageBasisHash({
+        project,
+        clip: fresh,
+        characters: allChars,
+        derivatives: allDerivs,
+        locations: allLocs,
+        props: allProps,
+        refSheetAssetIds: refItems.map((r) => r.sheetAssetId)
+      })
 
       ctx.progress(0.04, 'Menyiapkan prompt Flow2API')
       const { mediaUrl } = await f2a.generateImage({
@@ -370,7 +412,8 @@ export function generateClipImage(clipId: string): Job {
         remoteUrl: mediaUrl,
         localPath: rel,
         width: size?.width ?? null,
-        height: size?.height ?? null
+        height: size?.height ?? null,
+        meta: { basisHash }
       })
       emit.asset(asset)
       patchClip(clipId, { imageAssetId: asset.id })
@@ -387,13 +430,36 @@ export function generateClipImage(clipId: string): Job {
     const fresh = getClip(clipId)
     const project = getProject(fresh.projectId)
     const model = getImageModel(project.imageModel)
-    const chars = charactersOf(project.id).filter((c) => fresh.characterIds.includes(c.id))
-    const refs = await referenceUrls(model, chars, ctx.signal)
-    const prompt = clipPrompt(project, fresh, chars, refs.names, promptLimit(model))
+    const allChars = charactersOf(project.id)
+    const allDerivs = derivativesOf(project.id)
+    const allLocs = locationsOf(project.id)
+    const allProps = propsOf(project.id)
+
+    const refItems = collectReferenceSheets(fresh, allChars, allDerivs, allLocs, allProps, maxRefs(model))
+    const refs = await resolveReferenceUrls(model, refItems, ctx.signal)
+    const prompt = compileClipPrompt({
+      project,
+      clip: fresh,
+      characters: allChars.filter((c) => fresh.characterIds.includes(c.id)),
+      derivatives: allDerivs,
+      locations: allLocs,
+      props: allProps,
+      refNames: refs.names,
+      limit: promptLimit(model)
+    })
+    const basisHash = computeClipImageBasisHash({
+      project,
+      clip: fresh,
+      characters: allChars,
+      derivatives: allDerivs,
+      locations: allLocs,
+      props: allProps,
+      refSheetAssetIds: refItems.map((r) => r.sheetAssetId)
+    })
     return {
       endpoint: model.id,
       body: imageBody(model, prompt, project.aspectRatio, refs.urls, getSettings().imageGenerationMode === 'draft' ? resolutionOptions(model)[0] : undefined),
-      payload: { target: 'clip-image', model: model.id, prompt }
+      payload: { target: 'clip-image', model: model.id, prompt, basisHash }
     }
   })
 }
@@ -473,7 +539,11 @@ export function generateThumbnail(projectId: string, req: ThumbnailRequest): Job
   const job = insertJob({ projectId, kind: 'image', provider: 'higgsfield', payload: { target: 'thumbnail', variation } })
   return startHiggsfield(job, async (ctx) => {
     const model = getImageModel(project.imageModel)
-    const refs = await referenceUrls(model, chars, ctx.signal)
+    const refs = await resolveReferenceUrls(
+      model,
+      chars.map((c) => ({ sheetAssetId: c.sheetAssetId || '', name: c.name })),
+      ctx.signal
+    )
     const variedPrompt = thumbnailPrompt(project, req, chars, refs.names)
     return {
       endpoint: model.id,
@@ -487,11 +557,18 @@ export function generateCharacterSheet(characterId: string): Job {
   const existing = activeJobFor({ characterId }, 'sheet')
   if (existing) return existing
   const c = getCharacter(characterId)
+  const project = getProject(c.projectId)
+  const basisHash = computeCharacterSheetBasisHash({
+    name: c.name,
+    description: c.description,
+    styleId: project.styleId,
+    imageModel: project.imageModel
+  })
+
   if (isFlow2Api()) {
     const job = insertJob({ projectId: c.projectId, characterId, kind: 'sheet', provider: 'flow2api' })
     emit.job(job)
     return runJob(job, 'flow2api', async (ctx) => {
-      const project = getProject(c.projectId)
       const prompt = sheetPrompt(project, getCharacter(characterId))
       const baseModel = (project.imageModel && !project.imageModel.includes('/') ? project.imageModel : null) ?? getSettings().flow2apiImageModel
       const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
@@ -523,7 +600,8 @@ export function generateCharacterSheet(characterId: string): Job {
         remoteUrl: mediaUrl,
         localPath: rel,
         width: size?.width ?? null,
-        height: size?.height ?? null
+        height: size?.height ?? null,
+        meta: { basisHash }
       })
       setCharacterSheet(characterId, asset.id)
       emit.character({ characterId, patch: { sheetAssetId: asset.id } })
@@ -535,13 +613,12 @@ export function generateCharacterSheet(characterId: string): Job {
 
   const job = insertJob({ projectId: c.projectId, characterId, kind: 'sheet', provider: 'higgsfield' })
   return startHiggsfield(job, async () => {
-    const project = getProject(c.projectId)
     const model = getImageModel(project.imageModel)
     const prompt = sheetPrompt(project, getCharacter(characterId))
     return {
       endpoint: model.id,
       body: imageBody(model, prompt, '16:9', []),
-      payload: { target: 'sheet', model: model.id, prompt }
+      payload: { target: 'sheet', model: model.id, prompt, basisHash }
     }
   })
 }
@@ -556,6 +633,11 @@ export function generateDerivativeSheet(derivativeId: string): Job {
 
   const project = getProject(c.projectId)
   const prompt = derivativeSheetPrompt(project, c, d)
+  const basisHash = computeDerivativeSheetBasisHash({
+    baseSheetAssetId: c.sheetAssetId,
+    promptChange: d.promptChange,
+    imageModel: project.imageModel
+  })
 
   if (isFlow2Api()) {
     const job = insertJob({ projectId: c.projectId, characterId: c.id, kind: 'sheet', provider: 'flow2api', payload: { target: 'derivative-sheet', derivativeId } })
@@ -597,7 +679,8 @@ export function generateDerivativeSheet(derivativeId: string): Job {
         remoteUrl: mediaUrl,
         localPath: rel,
         width: size?.width ?? null,
-        height: size?.height ?? null
+        height: size?.height ?? null,
+        meta: { basisHash }
       })
       setDerivativeSheet(d.id, asset.id)
       emit.asset(asset)
@@ -613,7 +696,7 @@ export function generateDerivativeSheet(derivativeId: string): Job {
     return {
       endpoint: model.id,
       body: imageBody(model, prompt, '16:9', [refUrl]),
-      payload: { target: 'derivative-sheet', derivativeId, model: model.id, prompt }
+      payload: { target: 'derivative-sheet', derivativeId, model: model.id, prompt, basisHash }
     }
   })
 }
@@ -623,6 +706,12 @@ export function generateLocationSheet(locationId: string): Job {
   if (!l) throw new Error('Lokasi tidak ditemukan')
   const project = getProject(l.projectId)
   const prompt = locationSheetPrompt(project, l)
+  const basisHash = computeLocationSheetBasisHash({
+    name: l.name,
+    description: l.description,
+    styleId: project.styleId,
+    imageModel: project.imageModel
+  })
 
   if (isFlow2Api()) {
     const job = insertJob({ projectId: l.projectId, kind: 'image', provider: 'flow2api', payload: { target: 'location-sheet', locationId } })
@@ -656,7 +745,8 @@ export function generateLocationSheet(locationId: string): Job {
         remoteUrl: mediaUrl,
         localPath: rel,
         width: size?.width ?? null,
-        height: size?.height ?? null
+        height: size?.height ?? null,
+        meta: { basisHash }
       })
       setLocationSheet(l.id, asset.id)
       emit.asset(asset)
@@ -671,7 +761,7 @@ export function generateLocationSheet(locationId: string): Job {
     return {
       endpoint: model.id,
       body: imageBody(model, prompt, '16:9', []),
-      payload: { target: 'location-sheet', locationId, model: model.id, prompt }
+      payload: { target: 'location-sheet', locationId, model: model.id, prompt, basisHash }
     }
   })
 }
@@ -681,6 +771,12 @@ export function generatePropSheet(propId: string): Job {
   if (!pr) throw new Error('Prop tidak ditemukan')
   const project = getProject(pr.projectId)
   const prompt = propSheetPrompt(project, pr)
+  const basisHash = computePropSheetBasisHash({
+    name: pr.name,
+    description: pr.description,
+    styleId: project.styleId,
+    imageModel: project.imageModel
+  })
 
   if (isFlow2Api()) {
     const job = insertJob({ projectId: pr.projectId, kind: 'image', provider: 'flow2api', payload: { target: 'prop-sheet', propId } })
@@ -714,7 +810,8 @@ export function generatePropSheet(propId: string): Job {
         remoteUrl: mediaUrl,
         localPath: rel,
         width: size?.width ?? null,
-        height: size?.height ?? null
+        height: size?.height ?? null,
+        meta: { basisHash }
       })
       setPropSheet(pr.id, asset.id)
       emit.asset(asset)
@@ -729,7 +826,7 @@ export function generatePropSheet(propId: string): Job {
     return {
       endpoint: model.id,
       body: imageBody(model, prompt, '16:9', []),
-      payload: { target: 'prop-sheet', propId, model: model.id, prompt }
+      payload: { target: 'prop-sheet', propId, model: model.id, prompt, basisHash }
     }
   })
 }
@@ -739,6 +836,28 @@ export function generateClipVideo(clipId: string): Job {
   if (existing) return existing
   const clip = getClip(clipId)
   if (!clip.imageAssetId) throw new Error('Buat gambar klip ini dulu sebelum membuat video AI.')
+
+  const project = getProject(clip.projectId)
+  const chars = charactersOf(project.id)
+  const derivs = derivativesOf(project.id)
+  const locs = locationsOf(project.id)
+  const props = propsOf(project.id)
+  const assets = assetsOf(project.id)
+  const activeJobs = activeJobsOf(project.id)
+
+  const prereqs = checkClipVideoPrerequisites(clip, project, {
+    characters: chars,
+    derivatives: derivs,
+    locations: locs,
+    props,
+    assets,
+    activeJobs,
+    isFlow2Api: isFlow2Api()
+  })
+  if (!prereqs.ok) {
+    throw new Error(`Syarat generate video tidak terpenuhi:\n- ${prereqs.blockers.join('\n- ')}`)
+  }
+
   if (isFlow2Api()) {
     const job = insertJob({ projectId: clip.projectId, clipId, kind: 'video', provider: 'flow2api' })
     emit.job(job)
@@ -747,6 +866,7 @@ export function generateClipVideo(clipId: string): Job {
       const image = getAsset(fresh.imageAssetId)
       if (!image) throw new Error('Gambar klip tidak ditemukan')
       const project = getProject(fresh.projectId)
+      const allChars = charactersOf(project.id)
 
       const imgAbs = assetAbsPath(project.id, image.localPath)
       if (!existsSync(imgAbs)) throw new Error('File gambar klip tidak ditemukan di disk')
@@ -757,9 +877,12 @@ export function generateClipVideo(clipId: string): Job {
       const video = resolveFlow2ApiVideo(baseModel, project.aspectRatio, durationSec)
       const modelId = video.model
 
-      const prompt =
-        fresh.videoPrompt.trim() ||
-        `${splitAvoid(fresh.visualPrompt).scene.replace(/\.$/, '')}. Subtle natural motion of the characters and environment, the camera slowly pushes in. Keep the art style of the first frame.`
+      const prompt = compileClipVideoPrompt(project, fresh, allChars, 2000)
+      const basisHash = computeClipVideoBasisHash({
+        project,
+        clip: fresh,
+        characters: allChars
+      })
 
       ctx.progress(0.04, 'Menyiapkan video Flow2API (Veo)')
       const { mediaUrl } = await f2a.generateVideo({
@@ -793,7 +916,8 @@ export function generateClipVideo(clipId: string): Job {
         localPath: rel,
         durationMs,
         width: size?.width ?? null,
-        height: size?.height ?? null
+        height: size?.height ?? null,
+        meta: { basisHash }
       })
       emit.asset(asset)
       const patch = { videoAssetId: asset.id, motionType: 'video' as const, mediaInMs: 0 }
@@ -811,17 +935,23 @@ export function generateClipVideo(clipId: string): Job {
     if (!image) throw new Error('Gambar klip tidak ditemukan')
     const project = getProject(fresh.projectId)
     const model = getVideoModel(project.videoModel)
+    const allChars = charactersOf(project.id)
+
     ctx.progress(0.05, 'Menyiapkan gambar awal')
     const url = await publicUrlFor(image, ctx.signal)
-    let prompt =
-      fresh.videoPrompt.trim() ||
-      `${splitAvoid(fresh.visualPrompt).scene.replace(/\.$/, '')}. Subtle natural motion of the characters and environment, the camera slowly pushes in. Keep the art style of the first frame.`
-    if (model.input.mode === 'reference')
+    let prompt = compileClipVideoPrompt(project, fresh, allChars, promptLimit(model))
+    if (model.input.mode === 'reference') {
       prompt = `Open on the exact scene of the reference image and keep its art style, characters and composition. ${prompt}`
+    }
+    const basisHash = computeClipVideoBasisHash({
+      project,
+      clip: fresh,
+      characters: allChars
+    })
     return {
       endpoint: model.id,
       body: videoBody(model, prompt, url, fresh.durationMs / 1000, project.aspectRatio, project.videoResolution),
-      payload: { target: 'clip-video', model: model.id, prompt }
+      payload: { target: 'clip-video', model: model.id, prompt, basisHash }
     }
   })
 }
@@ -860,6 +990,11 @@ export function generateClipTts(clipId: string): Job {
       words = estimateWordTimings(stripVoiceTags(text), audioMs / 1000)
       estimated = true
     }
+    const basisHash = computeClipTtsBasisHash({
+      narration: text,
+      voice,
+      ttsProvider: p.ttsProvider
+    })
     const asset = insertAsset({
       projectId: p.id,
       clipId,
@@ -869,7 +1004,7 @@ export function generateClipTts(clipId: string): Job {
       prompt: text,
       localPath: rel,
       durationMs: audioMs,
-      meta: { words, estimatedTimings: estimated, voice }
+      meta: { words, estimatedTimings: estimated, voice, basisHash }
     })
     emit.asset(asset)
     const durationMs = Math.max(1500, audioMs + 400)
@@ -881,21 +1016,62 @@ export function generateClipTts(clipId: string): Job {
   })
 }
 
-export function generateMissingImages(projectId: string, episodeId?: string): Job[] {
-  const jobs: Job[] = []
+/**
+ * Batch generate missing images for an episode (§6.J).
+ * Follows the all-or-nothing rule: if ANY candidate clip is blocked,
+ * the entire batch is aborted before running any job.
+ */
+export function generateMissingImages(projectId: string, episodeId?: string, includeStale = false): Job[] {
   const project = getProject(projectId)
+  const clips = clipsOf(projectId, episodeId)
+  const chars = charactersOf(projectId)
+  const derivs = derivativesOf(projectId)
+  const locs = locationsOf(projectId)
+  const props = propsOf(projectId)
+  const assets = assetsOf(projectId)
+  const activeJobs = activeJobsOf(projectId)
+  const ctx: GenerationPrerequisitesContext = {
+    characters: chars,
+    derivatives: derivs,
+    locations: locs,
+    props,
+    assets,
+    activeJobs,
+    isFlow2Api: isFlow2Api()
+  }
+
+  const candidates: Clip[] = []
+  const blockers: { clipIndex: number; title: string; reasons: string[] }[] = []
+
+  for (let i = 0; i < clips.length; i++) {
+    const c = clips[i]
+    const statusRes = getClipImageStatus(c, project, ctx)
+    if (statusRes.status === 'blocked') {
+      blockers.push({ clipIndex: i + 1, title: c.title || `Shot ${i + 1}`, reasons: statusRes.blockers })
+    } else if (statusRes.status === 'missing' || (includeStale && statusRes.status === 'stale')) {
+      candidates.push(c)
+    }
+  }
+
+  if (blockers.length > 0) {
+    const details = blockers.map((b) => `Shot ${b.clipIndex} (${b.title}):\n  • ${b.reasons.join('\n  • ')}`).join('\n')
+    throw new Error(`Batch generate gambar dibatalkan (aturan semua-atau-tidak-sama-sekali).\nBeberapa adegan terblokir:\n${details}`)
+  }
+
+  // Also ensure required character sheets exist if using Flow2API or models that support reference sheets
   const canRef = isFlow2Api()
     ? getFlow2ApiModel(project.imageModel || getSettings().flow2apiImageModel, 'image').supportsRef
     : maxRefs(getImageModel(project.imageModel)) > 0
-  const clips = clipsOf(projectId, episodeId)
+  const jobs: Job[] = []
   if (canRef) {
-    const needed = new Set(clips.flatMap((c) => c.characterIds))
-    for (const c of charactersOf(projectId)) {
+    const needed = new Set(candidates.flatMap((c) => c.characterIds))
+    for (const c of chars) {
       if (needed.has(c.id) && !c.sheetAssetId) jobs.push(generateCharacterSheet(c.id))
     }
   }
-  for (const clip of clips) {
-    if (!clip.imageAssetId) jobs.push(generateClipImage(clip.id))
+
+  for (const clip of candidates) {
+    jobs.push(generateClipImage(clip.id))
   }
   return jobs
 }
@@ -912,17 +1088,157 @@ export function generateClipsVideo(clipIds: string[]): Job[] {
   return clipIds.map((id) => generateClipVideo(id))
 }
 
-/** Turns every clip that has an image but no AI video yet into a video. */
-export function generateMissingVideos(projectId: string, episodeId?: string): Job[] {
+/**
+ * Turns every clip that has an image into a video (§6.J).
+ * Aborts entire batch if any candidate is blocked.
+ */
+export function generateMissingVideos(projectId: string, episodeId?: string, includeStale = false): Job[] {
+  const project = getProject(projectId)
   const clips = clipsOf(projectId, episodeId)
-  if (clips.some((c) => !c.imageAssetId)) throw new Error('Buat gambar semua klip dulu sebelum menjadikannya video.')
-  return clips.filter((c) => !c.videoAssetId).map((c) => generateClipVideo(c.id))
+  const chars = charactersOf(projectId)
+  const derivs = derivativesOf(projectId)
+  const locs = locationsOf(projectId)
+  const props = propsOf(projectId)
+  const assets = assetsOf(projectId)
+  const activeJobs = activeJobsOf(projectId)
+  const ctx: GenerationPrerequisitesContext = {
+    characters: chars,
+    derivatives: derivs,
+    locations: locs,
+    props,
+    assets,
+    activeJobs,
+    isFlow2Api: isFlow2Api()
+  }
+
+  const candidates: Clip[] = []
+  const blockers: { clipIndex: number; title: string; reasons: string[] }[] = []
+
+  for (let i = 0; i < clips.length; i++) {
+    const c = clips[i]
+    const statusRes = getClipVideoStatus(c, project, ctx)
+    if (statusRes.status === 'blocked') {
+      blockers.push({ clipIndex: i + 1, title: c.title || `Shot ${i + 1}`, reasons: statusRes.blockers })
+    } else if (statusRes.status === 'missing' || (includeStale && statusRes.status === 'stale')) {
+      candidates.push(c)
+    }
+  }
+
+  if (blockers.length > 0) {
+    const details = blockers.map((b) => `Shot ${b.clipIndex} (${b.title}):\n  • ${b.reasons.join('\n  • ')}`).join('\n')
+    throw new Error(`Batch video dibatalkan (aturan semua-atau-tidak-sama-sekali).\nBeberapa adegan terblokir:\n${details}`)
+  }
+
+  const jobs: Job[] = []
+  for (const clip of candidates) {
+    jobs.push(generateClipVideo(clip.id))
+  }
+  return jobs
 }
 
 export function generateMissingTts(projectId: string, episodeId?: string): Job[] {
   return clipsOf(projectId, episodeId)
     .filter((c) => !c.audioAssetId && c.narration.trim())
     .map((c) => generateClipTts(c.id))
+}
+
+/**
+ * Batch estimation calculation (§6.J and §4).
+ * Returns item count, credit estimate, status per item, and blockers.
+ */
+export async function batchEstimate(
+  projectId: string,
+  episodeId: string | undefined,
+  kind: 'image' | 'video',
+  includeStale = false
+): Promise<BatchEstimateResult> {
+  const project = getProject(projectId)
+  const clips = clipsOf(projectId, episodeId)
+  const chars = charactersOf(projectId)
+  const derivs = derivativesOf(projectId)
+  const locs = locationsOf(projectId)
+  const props = propsOf(projectId)
+  const assets = assetsOf(projectId)
+  const activeJobs = activeJobsOf(projectId)
+  const flow2api = isFlow2Api()
+  const ctx: GenerationPrerequisitesContext = {
+    characters: chars,
+    derivatives: derivs,
+    locations: locs,
+    props,
+    assets,
+    activeJobs,
+    isFlow2Api: flow2api
+  }
+
+  let singleCredit = 1
+  if (!flow2api) {
+    try {
+      const est = await estimateCredits(
+        kind,
+        (kind === 'image' ? project.imageModel : project.videoModel) || '',
+        project.aspectRatio,
+        5
+      )
+      if (est && typeof est.credits === 'number') singleCredit = est.credits
+      else singleCredit = kind === 'video' ? 10 : 1
+    } catch {
+      singleCredit = kind === 'video' ? 10 : 1
+    }
+  } else {
+    singleCredit = kind === 'video' ? 5 : 1
+  }
+
+  const items: BatchEstimateItem[] = []
+  let blockedCount = 0
+  let missingCount = 0
+  let staleCount = 0
+
+  const modelName =
+    kind === 'image'
+      ? flow2api
+        ? project.imageModel || getSettings().flow2apiImageModel
+        : project.imageModel || 'Soul v2'
+      : flow2api
+        ? project.videoModel || getSettings().flow2apiVideoModel
+        : project.videoModel || 'Veo 3.1'
+
+  for (let i = 0; i < clips.length; i++) {
+    const clip = clips[i]
+    const statusRes = kind === 'image' ? getClipImageStatus(clip, project, ctx) : getClipVideoStatus(clip, project, ctx)
+
+    if (statusRes.status === 'blocked') blockedCount++
+    if (statusRes.status === 'missing') missingCount++
+    if (statusRes.status === 'stale') staleCount++
+
+    const isTarget = statusRes.status === 'missing' || (includeStale && statusRes.status === 'stale') || statusRes.status === 'blocked'
+    if (isTarget) {
+      items.push({
+        clipId: clip.id,
+        clipIndex: i + 1,
+        title: clip.title || `Shot ${i + 1}`,
+        kind,
+        model: modelName,
+        status: statusRes.status,
+        blockers: statusRes.blockers,
+        estimatedCredits: singleCredit
+      })
+    }
+  }
+
+  const targetItems = items.filter((it) => it.status === 'missing' || (includeStale && it.status === 'stale'))
+  const totalCredits = targetItems.reduce((acc, it) => acc + it.estimatedCredits, 0)
+  const canRun = blockedCount === 0 && targetItems.length > 0
+
+  return {
+    canRun,
+    totalItems: targetItems.length,
+    totalCredits: Math.round(totalCredits * 10) / 10,
+    items,
+    blockedCount,
+    missingCount,
+    staleCount
+  }
 }
 
 /** After a restart, keep polling Higgsfield requests that were already submitted; fail the rest. */

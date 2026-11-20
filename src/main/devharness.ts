@@ -5,11 +5,16 @@ import { app, type BrowserWindow } from 'electron'
 import ffmpegStatic from 'ffmpeg-static'
 import { estimateWordTimings } from '@shared/captions'
 import { anchorPoint } from '@shared/overlays'
+import { NO_MUSIC } from '@shared/higgsfield'
+import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt } from '@shared/prompts'
+import { computeClipImageBasisHash } from '@shared/hash'
+import { checkClipImagePrerequisites, getClipImageStatus } from '@shared/validation'
 import { startExport } from './exporter'
 import { assetAbsPath, binPath } from './paths'
 import { probeDurationMs } from './services/audio'
 import { confirmEpisodeScriptRepo, createEpisode, createProject, getBundle, insertAsset, listEpisodes, patchClip, replaceStory, saveSnapshot, touchProject } from './repo'
 import { planEpisodes, writePrompts } from './story'
+import { batchEstimate, generateMissingImages } from './generation'
 import { recordCheck, setSecret } from './secrets'
 import type { ApiProvider, EpisodeScriptDraft, ExportOptions } from '@shared/types'
 
@@ -471,6 +476,129 @@ export async function checkPhase3(projectId: string): Promise<boolean> {
   return true
 }
 
+async function checkPhase4(projectId: string): Promise<boolean> {
+  const episodes = listEpisodes(projectId)
+  const ep = episodes[0]
+  if (!ep) throw new Error('Episode tidak ditemukan')
+
+  // Run checkPhase3 first to ensure lorebook entities & clips exist
+  await checkPhase3(projectId)
+
+  const bundle = getBundle(projectId, ep.id)
+  const clip = bundle.clips[0]
+  const project = bundle.project
+
+  // 1. Test prompts compilation
+  const prompt = compileClipPrompt({
+    project,
+    clip,
+    characters: bundle.characters,
+    derivatives: bundle.derivatives,
+    locations: bundle.locations,
+    props: bundle.props
+  })
+  if (!prompt.includes('Pendekar') || !prompt.includes('Wardrobe:') || !prompt.includes('Setting:')) {
+    throw new Error(`compileClipPrompt tidak menghasilkan blok yang diharapkan: ${prompt}`)
+  }
+
+  const vidPrompt = compileClipVideoPrompt(project, clip, bundle.characters)
+  if (!vidPrompt.endsWith(NO_MUSIC)) {
+    throw new Error(`compileClipVideoPrompt harus diakhiri dengan NO_MUSIC: ${vidPrompt}`)
+  }
+
+  // 2. Test 4-tier reference collecting
+  const refs = collectReferenceSheets(
+    clip,
+    bundle.characters,
+    bundle.derivatives,
+    bundle.locations,
+    bundle.props
+  )
+  console.log(`[checkPhase4] Prompt compilation OK, refs count: ${refs.length}`)
+
+  // 3. Test prerequisite validation (blocked because characters/locations have no sheet assets yet)
+  const prereqCtx = {
+    characters: bundle.characters,
+    derivatives: bundle.derivatives,
+    locations: bundle.locations,
+    props: bundle.props,
+    assets: bundle.assets,
+    activeJobs: []
+  }
+
+  const imgPrereq = checkClipImagePrerequisites(clip, project, prereqCtx)
+  if (imgPrereq.ok) {
+    throw new Error('checkClipImagePrerequisites seharusnya memblokir klip karena belum ada lembar karakter/lokasi!')
+  }
+  if (!imgPrereq.blockers.some((b) => b.includes('lembar'))) {
+    throw new Error(`Alasan blocker tidak menyebutkan lembar: ${imgPrereq.blockers.join(', ')}`)
+  }
+
+  const imgStatus = getClipImageStatus(clip, project, prereqCtx)
+  if (imgStatus.status !== 'blocked') {
+    throw new Error(`Status gambar harus 'blocked', didapat '${imgStatus.status}'`)
+  }
+
+  // 4. Test basis hash computation
+  const hash1 = computeClipImageBasisHash({
+    project,
+    clip,
+    characters: bundle.characters,
+    derivatives: bundle.derivatives,
+    locations: bundle.locations,
+    props: bundle.props,
+    refSheetAssetIds: []
+  })
+  const hash2 = computeClipImageBasisHash({
+    project,
+    clip,
+    characters: bundle.characters,
+    derivatives: bundle.derivatives,
+    locations: bundle.locations,
+    props: bundle.props,
+    refSheetAssetIds: []
+  })
+  if (hash1 !== hash2) {
+    throw new Error('computeClipImageBasisHash tidak deterministik!')
+  }
+
+  const modifiedClip = { ...clip, visualPrompt: clip.visualPrompt + ' additional detail' }
+  const hashModified = computeClipImageBasisHash({
+    project,
+    clip: modifiedClip,
+    characters: bundle.characters,
+    derivatives: bundle.derivatives,
+    locations: bundle.locations,
+    props: bundle.props,
+    refSheetAssetIds: []
+  })
+  if (hash1 === hashModified) {
+    throw new Error('computeClipImageBasisHash tidak berubah saat prompt diubah!')
+  }
+
+  // 5. Test batchEstimate and all-or-nothing
+  const estimate = await batchEstimate(projectId, ep.id, 'image', false)
+  if (estimate.canRun) {
+    throw new Error('batchEstimate.canRun seharusnya false karena ada klip yang terblokir!')
+  }
+  if (!estimate.items.some((it) => it.status === 'blocked')) {
+    throw new Error('batchEstimate seharusnya mendata item berstatus blocked!')
+  }
+
+  let rejected = false
+  try {
+    await generateMissingImages(projectId, ep.id, false)
+  } catch (err) {
+    rejected = (err as Error).message.includes('terblokir')
+  }
+  if (!rejected) {
+    throw new Error('generateMissingImages seharusnya menolak batch dengan aturan all-or-nothing!')
+  }
+
+  console.log('[checkPhase4] Semua pengujian backend Fase 4 BERHASIL!')
+  return true
+}
+
 /**
  * For harness runs: keep painting and timers going while the test window sits behind other windows, so
  * screenshots show the current state. Must run before the app is ready.
@@ -501,7 +629,7 @@ export function attachDevHarness(win: BrowserWindow): void {
   const planPath = process.env.STUDIO_CAPTURE_PLAN
   if (!planPath) return
   let plan: {
-    main?: 'seed' | 'seedEpisodes' | 'checkIsolation' | 'checkPhase3' | 'export' | 'key' | 'overlays' | 'speech' | 'videos'
+    main?: 'seed' | 'seedEpisodes' | 'checkIsolation' | 'checkPhase3' | 'checkPhase4' | 'export' | 'key' | 'overlays' | 'speech' | 'videos'
     openProject?: boolean
     exportTo?: string
     encoder?: ExportOptions['encoder']
@@ -538,6 +666,7 @@ export function attachDevHarness(win: BrowserWindow): void {
         if (step.main === 'seedEpisodes') demoId = seedEpisodes().projectId
         if (step.main === 'checkIsolation' && (step.projectId ?? demoId)) checkIsolation((step.projectId ?? demoId)!)
         if (step.main === 'checkPhase3' && (step.projectId ?? demoId)) await checkPhase3((step.projectId ?? demoId)!)
+        if (step.main === 'checkPhase4' && (step.projectId ?? demoId)) await checkPhase4((step.projectId ?? demoId)!)
         if (step.openProject && demoId) {
           await win.webContents.executeJavaScript(`(() => { window.useApp?.getState().go({ name: 'project', id: ${JSON.stringify(demoId)} }); })()`)
         }

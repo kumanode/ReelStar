@@ -421,12 +421,12 @@ export function LorebookPage() {
                     key={char.id}
                     onClick={() => setSelectedId(char.id)}
                     className={cx(
-                      'group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-surface transition-all hover:border-ink-2',
-                      isSelected ? 'border-accent ring-2 ring-accent shadow-sm' : 'border-line shadow-xs'
+                      'group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-surface transition-all',
+                      isSelected ? 'border-ink bg-sun-soft/25 shadow-ink' : 'border-line hover:border-ink-2 hover:shadow-xs'
                     )}
                   >
                     {/* Thumbnail: 3-view character sheet */}
-                    <div className="relative aspect-[16/9] w-full overflow-hidden bg-sand/40">
+                    <div className="relative aspect-[16/9] w-full overflow-hidden border-b border-line bg-sand">
                       {sheet ? (
                         <img src={sheet.url} alt={char.name} className="size-full object-contain" />
                       ) : (
@@ -444,7 +444,7 @@ export function LorebookPage() {
                                 e.stopPropagation()
                                 open()
                               }}
-                              className="flex size-6 items-center justify-center rounded-md bg-surface/90 text-muted shadow-xs hover:text-ink"
+                              className="flex size-6 items-center justify-center rounded-lg border border-line-2 bg-surface/95 text-muted transition-colors hover:border-ink hover:text-ink"
                             >
                               <MoreVertical className="size-3.5" />
                             </button>
@@ -514,11 +514,11 @@ export function LorebookPage() {
                     key={loc.id}
                     onClick={() => setSelectedId(loc.id)}
                     className={cx(
-                      'group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-surface transition-all hover:border-ink-2',
-                      isSelected ? 'border-accent ring-2 ring-accent shadow-sm' : 'border-line shadow-xs'
+                      'group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-surface transition-all',
+                      isSelected ? 'border-ink bg-sun-soft/25 shadow-ink' : 'border-line hover:border-ink-2 hover:shadow-xs'
                     )}
                   >
-                    <div className="relative aspect-[16/9] w-full overflow-hidden bg-sand/40">
+                    <div className="relative aspect-[16/9] w-full overflow-hidden border-b border-line bg-sand">
                       {sheet ? (
                         <img src={sheet.url} alt={loc.name} className="size-full object-cover" />
                       ) : (
@@ -536,7 +536,7 @@ export function LorebookPage() {
                                 e.stopPropagation()
                                 open()
                               }}
-                              className="flex size-6 items-center justify-center rounded-md bg-surface/90 text-muted shadow-xs hover:text-ink"
+                              className="flex size-6 items-center justify-center rounded-lg border border-line-2 bg-surface/95 text-muted transition-colors hover:border-ink hover:text-ink"
                             >
                               <MoreVertical className="size-3.5" />
                             </button>
@@ -594,11 +594,11 @@ export function LorebookPage() {
                     key={pr.id}
                     onClick={() => setSelectedId(pr.id)}
                     className={cx(
-                      'group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-surface transition-all hover:border-ink-2',
-                      isSelected ? 'border-accent ring-2 ring-accent shadow-sm' : 'border-line shadow-xs'
+                      'group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-surface transition-all',
+                      isSelected ? 'border-ink bg-sun-soft/25 shadow-ink' : 'border-line hover:border-ink-2 hover:shadow-xs'
                     )}
                   >
-                    <div className="relative aspect-square w-full overflow-hidden bg-sand/40">
+                    <div className="relative aspect-square w-full overflow-hidden border-b border-line bg-sand">
                       {sheet ? (
                         <img src={sheet.url} alt={pr.name} className="size-full object-contain" />
                       ) : (
@@ -616,7 +616,7 @@ export function LorebookPage() {
                                 e.stopPropagation()
                                 open()
                               }}
-                              className="flex size-6 items-center justify-center rounded-md bg-surface/90 text-muted shadow-xs hover:text-ink"
+                              className="flex size-6 items-center justify-center rounded-lg border border-line-2 bg-surface/95 text-muted transition-colors hover:border-ink hover:text-ink"
                             >
                               <MoreVertical className="size-3.5" />
                             </button>
@@ -855,13 +855,13 @@ export function LorebookPage() {
                       return (
                         <div
                           key={variant.id}
-                          className="flex flex-col gap-2 rounded-xl border border-line-2 bg-paper p-3 text-xs"
+                          className="flex flex-col gap-2 rounded-xl border border-line bg-paper p-3 text-xs"
                         >
                           <div className="flex items-start justify-between gap-2">
                             <input
                               defaultValue={variant.name}
                               onBlur={(e) => void updateDerivative(variant.id, { name: e.target.value })}
-                              className="font-bold text-ink bg-transparent border-b border-transparent hover:border-line focus:border-ink outline-none"
+                              className="font-bold text-ink bg-transparent border-b border-transparent hover:border-line focus:border-ink outline-none transition-colors"
                             />
                             <div className="flex items-center gap-1">
                               {isStale && (
@@ -872,7 +872,7 @@ export function LorebookPage() {
                               <button
                                 type="button"
                                 onClick={() => void removeDerivative(variant.id)}
-                                className="text-muted hover:text-bad-ink p-1"
+                                className="rounded p-1 text-muted transition-colors hover:bg-bad-soft hover:text-bad-ink"
                                 title="Hapus varian kostum"
                               >
                                 <Trash2 className="size-3.5" />
@@ -886,7 +886,7 @@ export function LorebookPage() {
                             placeholder="Deskripsi perubahan pakaian atau gaya..."
                             minRows={1}
                             maxHeight={120}
-                            className="w-full rounded border border-line-2 bg-surface p-2 text-xs text-ink outline-none focus:border-ink"
+                            className="w-full rounded-lg border border-line-2/70 bg-surface p-2 text-xs text-ink outline-none transition-colors focus:border-ink"
                           />
 
                           <div className="flex items-center gap-2 pt-1">
@@ -894,10 +894,10 @@ export function LorebookPage() {
                               <img
                                 src={variantSheet.url}
                                 alt={variant.name}
-                                className="size-10 rounded object-contain border border-line bg-surface"
+                                className="size-10 rounded-lg border border-line bg-surface object-contain"
                               />
                             ) : (
-                              <div className="flex size-10 items-center justify-center rounded border border-dashed border-line text-muted">
+                              <div className="flex size-10 items-center justify-center rounded-lg border border-dashed border-line-2 bg-surface text-muted">
                                 <Shirt className="size-4" />
                               </div>
                             )}

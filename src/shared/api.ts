@@ -4,6 +4,7 @@ import type {
   AppSettings,
   Asset,
   AssetUsageSummary,
+  BatchEstimateResult,
   BuiltinSfx,
   Character,
   CharacterDerivative,
@@ -114,11 +115,11 @@ export interface StudioApi {
     clipVideo(clipId: string): Promise<Job>
     clipTts(clipId: string): Promise<Job>
     characterSheet(characterId: string): Promise<Job>
-    missingImages(projectId: string): Promise<Job[]>
+    missingImages(projectId: string, episodeId?: string, includeStale?: boolean): Promise<Job[]>
     /** An AI video for every clip that has an image but no video yet. */
-    missingVideos(projectId: string): Promise<Job[]>
+    missingVideos(projectId: string, episodeId?: string, includeStale?: boolean): Promise<Job[]>
     clipsVideo(clipIds: string[]): Promise<Job[]>
-    missingTts(projectId: string): Promise<Job[]>
+    missingTts(projectId: string, episodeId?: string): Promise<Job[]>
     /** Voices scenes in one continuous take and cuts it per scene: those without a voice, or all of them. */
     narration(projectId: string, mode: 'missing' | 'all'): Promise<Job>
     /** Re-times caption words of voiced scenes against the audio with the local Whisper model. */
@@ -127,6 +128,7 @@ export interface StudioApi {
     cancelProject(projectId: string, kind?: string): Promise<void>
     /** Credits for one image, or one video of about `seconds`, with this model. Null without a working key. */
     estimate(kind: 'image' | 'video', modelId: string, aspect: AspectRatio, seconds?: number, resolution?: string | null): Promise<CreditEstimate | null>
+    batchEstimate(projectId: string, episodeId: string | undefined, kind: 'image' | 'video', includeStale?: boolean): Promise<BatchEstimateResult>
   }
   clips: {
     /** Splits a clip at `atMs` into two clips (picture, voice and narration divided at the nearest pause). */

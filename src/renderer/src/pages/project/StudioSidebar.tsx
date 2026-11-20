@@ -4,12 +4,12 @@ import { cx } from '../../components/ui'
 import { useProject } from '../../store/project'
 
 const STATUS_DOT: Record<EpisodeStatus, string> = {
-  draft: 'bg-sand-dark border border-line-2',
-  planned: 'bg-amber-500',
-  script: 'bg-sky-500',
-  storyboard: 'bg-purple-500',
-  editing: 'bg-orange-500',
-  exported: 'bg-emerald-500'
+  draft: 'bg-sand border border-line-2',
+  planned: 'bg-info-ink',
+  script: 'bg-sun-ink',
+  storyboard: 'bg-accent',
+  editing: 'bg-accent-dark',
+  exported: 'bg-ok-ink'
 }
 
 const STATUS_LABEL: Record<EpisodeStatus, string> = {
@@ -47,7 +47,7 @@ export function StudioSidebar() {
     <aside
       className={cx(
         'flex shrink-0 flex-col border-r border-line bg-surface transition-all duration-200 select-none',
-        sidebarCollapsed ? 'w-12 items-center' : 'w-[200px]'
+        sidebarCollapsed ? 'w-12 items-center' : 'w-[220px]'
       )}
     >
       {/* Top bar: Collapse toggle */}
@@ -56,7 +56,7 @@ export function StudioSidebar() {
         <button
           type="button"
           onClick={toggleSidebar}
-          className="flex size-7 items-center justify-center rounded-lg text-muted hover:bg-sand hover:text-ink"
+          className="flex size-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-sand hover:text-ink"
           title={sidebarCollapsed ? 'Buka bilah samping (≡)' : 'Ciutkan bilah samping'}
         >
           {sidebarCollapsed ? <PanelLeft className="size-4" /> : <PanelLeftClose className="size-4" />}
@@ -71,7 +71,7 @@ export function StudioSidebar() {
           title="Episode Hub"
           className={cx(
             'flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs font-semibold transition-colors',
-            activeView === 'hub' ? 'bg-sun-soft text-ink shadow-sm' : 'text-ink-2 hover:bg-sand hover:text-ink',
+            activeView === 'hub' ? 'bg-sun-soft text-ink' : 'text-ink-2 hover:bg-sand hover:text-ink',
             sidebarCollapsed && 'justify-center px-0'
           )}
         >
@@ -85,7 +85,7 @@ export function StudioSidebar() {
           title="Lorebook"
           className={cx(
             'flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs font-semibold transition-colors',
-            activeView === 'lorebook' ? 'bg-sun-soft text-ink shadow-sm' : 'text-ink-2 hover:bg-sand hover:text-ink',
+            activeView === 'lorebook' ? 'bg-sun-soft text-ink' : 'text-ink-2 hover:bg-sand hover:text-ink',
             sidebarCollapsed && 'justify-center px-0'
           )}
         >
@@ -102,11 +102,11 @@ export function StudioSidebar() {
       <div className={cx('flex w-full items-center px-2.5 pt-3 pb-1', sidebarCollapsed ? 'justify-center' : 'justify-between')}>
         {!sidebarCollapsed ? (
           <>
-            <span className="text-[11px] font-bold tracking-wider text-muted uppercase">Episode</span>
+            <span className="font-display text-[11px] font-bold tracking-wider text-muted uppercase">Episode</span>
             <button
               type="button"
               onClick={() => void handleAddEpisode()}
-              className="flex size-5 items-center justify-center rounded text-muted hover:bg-sand hover:text-ink"
+              className="flex size-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-sand hover:text-ink"
               title="Tambah episode baru"
             >
               <Plus className="size-3.5" />
@@ -116,7 +116,7 @@ export function StudioSidebar() {
           <button
             type="button"
             onClick={() => void handleAddEpisode()}
-            className="flex size-7 items-center justify-center rounded-lg text-muted hover:bg-sand hover:text-ink"
+            className="flex size-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-sand hover:text-ink"
             title="Tambah episode baru"
           >
             <Plus className="size-4" />
@@ -142,7 +142,7 @@ export function StudioSidebar() {
                 title={`Ep ${ep.episodeNum}: ${ep.title} (${STATUS_LABEL[ep.status]})`}
                 className={cx(
                   'relative flex size-8 items-center justify-center rounded-lg font-mono text-xs font-bold transition-colors',
-                  isActive ? 'bg-sun-soft text-ink ring-1 ring-accent' : 'text-ink-2 hover:bg-sand hover:text-ink'
+                  isActive ? 'bg-sun-soft text-ink' : 'text-ink-2 hover:bg-sand hover:text-ink'
                 )}
               >
                 <span>{ep.episodeNum}</span>

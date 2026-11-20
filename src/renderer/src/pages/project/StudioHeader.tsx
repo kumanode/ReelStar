@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react'
-import { ArrowLeft, CheckCircle2, AlertCircle, Loader2, Pencil, MoreVertical, Copy, Download, Trash2 } from 'lucide-react'
-import { Badge, IconButton, Menu, confirmDialog } from '../../components/ui'
+import { useState, useMemo, useRef } from 'react'
+import { ArrowLeft, CheckCircle2, AlertCircle, Loader2, Pencil, MoreVertical, Copy, Download, Trash2, Coins } from 'lucide-react'
+import { Button, IconButton, Menu, confirmDialog, cx } from '../../components/ui'
 import { Select } from '../../components/Select'
+import { Popover } from '../../components/Popover'
 import { ThemeToggle } from '../../components/ThemeToggle'
 import { relativeTime, errorText } from '../../lib/format'
 import { useApp } from '../../store/app'
@@ -48,6 +49,8 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
   const { project, episode, episodes, switchEpisode, updateProject, flush, jobs } = useProject()
   const { go, toast } = useApp()
   const [editingTitle, setEditingTitle] = useState(false)
+  const [creditOpen, setCreditOpen] = useState(false)
+  const creditAnchor = useRef<HTMLButtonElement | null>(null)
 
   const episodeOptions = useMemo(() => {
     return episodes.map((ep) => ({
@@ -56,17 +59,26 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
     }))
   }, [episodes])
 
-  // Count estimated credits used from completed generation jobs
-  const usedCredits = useMemo(() => {
-    let sum = 0
+  // Count estimated credits used per episode from completed generation jobs
+  const episodeCreditsMap = useMemo(() => {
+    const map = new Map<string, number>()
     for (const j of Object.values(jobs)) {
       if (j.status === 'done') {
         const payload = (j as any).payload ?? {}
-        sum += typeof payload.credits === 'number' ? payload.credits : 10
+        const creds = typeof payload.credits === 'number' ? payload.credits : j.kind === 'video' ? 10 : 1
+        const epKey = j.episodeId || 'unassigned'
+        map.set(epKey, (map.get(epKey) ?? 0) + creds)
       }
     }
-    return sum
+    return map
   }, [jobs])
+
+  const currentEpisodeCredits = episode?.id ? episodeCreditsMap.get(episode.id) ?? 0 : 0
+  const totalSeriesCredits = useMemo(() => {
+    let sum = 0
+    for (const c of episodeCreditsMap.values()) sum += c
+    return sum
+  }, [episodeCreditsMap])
 
   if (!project) return null
 
@@ -98,7 +110,7 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
   }
 
   return (
-    <header className="grid h-16 shrink-0 grid-cols-[auto_1fr_auto] items-center gap-4 border-b border-line bg-surface px-4 shadow-sm">
+    <header className="grid h-16 shrink-0 grid-cols-[auto_1fr_auto] items-center gap-4 border-b border-line bg-surface px-4">
       {/* Left: Back button, Serial title, Aspect ratio, Episode selector */}
       <div className="flex min-w-0 items-center gap-3">
         <IconButton
@@ -125,7 +137,7 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
                 if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
                 if (e.key === 'Escape') setEditingTitle(false)
               }}
-              className="h-8 w-56 rounded-lg border border-ink bg-surface px-2 font-display text-base font-bold outline-none"
+              className="h-8 w-56 rounded-lg border border-line-2 bg-paper px-2.5 font-display text-base font-bold text-ink outline-none transition-colors focus:border-ink"
             />
           ) : (
             <div className="flex items-center gap-1.5">
@@ -140,21 +152,21 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
                 type="button"
                 aria-label="Ganti nama serial"
                 onClick={() => setEditingTitle(true)}
-                className="flex size-6 shrink-0 items-center justify-center rounded text-muted hover:bg-sand hover:text-ink"
+                className="flex size-6 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-line-2 hover:bg-sand hover:text-ink"
               >
                 <Pencil className="size-3" />
               </button>
             </div>
           )}
 
-          <Badge tone="ink" className="text-[11px] font-mono">
+          <span className="rounded-md border border-line-2 bg-sand px-2 py-0.5 font-mono text-[11px] font-bold text-ink-2">
             {project.aspectRatio}
-          </Badge>
+          </span>
         </div>
 
         {/* Episode selector */}
         {episodes.length > 0 && episode && (
-          <div className="w-48">
+          <div className="min-w-[180px] max-w-[260px]">
             <Select
               label="Pilih episode"
               value={episode.id}
@@ -173,26 +185,70 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
 
       {/* Right: Credits, Menu, Theme */}
       <div className="flex items-center gap-2.5">
-        <div
-          className="flex items-center gap-1.5 rounded-full border border-line bg-sand px-3 py-1 text-xs font-semibold text-ink"
-          title={`Total estimasi kredit terpakai untuk serial ini: ${usedCredits}`}
-        >
-          <span className="text-accent-dark">◆</span>
-          <span>{usedCredits.toLocaleString()} kredit</span>
+        <div className="relative">
+          <button
+            ref={creditAnchor}
+            type="button"
+            onClick={() => setCreditOpen((prev) => !prev)}
+            className="flex items-center gap-1.5 rounded-full border border-line bg-sand px-3 py-1 text-xs font-semibold text-ink hover:border-ink"
+            title={`Total kredit terpakai di Ep ${episode?.episodeNum ?? 1}: ${currentEpisodeCredits}. Klik untuk rincian semua episode.`}
+          >
+            <span className="text-accent-dark">◆</span>
+            <span>{currentEpisodeCredits.toLocaleString('id-ID')} kredit</span>
+            {episode && (
+              <span className="font-mono text-[10px] text-muted">(Ep {episode.episodeNum})</span>
+            )}
+          </button>
+          <Popover
+            anchor={creditAnchor}
+            open={creditOpen}
+            onClose={() => setCreditOpen(false)}
+            width={280}
+            align="right"
+          >
+            <div className="flex flex-col gap-2.5 p-3.5">
+              <div className="flex items-center gap-2 border-b border-line pb-2">
+                <Coins className="size-4 text-accent" />
+                <span className="font-display text-xs font-bold text-ink">Penggunaan Kredit Serial</span>
+              </div>
+              <div className="flex flex-col gap-1.5 text-xs">
+                {episodes.map((ep) => {
+                  const creds = episodeCreditsMap.get(ep.id) ?? 0
+                  const isCur = ep.id === episode?.id
+                  return (
+                    <div
+                      key={ep.id}
+                      className={cx(
+                        'flex items-center justify-between rounded-lg px-2 py-1',
+                        isCur ? 'bg-sun-soft font-semibold text-sun-ink' : 'text-ink'
+                      )}
+                    >
+                      <span className="truncate">Ep {ep.episodeNum}: {ep.title}</span>
+                      <span className="font-mono text-[11px]">{creds.toLocaleString('id-ID')} kr</span>
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="mt-1 flex items-center justify-between border-t border-line pt-2 text-xs font-bold text-ink">
+                <span>Total Seluruh Serial</span>
+                <span className="font-mono text-accent-dark">{totalSeriesCredits.toLocaleString('id-ID')} kredit</span>
+              </div>
+            </div>
+          </Popover>
         </div>
 
         <ThemeToggle />
 
         {onOpenExport && (
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Download className="size-3.5" />}
             onClick={onOpenExport}
-            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-line-2 bg-surface px-3 text-xs font-semibold text-ink hover:border-ink hover:bg-paper"
             title="Ekspor episode aktif"
           >
-            <Download className="size-3.5" />
             Ekspor
-          </button>
+          </Button>
         )}
 
         <Menu

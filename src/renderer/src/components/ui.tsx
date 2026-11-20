@@ -146,9 +146,9 @@ const TONES: Record<Tone, string> = {
   ink: 'bg-ink text-paper'
 }
 
-export function Badge({ tone = 'draft', children, className }: { tone?: Tone; children: ReactNode; className?: string }) {
+export function Badge({ tone = 'draft', children, className, title }: { tone?: Tone; children: ReactNode; className?: string; title?: string | null }) {
   return (
-    <span className={cx('inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-[3px] text-xs font-semibold', TONES[tone], className)}>
+    <span title={title ?? undefined} className={cx('inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-[3px] text-xs font-semibold', TONES[tone], className)}>
       {children}
     </span>
   )

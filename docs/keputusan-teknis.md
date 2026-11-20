@@ -207,3 +207,18 @@ Karakter, lokasi, dan prop didaftarkan di tingkat proyek (serial) dan dirujuk li
 
 ### Penggabungan aset atomik dengan analisis dampak
 Aset duplikat dapat digabungkan langsung dengan ringkasan dampak per episode (jumlah rujukan klip yang dialihkan dan media yang menjadi basi). Pengalihan rujukan (`characterIds`, `speakerId`, `costumeIds`, `locationId`, `propIds`) dilakukan dalam satu transaksi database SQLite di level proyek.
+
+### Kompilasi prompt terstruktur dengan 4 lapis prioritas referensi
+Prompt visual dan video adegan dirakit oleh modul terpusat di `src/shared/prompts.ts` agar hasil pembuatan gambar/video konsisten antara pratinjau dan ekspor. Modul ini menyusun blok berlabel eksplisit (`Setting:`, `Props:`, `Emotion:`, `Framing:`, `Wardrobe:`, `Recurring characters:`, `Art style:`, dan `Avoid:`). Lembar referensi disusun berdasarkan 4 tingkat prioritas tegas: (1) lembar varian kostum tokoh pembicara/fokus jika ada, jika tidak lembar dasar tokoh pembicara; (2) lembar karakter lain yang tampil di adegan; (3) lembar lokasi utama adegan; (4) lembar prop yang terlihat. Jumlah gambar referensi dipotong otomatis sesuai kapasitas model (`maxRefs(model)`). Prompt video selalu diakhiri dengan klausa pelarangan musik otomatis (`NO_MUSIC`).
+
+### Hash basis deterministik 64-bit FNV-1a dan status dinamis
+Status aset (`current`, `stale`, `missing`, `blocked`) tidak disimpan sebagai kolom mutabel di SQLite. Sebaliknya, hash input disimpan di metadata aset (`asset.meta.basisHash`) saat media berhasil dibuat. Hash ini dihitung menggunakan algoritma deterministik FNV-1a 64-bit di `src/shared/hash.ts` yang mencakup: prompt visual, rasio aspek, model, gaya seni, ID lembar referensi, dan hash lembar referensi terkait. Perubahan pada naskah, prompt, kostum, atau pembaruan lembar karakter otomatis membuat status adegan menjadi `stale` (Basi) secara dinamis tanpa perlu batch update di database.
+
+### Validasi prasyarat pra-generasi terpusat (canGenerateClip)
+Untuk mencegah pemborosan kredit AI pada adegan yang belum siap, fungsi validasi tunggal di `src/shared/validation.ts` memeriksa seluruh kondisi sebelum pembuatan gambar atau video dipicu. Pembuatan diblokir (`blocked`) jika: tokoh atau varian kostum di adegan belum memiliki lembar karakter yang siap, lokasi atau prop belum memiliki gambar referensi, pembicara dialog tidak terdaftar di antara pemeran adegan, atau durasi klip berada di luar batas durasi model video. UI Storyboard menonaktifkan tombol dan menampilkan tooltip alasan spesifik, sementara main process menolak permintaan secara tegas.
+
+### Aturan All-or-Nothing pada ekspor dan generasi batch
+Pembuatan gambar dan video massal melalui `generate.missingImages` dan `generate.missingVideos` menerapkan aturan all-or-nothing: jika terdapat satu saja klip yang terblokir (`blocked`), seluruh batch otomatis digagalkan sebelum kredit terpotong sedikit pun. Dialog estimasi batch (`BatchEstimateModal`) memvalidasi seluruh item terlebih dahulu, menampilkan rincian kredit per model, dan mendaftar seluruh adegan bermasalah dengan tautan langsung agar kreator dapat memperbaikinya sebelum memulai proses.
+
+### Pelacakan kredit per episode pada serial
+Kredit Higgsfield yang terpakai dihitung secara akurat dari riwayat job yang telah selesai (`jobs` dengan status `completed` dan `job.meta.creditsUsed`). Header Studio menampilkan jumlah kredit yang digunakan khusus untuk episode yang sedang dibuka, serta menyediakan popover rincian penggunaan kredit di seluruh episode dalam serial tersebut.

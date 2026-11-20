@@ -1990,6 +1990,10 @@ export function getAsset(id: string | null): Asset | null {
   return r ? toAsset(r) : null
 }
 
+export function assetsOf(projectId: string): Asset[] {
+  return (getDb().prepare('SELECT * FROM assets WHERE project_id = ? ORDER BY created_at').all(projectId) as Row[]).map(toAsset)
+}
+
 export function insertAsset(a: {
   id?: string
   projectId: string
@@ -2109,6 +2113,10 @@ export function updateJob(
 
 export function unfinishedJobs(): Row[] {
   return getDb().prepare("SELECT * FROM jobs WHERE status IN ('queued','running')").all() as Row[]
+}
+
+export function activeJobsOf(projectId: string): Job[] {
+  return (getDb().prepare("SELECT * FROM jobs WHERE project_id = ? AND status IN ('queued','running')").all(projectId) as Row[]).map(toJob)
 }
 
 /** A queued or running job of this kind, such as a narration take. Scoped to episodeId when provided. */

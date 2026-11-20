@@ -181,11 +181,11 @@ export function MergeAssetModal({
                     className={cx(
                       'flex flex-col items-center gap-2 rounded-xl border p-2.5 text-center transition-all',
                       isSelected
-                        ? 'border-accent bg-accent-soft text-accent-dark ring-2 ring-accent'
-                        : 'border-line bg-surface hover:border-ink-2 hover:bg-sand/30'
+                        ? 'border-ink bg-sun-soft text-ink shadow-ink font-semibold'
+                        : 'border-line bg-surface hover:border-ink-2 hover:bg-paper'
                     )}
                   >
-                    <div className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-paper">
+                    <div className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-line bg-paper">
                       {sheet ? (
                         <img src={sheet.url} alt={cand.name} className="size-full object-cover" />
                       ) : (

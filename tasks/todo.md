@@ -43,11 +43,11 @@ Rincian setiap tugas ada di [plan.md](plan.md); desain di
 - [ ] Tugas 23 — Flag `nativeAudio`, prompt dialog, suara tidak dimatikan untuk klip dialog.
 - [ ] Tugas 24 — Ekstraksi audio video + Whisper menjadi aset audio klip.
 - [ ] Tugas 25 — Take TTS per suara untuk narator.
-- [ ] Tugas 26 — Kompilasi prompt berlabel dan urutan gambar referensi di `src/shared/`.
-- [ ] Tugas 27 — Syarat sebelum generate.
-- [ ] Tugas 28 — Hash basis, status hasil, badge di Storyboard.
-- [ ] Tugas 29 — Batch "Buat yang belum ada", estimasi kredit, total kredit per episode.
-- [ ] Tugas 30 — Catat perubahan keputusan teknis.
+- [x] Tugas 26 — Kompilasi prompt berlabel dan urutan gambar referensi di `src/shared/`.
+- [x] Tugas 27 — Syarat sebelum generate.
+- [x] Tugas 28 — Hash basis, status hasil, badge di Storyboard.
+- [x] Tugas 29 — Batch "Buat yang belum ada", estimasi kredit, total kredit per episode.
+- [x] Tugas 30 — Catat perubahan keputusan teknis.
 - [ ] Checkpoint 4 — sampel dialog lolos, lalu kriteria fase 4.
 
 ## Fase 5 — Opsional

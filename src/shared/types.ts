@@ -606,6 +606,29 @@ export interface CreditEstimate {
   usd: number | null
 }
 
+export type ClipGenerationStatus = 'current' | 'stale' | 'missing' | 'blocked'
+
+export interface BatchEstimateItem {
+  clipId: string
+  clipIndex: number
+  title: string
+  kind: 'image' | 'video'
+  model: string
+  status: ClipGenerationStatus
+  blockers: string[]
+  estimatedCredits: number
+}
+
+export interface BatchEstimateResult {
+  canRun: boolean
+  totalItems: number
+  totalCredits: number
+  items: BatchEstimateItem[]
+  blockedCount: number
+  missingCount: number
+  staleCount: number
+}
+
 /** The local Whisper model used to time caption words. */
 export interface WhisperStatus {
   state: 'missing' | 'downloading' | 'verifying' | 'ready'

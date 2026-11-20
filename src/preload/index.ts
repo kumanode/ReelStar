@@ -87,7 +87,8 @@ const api: StudioApi = {
     syncCaptions: call('generate:syncCaptions'),
     cancel: call('generate:cancel'),
     cancelProject: call('generate:cancelProject'),
-    estimate: call('generate:estimate')
+    estimate: call('generate:estimate'),
+    batchEstimate: call('generate:batchEstimate')
   },
   clips: {
     split: call('clips:split'),

@@ -339,7 +339,7 @@ export function Home() {
               return (
                 <article
                   key={p.id}
-                  className="flex flex-col justify-between overflow-hidden rounded-2xl border border-line bg-surface shadow-xs transition-all hover:border-ink-2 hover:shadow-md"
+                  className="flex flex-col justify-between overflow-hidden rounded-2xl border border-line bg-surface transition-all hover:border-ink-2 hover:shadow-ink"
                 >
                   <button type="button" onClick={() => go({ name: 'project', id: p.id })} className="text-left">
                     <div className="relative aspect-video w-full overflow-hidden border-b border-line bg-sand/30">

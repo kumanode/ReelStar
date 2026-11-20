@@ -212,7 +212,7 @@ export function EpisodeHub() {
 
         {/* Source Text Section */}
         {(showSource || episodes.length === 0) && (
-          <div className="rounded-2xl border border-line bg-surface p-5 shadow-sm">
+          <div className="rounded-2xl border border-line bg-surface p-5">
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -288,9 +288,9 @@ export function EpisodeHub() {
                     </Button>
                   )}
                   <Button
-                    variant="ink"
+                    variant="primary"
                     size="sm"
-                    icon={isPlanning ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5 text-sun" />}
+                    icon={isPlanning ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
                     disabled={isPlanning || !project.sourceText?.trim()}
                     onClick={() => void handlePlanEpisodes(false)}
                   >
@@ -311,9 +311,9 @@ export function EpisodeHub() {
                 setShowSource(true)
                 fileInputRef.current?.click()
               }}
-              className="flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-line-2 bg-surface p-8 text-center transition-all hover:border-ink hover:bg-sand/30"
+              className="flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-line-2 bg-surface p-8 text-center transition-all hover:border-ink hover:bg-paper"
             >
-              <div className="flex size-12 items-center justify-center rounded-xl bg-accent-soft text-accent-dark">
+              <div className="flex size-12 items-center justify-center rounded-xl border border-line bg-accent-soft text-accent-dark">
                 <Upload className="size-6" />
               </div>
               <div>
@@ -327,9 +327,9 @@ export function EpisodeHub() {
             <button
               type="button"
               onClick={() => void handleCreateEmptyEpisode()}
-              className="flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-line-2 bg-surface p-8 text-center transition-all hover:border-ink hover:bg-sand/30"
+              className="flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-line-2 bg-surface p-8 text-center transition-all hover:border-ink hover:bg-paper"
             >
-              <div className="flex size-12 items-center justify-center rounded-xl bg-sun-soft text-sun-ink">
+              <div className="flex size-12 items-center justify-center rounded-xl border border-line bg-sun-soft text-sun-ink">
                 <Plus className="size-6" />
               </div>
               <div>
@@ -367,7 +367,7 @@ export function EpisodeHub() {
                 return (
                   <div
                     key={ep.id}
-                    className="flex flex-col justify-between gap-3 rounded-2xl border border-line bg-surface p-4 shadow-sm transition-all hover:border-ink-2"
+                    className="flex flex-col justify-between gap-3 rounded-2xl border border-line bg-surface p-4 transition-all hover:border-ink-2 hover:shadow-xs"
                   >
                     {/* Card Header: Ep number, title, status, menu */}
                     <div className="flex items-start justify-between gap-2">
@@ -386,7 +386,7 @@ export function EpisodeHub() {
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
                           }}
-                          className="min-w-0 flex-1 rounded border border-transparent px-1.5 py-0.5 font-display text-sm font-bold text-ink outline-none hover:border-line focus:border-ink focus:bg-paper"
+                          className="min-w-0 flex-1 rounded-lg border border-transparent px-2 py-1 font-display text-sm font-bold text-ink outline-none transition-colors hover:border-line-2 focus:border-ink focus:bg-paper"
                         />
                       </div>
 
@@ -441,56 +441,60 @@ export function EpisodeHub() {
                     </div>
 
                     {/* Middle: Hook, Cliffhanger, Summary */}
-                    <div className="flex flex-col gap-2 rounded-xl bg-paper/60 p-2.5 text-xs">
+                    <div className="flex flex-col gap-2.5 rounded-xl border border-line-2/60 bg-paper p-3 text-xs">
                       {/* Hook */}
-                      <div className="flex items-baseline gap-1.5">
-                        <Badge tone="ink" className="px-1.5 py-0 text-[10px]">Hook</Badge>
+                      <div className="flex items-center gap-2">
+                        <span className="shrink-0 rounded bg-sand px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-muted border border-line-2/60">
+                          Hook
+                        </span>
                         <input
                           defaultValue={ep.hook ?? ''}
                           placeholder="Kejutan pembuka..."
                           onBlur={(e) => void updateEpisode(ep.id, { hook: e.target.value })}
-                          className="flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-ink outline-none placeholder:text-muted/60 hover:border-line focus:border-ink focus:bg-surface"
+                          className="flex-1 rounded-lg border border-line-2/60 bg-surface px-2 py-1 text-xs text-ink outline-none placeholder:text-muted/60 transition-colors focus:border-ink"
                         />
                       </div>
 
                       {/* Cliffhanger */}
-                      <div className="flex items-baseline gap-1.5">
-                        <Badge tone="ink" className="px-1.5 py-0 text-[10px]">Cliffhanger</Badge>
+                      <div className="flex items-center gap-2">
+                        <span className="shrink-0 rounded bg-sand px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-muted border border-line-2/60">
+                          Cliffhanger
+                        </span>
                         <input
                           defaultValue={ep.cliffhanger ?? ''}
                           placeholder="Ketegangan penutup..."
                           onBlur={(e) => void updateEpisode(ep.id, { cliffhanger: e.target.value })}
-                          className="flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-ink outline-none placeholder:text-muted/60 hover:border-line focus:border-ink focus:bg-surface"
+                          className="flex-1 rounded-lg border border-line-2/60 bg-surface px-2 py-1 text-xs text-ink outline-none placeholder:text-muted/60 transition-colors focus:border-ink"
                         />
                       </div>
 
                       {/* Summary / Beats */}
-                      <div className="flex flex-col gap-1 border-t border-line/60 pt-1.5">
-                        <span className="font-semibold text-muted">Ringkasan cerita:</span>
+                      <div className="flex flex-col gap-1 border-t border-line pt-2">
+                        <span className="font-semibold text-muted text-[11px]">Ringkasan cerita:</span>
                         <AutoTextarea
                           defaultValue={ep.summary ?? ''}
                           placeholder="Inti konflik dan perkembangan adegan di episode ini..."
                           minRows={1}
                           maxHeight={100}
                           onBlur={(e) => void updateEpisode(ep.id, { summary: e.target.value })}
-                          className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-xs text-ink outline-none placeholder:text-muted/60 hover:border-line focus:border-ink focus:bg-surface"
+                          className="w-full rounded-lg border border-line-2/60 bg-surface p-2 text-xs text-ink outline-none placeholder:text-muted/60 transition-colors focus:border-ink"
                         />
                       </div>
                     </div>
 
                     {/* Footer: duration and Open button */}
-                    <div className="flex items-center justify-between border-t border-line pt-2 text-xs">
-                      <div className="flex items-center gap-1 text-muted">
+                    <div className="flex items-center justify-between border-t border-line pt-2.5 text-xs">
+                      <div className="flex items-center gap-1.5 text-muted font-mono">
                         <Clock className="size-3" />
                         <span>{ep.durationSec || project.durationSec || 60} dtk</span>
                       </div>
                       <Button
                         variant="secondary"
                         size="sm"
-                        icon={<ArrowRight className="size-3.5" />}
                         onClick={() => void handleOpenEpisode(ep.id)}
                       >
                         Buka
+                        <ArrowRight className="size-3.5" />
                       </Button>
                     </div>
                   </div>

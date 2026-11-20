@@ -26,6 +26,7 @@ import { effectiveResolution, fitDuration, getImageModel, getVideoModel } from '
 import { CAMERA_PRESETS, MOTION_STRENGTHS, cameraAt, cameraCss } from '@shared/motion'
 import { needsVisual } from '@shared/script'
 import { geminiVoiceName, geminiVoiceTone } from '@shared/models'
+import { getClipImageStatus, getClipVideoStatus, type GenerationPrerequisitesContext } from '@shared/validation'
 import type { Asset, Clip, Job, Project } from '@shared/types'
 import { AutoTextarea } from '../../components/AutoTextarea'
 import { CharacterAvatar } from '../../components/CharacterAvatar'
@@ -37,6 +38,7 @@ import { useNarration } from '../../lib/useNarration'
 import { useApp } from '../../store/app'
 import { isRunning, jobFor, useProject } from '../../store/project'
 import { CharacterModal } from './CharacterModal'
+import { BatchEstimateModal } from './BatchEstimateModal'
 
 function useAudio(): { play: (url: string) => void; stop: () => void; playing: string | null } {
   const ref = useRef<HTMLAudioElement | null>(null)
@@ -122,7 +124,7 @@ function videoModelSummary(modelId: string | null | undefined, resolution: strin
   return `${hf.name} · video ${fit} detik${effRes ? ` · ${effRes}` : ''}`
 }
 
-function ClipPanel({ clip, index, total }: { clip: Clip; index: number; total: number }) {
+function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: number; total: number; prereqCtx: GenerationPrerequisitesContext }) {
   const { project, clips, characters, assets, jobs, updateClip, updateProject, removeClip, moveClip, addClip, select, flush } = useProject()
   const { toast } = useApp()
   const audio = useAudio()
@@ -130,6 +132,9 @@ function ClipPanel({ clip, index, total }: { clip: Clip; index: number; total: n
   const [cancelingVideo, setCancelingVideo] = useState(false)
   const [savingThumb, setSavingThumb] = useState(false)
   if (!project) return null
+
+  const imgStatus = useMemo(() => getClipImageStatus(clip, project, prereqCtx), [clip, project, prereqCtx])
+  const vidStatus = useMemo(() => getClipVideoStatus(clip, project, prereqCtx), [clip, project, prereqCtx])
 
   const isFlow2Video = FLOW2API_VIDEO_MODELS.some((model) => model.id === project.videoModel)
   const image = clip.imageAssetId ? assets[clip.imageAssetId] : null
@@ -211,9 +216,53 @@ function ClipPanel({ clip, index, total }: { clip: Clip; index: number; total: n
     <aside className="flex min-h-0 flex-col border-l border-line bg-surface">
       <div className="flex h-16 shrink-0 items-center gap-2.5 border-b border-line pl-5 pr-4">
         <div className="flex min-w-0 flex-1 flex-col">
-          <span className="font-mono text-xs text-muted">
-            Klip {clipNumber(index)} · {mmss(start)} – {mmss(start + clip.durationMs)}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs text-muted">
+              Klip {clipNumber(index)} · {mmss(start)} – {mmss(start + clip.durationMs)}
+            </span>
+            <Badge
+              tone={
+                imgStatus.status === 'blocked'
+                  ? 'bad'
+                  : imgStatus.status === 'stale'
+                    ? 'warn'
+                    : imgStatus.status === 'current'
+                      ? 'ok'
+                      : 'draft'
+              }
+              title={imgStatus.blockers.join('\n')}
+            >
+              {imgStatus.status === 'blocked'
+                ? 'Gbr Terblokir'
+                : imgStatus.status === 'stale'
+                  ? 'Gbr Basi'
+                  : imgStatus.status === 'current'
+                    ? 'Gbr Terkini'
+                    : 'Gbr Belum Ada'}
+            </Badge>
+            {clip.motionType === 'video' && (
+              <Badge
+                tone={
+                  vidStatus.status === 'blocked'
+                    ? 'bad'
+                    : vidStatus.status === 'stale'
+                      ? 'warn'
+                      : vidStatus.status === 'current'
+                        ? 'ok'
+                        : 'draft'
+                }
+                title={vidStatus.blockers.join('\n')}
+              >
+                {vidStatus.status === 'blocked'
+                  ? 'Vid Terblokir'
+                  : vidStatus.status === 'stale'
+                    ? 'Vid Basi'
+                    : vidStatus.status === 'current'
+                      ? 'Vid Terkini'
+                      : 'Vid Belum Ada'}
+              </Badge>
+            )}
+          </div>
           <input
             value={clip.title}
             onChange={(e) => updateClip(clip.id, { title: e.target.value })}
@@ -246,8 +295,19 @@ function ClipPanel({ clip, index, total }: { clip: Clip; index: number; total: n
             <ClipVisual clip={clip} image={image} video={video} job={imageJob || videoJob} large playVideo />
           )}
           {!image && !isRunning(imageJob) && (
-            <div className="absolute inset-x-0 bottom-6 flex justify-center">
-              <Button variant="accent" icon={<Sparkles className="size-4" />} onClick={() => void run(() => window.api.generate.clipImage(clip.id))}>
+            <div className="absolute inset-x-0 bottom-6 flex flex-col items-center gap-1.5 px-4">
+              {imgStatus.status === 'blocked' && (
+                <div className="max-w-xs rounded-lg border border-bad/30 bg-bad-soft/95 px-3 py-1.5 text-center text-xs font-medium text-bad-ink backdrop-blur-sm">
+                  {imgStatus.blockers[0]}
+                </div>
+              )}
+              <Button
+                variant="accent"
+                icon={<Sparkles className="size-4" />}
+                disabled={imgStatus.status === 'blocked'}
+                title={imgStatus.status === 'blocked' ? imgStatus.blockers.join('\n') : undefined}
+                onClick={() => void run(() => window.api.generate.clipImage(clip.id))}
+              >
                 Generate gambar
               </Button>
             </div>
@@ -315,6 +375,8 @@ function ClipPanel({ clip, index, total }: { clip: Clip; index: number; total: n
               size="sm"
               icon={<RefreshCw className="size-4" />}
               loading={isRunning(imageJob)}
+              disabled={imgStatus.status === 'blocked'}
+              title={imgStatus.status === 'blocked' ? imgStatus.blockers.join('\n') : undefined}
               onClick={() => void run(() => window.api.generate.clipImage(clip.id))}
             >
               Generate ulang
@@ -324,6 +386,11 @@ function ClipPanel({ clip, index, total }: { clip: Clip; index: number; total: n
             {editPrompt ? 'Tutup prompt' : 'Edit prompt visual'}
           </Button>
         </div>
+        {imgStatus.status === 'blocked' && (
+          <div className="rounded-lg border border-bad/30 bg-bad-soft px-3 py-2 text-xs text-bad-ink">
+            <span className="font-semibold">Gambar terblokir:</span> {imgStatus.blockers.join(' · ')}
+          </div>
+        )}
 
         {editPrompt && (
           <AutoTextarea
@@ -527,13 +594,19 @@ function ClipPanel({ clip, index, total }: { clip: Clip; index: number; total: n
                 aria-label="Arahan gerak video"
                 className={cx(inputCls, 'py-2 text-[13px] leading-relaxed')}
               />
+              {vidStatus.status === 'blocked' && (
+                <div className="rounded-lg border border-bad/30 bg-bad-soft px-3 py-2 text-xs text-bad-ink">
+                  <span className="font-semibold">Video terblokir:</span> {vidStatus.blockers.join(' · ')}
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <Button
                   size="sm"
                   variant={video ? 'secondary' : 'accent'}
                   icon={<Clapperboard className="size-4" />}
                   loading={isRunning(videoJob)}
-                  disabled={!image}
+                  disabled={!image || vidStatus.status === 'blocked'}
+                  title={vidStatus.status === 'blocked' ? vidStatus.blockers.join('\n') : undefined}
                   onClick={() => void run(() => window.api.generate.clipVideo(clip.id))}
                 >
                   {video ? 'Buat ulang video' : 'Buat video'}
@@ -792,19 +865,52 @@ function VideoSelectModal({
 }
 
 export function StoryboardStep() {
-  const { project, episode, clips, characters, assets, jobs, selectedClipId, select, addClip, updateProject, flush, load } = useProject()
+  const {
+    project,
+    episode,
+    clips,
+    characters,
+    derivatives,
+    locations,
+    props,
+    assets,
+    jobs,
+    selectedClipId,
+    select,
+    addClip,
+    updateProject,
+    flush,
+    load
+  } = useProject()
   const { toast } = useApp()
   /** A character id, "new" for an unsaved one, or null. */
   const [openChar, setOpenChar] = useState<string | null>(null)
   const [credits, setCredits] = useState<number | null>(null)
   const [creditMap, setCreditMap] = useState<Map<number, number> | null>(null)
   const [videoModalOpen, setVideoModalOpen] = useState(false)
+  const [batchKind, setBatchKind] = useState<'image' | 'video' | null>(null)
   const [cancellingAll, setCancellingAll] = useState(false)
   const [planning, setPlanning] = useState(false)
   const [planMessage, setPlanMessage] = useState('')
   const [visibleCount, setVisibleCount] = useState(48)
   const loadMoreRef = useRef<HTMLDivElement>(null)
   const lastNarration = useRef<string | null>(null)
+
+  const isFlow2Image = FLOW2API_IMAGE_MODELS.some((m) => m.id === project?.imageModel)
+  const isFlow2Video = FLOW2API_VIDEO_MODELS.some((m) => m.id === project?.videoModel)
+
+  const prereqCtx = useMemo<GenerationPrerequisitesContext>(
+    () => ({
+      characters,
+      derivatives,
+      locations,
+      props,
+      assets,
+      activeJobs: Object.values(jobs),
+      isFlow2Api: isFlow2Image || isFlow2Video
+    }),
+    [characters, derivatives, locations, props, assets, jobs, isFlow2Image, isFlow2Video]
+  )
 
   // A failed narration take is reported once, when it happens.
   useEffect(() => {
@@ -813,9 +919,6 @@ export function StoryboardStep() {
     if (j?.status === 'failed' && lastNarration.current && lastNarration.current !== key) toast('error', j.error ?? 'Gagal membuat suara narasi')
     lastNarration.current = key
   }, [jobs])
-
-  const isFlow2Image = FLOW2API_IMAGE_MODELS.some((m) => m.id === project?.imageModel)
-  const isFlow2Video = FLOW2API_VIDEO_MODELS.some((m) => m.id === project?.videoModel)
 
   useEffect(() => {
     setVisibleCount(48)
@@ -898,20 +1001,6 @@ export function StoryboardStep() {
     } catch (e) {
       toast('error', errorText(e))
     }
-  }
-
-  const makeImages = async (): Promise<void> => {
-    if (!project) return
-    if (project.durationSec >= 600) {
-      const estimated = credits == null ? 'Biaya belum bisa diperkirakan untuk model ini.' : `Perkiraan biaya gambar: ${Math.round(credits * stats.needImg * 10) / 10} kredit Higgsfield.`
-      const ok = await confirmDialog({
-        title: `Buat ${stats.needImg} gambar adegan?`,
-        body: `Video ${Math.round(project.durationSec / 60)} menit ini memiliki sekitar ${clips.length} adegan. ${estimated} Proses panjang dan menggunakan kredit untuk setiap gambar.`,
-        confirm: `Buat ${stats.needImg} gambar`
-      })
-      if (!ok) return
-    }
-    await bulk(() => window.api.generate.missingImages(project.id))
   }
 
   const narration = useNarration()
@@ -1011,7 +1100,7 @@ export function StoryboardStep() {
           className="border-[1.5px] border-ink font-semibold"
           icon={<ImageIcon className="size-[17px]" />}
           disabled={!stats.needImg}
-          onClick={() => void makeImages()}
+          onClick={() => setBatchKind('image')}
         >
           Generate {stats.needImg} gambar
           {credits != null && stats.needImg > 0 && (
@@ -1104,17 +1193,29 @@ export function StoryboardStep() {
               const ttsRunning = isRunning(jobFor(jobs, 'tts', { clipId: c.id }))
               const voice = c.audioAssetId ? assets[c.audioAssetId] : null
               const synced = !!voice?.meta.words?.length && !voice.meta.estimatedTimings
+              const imgStatus = getClipImageStatus(c, project, prereqCtx)
+              const vidStatus = getClipVideoStatus(c, project, prereqCtx)
               const status = isVideoJobRunning
-                ? { label: 'Video AI…', tone: 'warn' as const }
-                : c.videoAssetId
-                  ? { label: 'Video Siap', tone: 'ok' as const }
-                  : c.imageAssetId
-                    ? { label: 'Siap', tone: 'ok' as const }
-                    : isRunning(imageJob)
-                      ? { label: 'Proses', tone: 'warn' as const }
-                      : imageJob?.status === 'failed'
-                        ? { label: 'Gagal', tone: 'bad' as const }
-                        : { label: 'Draf', tone: 'draft' as const }
+                ? { label: 'Video AI…', tone: 'warn' as const, title: undefined }
+                : isRunning(imageJob)
+                  ? { label: 'Gambar AI…', tone: 'warn' as const, title: undefined }
+                  : imageJob?.status === 'failed'
+                    ? { label: 'Gagal', tone: 'bad' as const, title: imageJob.error }
+                    : c.videoAssetId
+                      ? vidStatus.status === 'blocked'
+                        ? { label: 'Video Terblokir', tone: 'bad' as const, title: vidStatus.blockers.join('\n') }
+                        : vidStatus.status === 'stale'
+                          ? { label: 'Video Basi', tone: 'warn' as const, title: 'Input berubah sejak video dibuat' }
+                          : { label: 'Video Siap', tone: 'ok' as const, title: undefined }
+                      : c.imageAssetId
+                        ? imgStatus.status === 'blocked'
+                          ? { label: 'Gambar Terblokir', tone: 'bad' as const, title: imgStatus.blockers.join('\n') }
+                          : imgStatus.status === 'stale'
+                            ? { label: 'Gambar Basi', tone: 'warn' as const, title: 'Input berubah sejak gambar dibuat' }
+                            : { label: 'Siap', tone: 'ok' as const, title: undefined }
+                        : imgStatus.status === 'blocked'
+                          ? { label: 'Terblokir', tone: 'bad' as const, title: imgStatus.blockers.join('\n') }
+                          : { label: 'Draf', tone: 'draft' as const, title: undefined }
               return (
                 <button
                   key={c.id}
@@ -1161,7 +1262,7 @@ export function StoryboardStep() {
                   <div className="flex w-full flex-col gap-2 px-3 pb-3 pt-2.5">
                     <span className="truncate text-sm font-semibold">{c.title || 'Tanpa judul'}</span>
                     <div className="flex items-center gap-2">
-                      <Badge tone={status.tone}>{status.label}</Badge>
+                      <Badge tone={status.tone} title={status.title}>{status.label}</Badge>
                       {c.speakerId && (
                         <span className="inline-flex max-w-[120px] items-center gap-1 truncate rounded bg-sand px-1.5 py-0.5 text-[11px] font-medium text-ink-2" title={`Disuarakan oleh: ${characters.find((ch) => ch.id === c.speakerId)?.name ?? 'Tokoh'}`}>
                           🗣️ {characters.find((ch) => ch.id === c.speakerId)?.name ?? 'Tokoh'}
@@ -1179,7 +1280,7 @@ export function StoryboardStep() {
           </div>
           {visibleCount < clips.length && <div ref={loadMoreRef} aria-hidden="true" className="h-8" />}
         </section>
-        {sel && <ClipPanel key={sel.id} clip={sel} index={selIndex} total={clips.length} />}
+        {sel && <ClipPanel key={sel.id} clip={sel} index={selIndex} total={clips.length} prereqCtx={prereqCtx} />}
       </div>
 
       <footer className="flex items-center gap-4 border-t border-line bg-surface px-6">
@@ -1223,6 +1324,17 @@ export function StoryboardStep() {
           await bulk(() => window.api.generate.clipsVideo(clipIds))
         }}
       />
+      {batchKind && (
+        <BatchEstimateModal
+          open={!!batchKind}
+          onClose={() => setBatchKind(null)}
+          projectId={project.id}
+          episodeId={episode?.id}
+          kind={batchKind}
+          onStarted={() => {}}
+          onSelectClip={(clipId) => select(clipId)}
+        />
+      )}
     </div>
   )
 }

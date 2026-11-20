@@ -143,6 +143,14 @@ Tambahkan di semua tempat berikut, atau data akan hilang diam-diam:
 | `voice`, `take` | ID suara dan ID rekaman utuh tempat potongan ini berasal |
 | `editedWords` | `true` kalau teks caption diedit manual |
 
+`meta.basisHash` menyimpan nilai hash 64-bit FNV-1a dari seluruh input yang mendasari pembuatan aset (prompt visual/gerak, rasio aspek, model, gaya, serta ID dan hash lembar referensi karakter/lokasi/prop).
+
+Status generasi aset dihitung dinamis di UI (`src/shared/validation.ts`):
+- `current`: input saat ini cocok persis dengan `meta.basisHash`.
+- `stale`: input berubah sejak media dibuat (misal prompt visual diedit atau lembar karakter diperbarui).
+- `missing`: belum ada aset yang dibuat untuk klip ini.
+- `blocked`: terdapat prasyarat yang belum terpenuhi (lembar referensi belum siap, speaker tidak sah, atau durasi klip di luar rentang model).
+
 `meta.uploadedUrl`/`uploadedAt` dipakai untuk menggunakan ulang file yang sudah diunggah ke Higgsfield.
 
 Suara karakter disimpan bersama `ttsProvider`. Suara itu hanya dipakai jika providernya sama dengan provider TTS proyek; jika berbeda, adegan memakai suara narator.

@@ -615,7 +615,7 @@ export function PlanStep() {
               disabled={isPlanning || isConfirming || totalUnmapped > 0}
               onClick={() => void handleConfirmScript()}
             >
-              Konfirmasi ▸
+              Konfirmasi
             </Button>
           )}
         </div>
@@ -670,24 +670,24 @@ export function PlanStep() {
             /* Active Draft: Shot by Shot Cards */
             <div className="mx-auto flex w-full max-w-4xl flex-col gap-5">
               {/* Draft Status & Warnings Summary */}
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-surface p-4 shadow-sm">
-                <div className="flex items-center gap-4 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-surface p-4">
+                <div className="flex items-center gap-4 text-xs font-mono">
                   <span className="font-bold text-ink">{draft.shots.length} Shot</span>
                   <span className="text-muted">•</span>
                   <span className="flex items-center gap-1 text-ink-2">
-                    <Clock className="size-3.5" /> Total ~{totalDurationSec} detik
+                    <Clock className="size-3.5" /> Total ~{totalDurationSec} dtk
                   </span>
                   <span className="text-muted">•</span>
                   <span className="text-muted">Target: {episode.durationSec}s</span>
                 </div>
 
                 {totalUnmapped > 0 ? (
-                  <div className="flex items-center gap-1.5 rounded-lg bg-bad-soft px-2.5 py-1 text-xs font-semibold text-bad-ink">
+                  <div className="flex items-center gap-1.5 rounded-lg bg-bad-soft px-2.5 py-1 text-xs font-semibold text-bad-ink border border-bad-ink/20">
                     <AlertCircle className="size-3.5" />
                     <span>{totalUnmapped} masalah perlu dibereskan sebelum konfirmasi</span>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-1.5 rounded-lg bg-ok-soft px-2.5 py-1 text-xs font-semibold text-ok-ink">
+                  <div className="flex items-center gap-1.5 rounded-lg bg-ok-soft px-2.5 py-1 text-xs font-semibold text-ok-ink border border-ok-ink/20">
                     <CheckCircle2 className="size-3.5" />
                     <span>Semua aset terdaftar & siap dikonfirmasi</span>
                   </div>
@@ -702,9 +702,9 @@ export function PlanStep() {
                     <div
                       key={idx}
                       className={cx(
-                        'flex flex-col gap-3 rounded-2xl border bg-surface p-4 shadow-sm transition-all',
+                        'flex flex-col gap-3 rounded-2xl border bg-surface p-4 transition-all',
                         issues.some(isBlocking)
-                          ? 'border-bad-ink/40 bg-bad-soft/10'
+                          ? 'border-bad-ink/40 bg-bad-soft/15'
                           : 'border-line hover:border-line-2'
                       )}
                     >
@@ -802,7 +802,7 @@ export function PlanStep() {
                       </div>
 
                       {/* Dialogue & Speaker Balloon */}
-                      <div className="rounded-xl border border-line-2 bg-paper/60 p-3">
+                      <div className="rounded-xl border border-line bg-sand/30 p-3">
                         <div className="flex flex-wrap items-center justify-between gap-2 pb-2">
                           <div className="flex items-center gap-2">
                             <MessageSquare className="size-3.5 text-accent" />
@@ -998,16 +998,16 @@ export function PlanStep() {
               draft.newAssets.map((asset, aIdx) => (
                 <div
                   key={aIdx}
-                  className="flex flex-col gap-2 rounded-xl border border-line bg-paper p-3 text-xs shadow-sm"
+                  className="flex flex-col gap-2 rounded-xl border border-line bg-paper p-3 text-xs"
                 >
                   <div className="flex items-center justify-between gap-1">
                     <div className="flex items-center gap-1.5">
                       <Badge
                         tone={
                           asset.kind === 'character'
-                            ? 'ink'
+                            ? 'info'
                             : asset.kind === 'derivative'
-                              ? 'info'
+                              ? 'draft'
                               : asset.kind === 'location'
                                 ? 'warn'
                                 : 'draft'
