@@ -1,22 +1,24 @@
 import { execFileSync } from 'node:child_process'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { app, type BrowserWindow } from 'electron'
 import ffmpegStatic from 'ffmpeg-static'
 import { estimateWordTimings } from '@shared/captions'
 import { anchorPoint } from '@shared/overlays'
-import { NO_MUSIC } from '@shared/higgsfield'
+import { NO_MUSIC, NO_MUSIC_DIALOG, modelSupportsNativeAudio } from '@shared/higgsfield'
 import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt } from '@shared/prompts'
 import { computeClipImageBasisHash } from '@shared/hash'
-import { checkClipImagePrerequisites, clipImageBasis, getClipImageStatus, getClipVideoStatus, planBatch, referenceLimit, videoSecondsFor } from '@shared/validation'
+import { checkClipImagePrerequisites, checkClipVideoPrerequisites, clipImageBasis, getClipImageStatus, getClipVideoStatus, planBatch, referenceLimit, videoSecondsFor } from '@shared/validation'
 import { startExport } from './exporter'
 import { assetAbsPath, binPath } from './paths'
-import { probeDurationMs } from './services/audio'
+import { extractAudio, probeDurationMs, probeHasAudio } from './services/audio'
+import { parts } from './narration'
 import {
   confirmEpisodeScriptRepo,
   createEpisode,
   createProject,
   getBundle,
+  getClip,
   insertAsset,
   listEpisodes,
   patchClip,
@@ -30,9 +32,9 @@ import {
 } from './repo'
 import { getSettings, setSettings } from './settings'
 import { planEpisodes, writePrompts } from './story'
-import { batchEstimate, generateMissingImages } from './generation'
+import { batchEstimate, extractVideoDialogueAudio, generateMissingImages } from './generation'
 import { recordCheck, setSecret } from './secrets'
-import type { ApiProvider, EpisodeScriptDraft, ExportOptions } from '@shared/types'
+import type { ApiProvider, Character, Clip, EpisodeScriptDraft, ExportOptions } from '@shared/types'
 
 /**
  * Real speech for the demo clips (Windows' built-in English voice) with estimated caption timings, so
@@ -629,6 +631,80 @@ async function checkPhase4(projectId: string): Promise<boolean> {
   if (planBatch([done, todo], false).blocking.length !== 0) throw new Error('Klip yang sudah punya hasil tidak boleh membatalkan batch')
   if (planBatch([done, todo], true).blocking.length !== 1) throw new Error('Saat membuat ulang yang basi, klip terblokir harus membatalkan batch')
 
+  // 8. Tugas 25: Per-voice take grouping in parts()
+  const mockChars: Character[] = [
+    { id: 'char-budi', name: 'Budi', ttsProvider: 'gemini', ttsVoice: 'BudiVoice' } as Character
+  ]
+  const mockClips: Clip[] = [
+    { id: 'c1', narration: 'Narasi adegan satu', speakerId: null } as Clip,
+    { id: 'c2', narration: 'Halo apa kabar', speakerId: 'char-budi' } as Clip,
+    { id: 'c3', narration: 'Narasi adegan dua', speakerId: null } as Clip,
+    { id: 'c4', narration: 'Kabar baik sekali', speakerId: 'char-budi' } as Clip
+  ]
+  const groupedTakes = parts(mockClips, 'gemini', mockChars, 'Charon')
+  if (groupedTakes.length !== 2) throw new Error(`parts() seharusnya mengelompokkan 2 kelompok suara, didapat: ${groupedTakes.length}`)
+  const g0Ids = groupedTakes[0].map((c) => c.id)
+  const g1Ids = groupedTakes[1].map((c) => c.id)
+  const narratorTogether = (g0Ids.includes('c1') && g0Ids.includes('c3')) || (g1Ids.includes('c1') && g1Ids.includes('c3'))
+  const charTogether = (g0Ids.includes('c2') && g0Ids.includes('c4')) || (g1Ids.includes('c2') && g1Ids.includes('c4'))
+  if (!narratorTogether || !charTogether) throw new Error('parts() harus mengumpulkan klip per suara ke dalam satu take kontinu')
+
+  // 9. Tugas 23: nativeAudio catalog flag, dialogue ending, and prerequisites check
+  if (!modelSupportsNativeAudio('veo-3.1-fast-i2v', true)) throw new Error('Veo 3.1 Fast I2V harus mendukung nativeAudio')
+  if (!modelSupportsNativeAudio('veo-3.1-lite-i2v', true)) throw new Error('Veo 3.1 Lite I2V harus mendukung nativeAudio')
+  if (modelSupportsNativeAudio('omni-1.1-flash', true)) throw new Error('Omni 1.1 Flash tidak boleh mendukung nativeAudio')
+
+  const omniProject = { ...videoProject, videoModel: 'omni-1.1-flash', dialogAudio: 'video' as const }
+  const dialogClip = { ...after.clips[0], speakerId: after.clips[0].characterIds[0], narration: 'Halo dunia' }
+  const omniPrereq = checkClipVideoPrerequisites(dialogClip, omniProject, { ...vctx, isFlow2Api: true })
+  if (omniPrereq.ok || !omniPrereq.blockers.some((b) => b.includes('tidak mendukung dialog bersuara'))) {
+    throw new Error('checkClipVideoPrerequisites harus memblokir klip dialog pada model video tanpa audio')
+  }
+
+  const dialogPrompt = compileClipVideoPrompt(omniProject, dialogClip, bundle.characters)
+  if (!dialogPrompt.includes(NO_MUSIC_DIALOG)) {
+    throw new Error(`compileClipVideoPrompt untuk dialog video harus memuat NO_MUSIC_DIALOG: ${dialogPrompt}`)
+  }
+
+  // 10. Tugas 24: Audio extraction from video to clip audio asset
+  const tmpVideo = join(app.getPath('temp'), `reelstar-test-dialog-${Date.now()}.mp4`)
+  const ff = binPath(ffmpegStatic!)
+  execFileSync(ff, [
+    '-y',
+    '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25',
+    '-f', 'lavfi', '-i', 'sine=frequency=1000:duration=1',
+    '-c:v', 'mpeg4',
+    '-c:a', 'aac',
+    '-t', '1',
+    tmpVideo
+  ], { windowsHide: true })
+
+  const hasAudioStream = await probeHasAudio(tmpVideo)
+  if (!hasAudioStream) throw new Error('probeHasAudio gagal mendeteksi stream audio pada video uji')
+
+  // Direct test of extractAudio
+  const tmpWav = join(app.getPath('temp'), `reelstar-test-extract-${Date.now()}.wav`)
+  await extractAudio(tmpVideo, tmpWav)
+  const probeWavMs = await probeDurationMs(tmpWav)
+  if (probeWavMs < 500) throw new Error('extractAudio menghasilkan file audio dengan durasi tidak valid')
+
+  const testClip = after.clips[0]
+  const speakerId = testClip.characterIds[0] ?? bundle.characters[0]?.id
+  saveSnapshot({ ...bundle, episodeId: ep.id, project: { ...bundle.project, dialogAudio: 'video' } })
+  patchClip(testClip.id, { speakerId, narration: 'Satu dua tiga empat' })
+
+  const extractedAsset = await extractVideoDialogueAudio(project.id, testClip.id, tmpVideo)
+  if (!extractedAsset) throw new Error('extractVideoDialogueAudio gagal menghasilkan aset audio')
+  if (extractedAsset.kind !== 'audio' || extractedAsset.provider !== 'video' || extractedAsset.meta.source !== 'video') {
+    throw new Error(`Aset hasil ekstraksi tidak valid: kind=${extractedAsset.kind}, provider=${extractedAsset.provider}`)
+  }
+
+  const patchedClip = getClip(testClip.id)
+  if (patchedClip.audioAssetId !== extractedAsset.id) {
+    throw new Error('Clip audioAssetId harus mengarah ke aset audio yang diekstrak')
+  }
+  console.log(`[checkPhase4] Ekstraksi audio video OK: asset ${extractedAsset.id}, durasi: ${extractedAsset.durationMs}ms`)
+
   console.log('[checkPhase4] Semua pengujian backend Fase 4 BERHASIL!')
   return true
 }
@@ -765,6 +841,7 @@ export function attachDevHarness(win: BrowserWindow): void {
           win.setContentSize(step.resize.width, step.resize.height)
         }
       } catch (e) {
+        console.error('[harness] step failed:', (e as Error).message, (e as Error).stack)
         if (log) appendFileSync(log, `[harness] step failed: ${(e as Error).message}\n`)
       }
       await sleep(step.wait ?? 800)

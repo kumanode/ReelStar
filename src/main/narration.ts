@@ -80,26 +80,38 @@ function voiceForClip(clip: Clip, chars: Character[], provider: Project['ttsProv
   return c?.ttsVoice || defaultVoice
 }
 
-/** Groups scenes into takes that fit one request, keeping the script order and character voice consistency. */
-function parts(clips: Clip[], provider: Project['ttsProvider'], chars: Character[], defaultVoice: string): Clip[][] {
-  const out: Clip[][] = []
-  let cur: Clip[] = []
-  let size = 0
-  let curVoice = ''
+/**
+ * Groups scenes into takes grouped per voice (§6.C).
+ * All scenes sharing a voice (e.g. all narrator scenes in an episode) are gathered into
+ * continuous takes (subdivided only if exceeding provider duration/character limits).
+ */
+export function parts(clips: Clip[], provider: Project['ttsProvider'], chars: Character[], defaultVoice: string): Clip[][] {
+  const byVoice = new Map<string, Clip[]>()
   for (const c of clips) {
-    const s = provider === 'elevenlabs' ? c.narration.length : estimateNarrationMs(c.narration) / 1000
-    const limit = provider === 'elevenlabs' ? ELEVEN_PART_CHARS : GEMINI_PART_SEC
     const v = voiceForClip(c, chars, provider, defaultVoice)
-    if (cur.length && (size + s > limit || curVoice !== v)) {
-      out.push(cur)
-      cur = []
-      size = 0
-    }
-    cur.push(c)
-    curVoice = v
-    size += s
+    const list = byVoice.get(v) || []
+    list.push(c)
+    byVoice.set(v, list)
   }
-  if (cur.length) out.push(cur)
+
+  const out: Clip[][] = []
+  const limit = provider === 'elevenlabs' ? ELEVEN_PART_CHARS : GEMINI_PART_SEC
+
+  for (const [, voiceClips] of byVoice) {
+    let cur: Clip[] = []
+    let size = 0
+    for (const c of voiceClips) {
+      const s = provider === 'elevenlabs' ? c.narration.length : estimateNarrationMs(c.narration) / 1000
+      if (cur.length && size + s > limit) {
+        out.push(cur)
+        cur = []
+        size = 0
+      }
+      cur.push(c)
+      size += s
+    }
+    if (cur.length) out.push(cur)
+  }
   return out
 }
 
@@ -246,12 +258,13 @@ function store(p: Project, s: Segment, voice: string, takeId: string, bytes: Buf
   emit.clip({ clipId: s.clip.id, patch })
 }
 
-/** Voices the scenes that need it ("missing") or every scene ("all") as one continuous take. */
+/** Voices the scenes that need it ("missing") or every scene ("all") as continuous takes per voice. */
 export function generateNarration(projectId: string, mode: 'missing' | 'all', episodeId?: string): Job {
   const running = activeProjectJob(projectId, 'narration', episodeId)
   if (running) return running
   const project = getProject(projectId)
-  const targets = clipsOf(projectId, episodeId).filter((c) => c.narration.trim() && (mode === 'all' || !c.audioAssetId))
+  const isVideoDialog = (c: Clip) => !!(c.speakerId && project.dialogAudio === 'video' && c.narration.trim())
+  const targets = clipsOf(projectId, episodeId).filter((c) => c.narration.trim() && !isVideoDialog(c) && (mode === 'all' || !c.audioAssetId))
   if (!targets.length) throw new Error('Tidak ada naskah narasi yang perlu disuarakan.')
   const job = insertJob({ projectId, episodeId, kind: 'narration', provider: project.ttsProvider, payload: { mode, clipIds: targets.map((c) => c.id) } })
   emit.job(job)
@@ -259,7 +272,7 @@ export function generateNarration(projectId: string, mode: 'missing' | 'all', ep
     const p = getProject(projectId)
     const voice = p.ttsVoice || (p.ttsProvider === 'gemini' ? 'Charon' : '')
     if (p.ttsProvider === 'elevenlabs' && !voice) throw new Error('Pilih suara ElevenLabs dulu di langkah Ide cerita.')
-    const clips = targets.map((c) => getClip(c.id)).filter((c) => c.narration.trim())
+    const clips = targets.map((c) => getClip(c.id)).filter((c) => c.narration.trim() && !isVideoDialog(c))
     const chars = charactersOf(projectId)
     const groups = parts(clips, p.ttsProvider, chars, voice)
     const tmp = join(dataDir(), 'tmp', `narration-${ctx.jobId}`)

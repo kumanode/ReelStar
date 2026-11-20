@@ -1,5 +1,5 @@
 import { getStyle } from './styles'
-import { NO_MUSIC } from './higgsfield'
+import { NO_MUSIC, NO_MUSIC_DIALOG } from './higgsfield'
 import type { AspectRatio, Character, CharacterDerivative, Clip, Location, Prop } from './types'
 
 export interface ReferenceSheetItem {
@@ -272,7 +272,7 @@ export function compileClipVideoPrompt(
     const speakerName = speaker?.name || 'Character'
     const emotion = clip.emotion ? `with intense ${clip.emotion} expression` : 'with natural expression'
     const voiceStyle = speaker?.voiceStyle ? `, voice style: ${speaker.voiceStyle}` : ''
-    const dialogBlock = `Spoken line: "${clip.narration.trim()}", spoken by ${speakerName} ${emotion}${voiceStyle}. Lip movements naturally sync with the spoken words. Only clear spoken dialogue and ambient Foley sound, NO background music, NO singing.`
+    const dialogBlock = `Spoken line: "${clip.narration.trim()}", spoken by ${speakerName} ${emotion}${voiceStyle}. Lip movements naturally sync with the spoken words. ${NO_MUSIC_DIALOG}`
 
     const combined = `${baseMotion}\n\n${dialogBlock}`
     if (combined.length <= maxLen) return combined

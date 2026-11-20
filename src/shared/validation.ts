@@ -1,5 +1,5 @@
 import { FLOW2API_VIDEO_MODELS, getFlow2ApiModel } from './flow2api-catalog'
-import { getImageModel, getVideoModel, maxRefs } from './higgsfield'
+import { getImageModel, getVideoModel, maxRefs, modelSupportsNativeAudio } from './higgsfield'
 import { collectReferenceSheets } from './prompts'
 import { computeClipImageBasisHash, computeClipVideoBasisHash, computeClipTtsBasisHash } from './hash'
 import { estimateNarrationMs } from './script'
@@ -156,6 +156,11 @@ export function checkClipVideoPrerequisites(clip: Clip, project: Project, ctx: G
   }
 
   if (clip.speakerId && project.dialogAudio === 'video') {
+    const isFlow = !!ctx.isFlow2Api
+    const vModelId = isFlow ? (flow2apiId(project.videoModel, ctx.flow2apiVideoModel) ?? project.videoModel) : project.videoModel
+    if (!modelSupportsNativeAudio(vModelId, isFlow)) {
+      blockers.push('Model video terpilih tidak mendukung dialog bersuara. Ganti model video yang mendukung suara (misal Veo 3.1) atau alihkan mode dialog ke TTS.')
+    }
     const speaker = ctx.characters.find((c) => c.id === clip.speakerId)
     if (!speaker) blockers.push('Pembicara dialog tidak terdaftar di Lorebook.')
     else if (!(clip.characterIds || []).includes(clip.speakerId)) {

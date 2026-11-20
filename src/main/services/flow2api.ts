@@ -1,4 +1,4 @@
-import { NO_MUSIC } from '@shared/higgsfield'
+import { NO_MUSIC, NO_MUSIC_DIALOG } from '@shared/higgsfield'
 import { extractMediaUrls, normalizeMediaUrl } from '@shared/flow2api-catalog'
 import type { KeyTestResult } from '@shared/types'
 import { getSecret } from '../secrets'
@@ -351,7 +351,8 @@ export interface GenerateVideoOptions {
  */
 export async function generateVideo(opts: GenerateVideoOptions): Promise<{ mediaUrl: string }> {
   const base = getBaseUrl()
-  const cleanPrompt = `${opts.prompt.trim()} ${NO_MUSIC}`
+  const p = opts.prompt.trim()
+  const cleanPrompt = p.includes(NO_MUSIC) || p.includes(NO_MUSIC_DIALOG) || p.includes('Spoken line:') ? p : `${p} ${NO_MUSIC}`
 
   const content: Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> = [
     { type: 'text', text: cleanPrompt }

@@ -121,7 +121,7 @@ export interface StudioApi {
     clipsVideo(clipIds: string[]): Promise<Job[]>
     missingTts(projectId: string, episodeId?: string): Promise<Job[]>
     /** Voices scenes in one continuous take and cuts it per scene: those without a voice, or all of them. */
-    narration(projectId: string, mode: 'missing' | 'all'): Promise<Job>
+    narration(projectId: string, mode: 'missing' | 'all', episodeId?: string): Promise<Job>
     /** Re-times caption words of voiced scenes against the audio with the local Whisper model. */
     syncCaptions(projectId: string, mode?: 'stale' | 'all' | 'force'): Promise<Job>
     cancel(jobId: string): Promise<void>

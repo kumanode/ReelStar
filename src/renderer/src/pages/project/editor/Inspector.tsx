@@ -545,6 +545,10 @@ function VoiceTab({ clip, index }: { clip: Clip; index: number }) {
         {/* Voices come from one take of the whole script, so a change is fixed by re-recording that take. */}
         {narration.running ? (
           <span className="text-xs text-sun-ink">Suara narasi sedang dibuat…</span>
+        ) : clip.speakerId && project.dialogAudio === 'video' && !voice ? (
+          <div className="flex flex-col items-start gap-2">
+            <span className="text-xs text-ink-2">Klip dialog video: suara dan gerak bibir dibuat langsung oleh AI video saat generate video.</span>
+          </div>
         ) : !voice || stale ? (
           <div className="flex flex-col items-start gap-2">
             <span className="text-xs text-ink-2">{voice ? 'Naskah berubah sejak suara dibuat.' : 'Klip ini belum punya suara.'}</span>

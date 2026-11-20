@@ -496,6 +496,8 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
             {/* Voices come from one take of the whole script (toolbar button), never per scene. */}
             {narration.running ? (
               <span className="text-xs text-sun-ink">Suara narasi sedang dibuat…</span>
+            ) : clip.speakerId && project.dialogAudio === 'video' ? (
+              <span className="text-xs text-muted">Klip dialog video: suara dan gerak bibir dibuat saat video digenerate.</span>
             ) : narrationChanged ? (
               <span className="text-xs text-accent-dark">
                 Naskah berubah.{' '}
@@ -562,7 +564,9 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
             <div className="flex flex-col gap-2">
               {!voice && (
                 <p className="rounded-lg bg-sun-soft px-2.5 py-1.5 text-xs text-sun-ink">
-                  Buat suara narasinya dulu. Panjang klip mengikuti suara, jadi durasi video AI ikut pas.
+                  {clip.speakerId && project.dialogAudio === 'video'
+                    ? 'Klip dialog video: suara dan gerak bibir dibuat langsung oleh AI video.'
+                    : 'Buat suara narasinya dulu. Panjang klip mengikuti suara, jadi durasi video AI ikut pas.'}
                 </p>
               )}
               {video?.durationMs != null && video.durationMs + 300 < clip.durationMs && (

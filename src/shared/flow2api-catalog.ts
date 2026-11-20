@@ -10,6 +10,8 @@ export interface Flow2ApiModel {
   durations: number[]
   supportsRef: boolean
   maxRefs: number
+  /** Whether the video model can generate dialogue/voice track with lip-sync (§6.C). */
+  nativeAudio?: boolean
   tags: string[]
   description: string
 }
@@ -49,6 +51,7 @@ export const FLOW2API_VIDEO_MODELS: Flow2ApiModel[] = [
     durations: [4, 6, 8],
     supportsRef: true,
     maxRefs: 1,
+    nativeAudio: true,
     tags: ['Rekomendasi', 'Cepat', 'Gambar ke Video'],
     description: 'Animasi adegan halus dari frame awal gambar klip'
   },
@@ -61,6 +64,7 @@ export const FLOW2API_VIDEO_MODELS: Flow2ApiModel[] = [
     durations: [4, 6, 8],
     supportsRef: true,
     maxRefs: 1,
+    nativeAudio: true,
     tags: ['Hemat Kuota', 'Gambar ke Video'],
     description: 'Varian ringan Veo 3.1 untuk rendering lebih cepat'
   },
@@ -73,6 +77,7 @@ export const FLOW2API_VIDEO_MODELS: Flow2ApiModel[] = [
     durations: [4, 6, 8, 10],
     supportsRef: true,
     maxRefs: 3,
+    nativeAudio: false,
     tags: ['Multi-Ref', 'Google Flow'],
     description: 'Dukungan hingga 3 gambar referensi untuk kontrol gerak lanjutan'
   },
@@ -85,6 +90,7 @@ export const FLOW2API_VIDEO_MODELS: Flow2ApiModel[] = [
     durations: [4, 6, 8],
     supportsRef: false,
     maxRefs: 0,
+    nativeAudio: true,
     tags: ['Teks ke Video'],
     description: 'Generasi video langsung dari prompt teks'
   }

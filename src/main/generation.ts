@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
-import { estimateWordTimings } from '@shared/captions'
-import { stripVoiceTags } from '@shared/speech'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { estimateWordTimings, WHISPER_TIMING } from '@shared/captions'
+import { spokenWords, stripVoiceTags } from '@shared/speech'
 import { getImageModel, getVideoModel, imageBody, maxRefs, promptLimit, resolutionOptions, videoBody, type HfModel } from '@shared/higgsfield'
 import { getStyle, NO_TEXT } from '@shared/styles'
 import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt } from '@shared/prompts'
@@ -45,7 +45,7 @@ import type {
 import { getDb } from './db'
 import { emit } from './events'
 import { runJob, type TaskCtx } from './jobs'
-import { assetAbsPath } from './paths'
+import { assetAbsPath, dataDir } from './paths'
 import {
   activeJobFor,
   activeJobsOf,
@@ -77,7 +77,8 @@ import {
   updateJob
 } from './repo'
 import { dropCache, getSettings, readCache, writeCache } from './settings'
-import { probeDurationMs, probeSize } from './services/audio'
+import { extractAudio, probeDurationMs, probeHasAudio, probeSize } from './services/audio'
+import { timeScript, whisperReady } from './whisper'
 import * as eleven from './services/elevenlabs'
 import * as gemini from './services/gemini'
 import * as f2a from './services/flow2api'
@@ -208,6 +209,103 @@ interface HfPayload {
   credits?: number
 }
 
+/**
+ * Extracts dialogue audio from a generated video clip and aligns caption word timings (§6.C).
+ * Called after video generation completes when clip has dialogue and project has dialogAudio = 'video'.
+ */
+export async function extractVideoDialogueAudio(
+  projectId: string,
+  clipId: string,
+  videoAbsPath: string,
+  signal?: AbortSignal
+): Promise<Asset | null> {
+  const project = getProject(projectId)
+  const clip = getClip(clipId)
+  if (!clip.speakerId || project.dialogAudio !== 'video' || !clip.narration.trim()) return null
+
+  const hasAudio = await probeHasAudio(videoAbsPath).catch(() => false)
+  if (!hasAudio) {
+    console.warn(`[videoDialogue] Video file has no audio stream: ${videoAbsPath}`)
+    return null
+  }
+
+  const rel = `audio/${randomUUID()}.wav`
+  const abs = assetAbsPath(project.id, rel)
+  mkdirSync(dirname(abs), { recursive: true })
+
+  try {
+    await extractAudio(videoAbsPath, abs, signal)
+  } catch (err) {
+    console.warn(`[videoDialogue] Failed to extract audio: ${(err as Error).message}`)
+    return null
+  }
+
+  const durationMs = await probeDurationMs(abs).catch(() => null)
+  const durationSec = durationMs ? durationMs / 1000 : 0
+  const scriptWords = spokenWords(clip.narration)
+
+  let words: WordTiming[] = []
+  let estimated = true
+  let timedBy: string | undefined
+
+  const tmp = join(dataDir(), 'tmp', `dialog-align-${Date.now()}`)
+  try {
+    if (getSettings().whisperAuto && whisperReady() && scriptWords.length && durationSec > 0) {
+      try {
+        const timed = await timeScript(abs, scriptWords, project.language, durationSec, tmp, signal)
+        if (timed && timed.length) {
+          words = timed
+          estimated = false
+          timedBy = WHISPER_TIMING
+        } else {
+          words = estimateWordTimings(clip.narration, durationSec)
+        }
+      } catch (e) {
+        if (signal?.aborted) throw e
+        console.warn('[whisper-dialog]', (e as Error).message)
+        words = estimateWordTimings(clip.narration, durationSec)
+      }
+    } else {
+      words = estimateWordTimings(clip.narration, durationSec)
+    }
+  } finally {
+    try {
+      rmSync(tmp, { recursive: true, force: true })
+    } catch {
+      // ignore
+    }
+  }
+
+  const asset = insertAsset({
+    projectId: project.id,
+    clipId: clip.id,
+    kind: 'audio',
+    provider: 'video',
+    prompt: clip.narration,
+    localPath: rel,
+    durationMs,
+    meta: {
+      words,
+      estimatedTimings: estimated,
+      source: 'video',
+      ...(timedBy ? { timedBy } : {})
+    }
+  })
+  emit.asset(asset)
+
+  const patch: Partial<Clip> = {
+    audioAssetId: asset.id,
+    voiceInMs: 0,
+    voiceOutMs: null,
+    voiceStartMs: 0
+  }
+  patchClip(clip.id, patch)
+  emit.clip({ clipId: clip.id, patch })
+  touchProject(project.id)
+
+  return asset
+}
+
 async function finishHiggsfield(ctx: TaskCtx, job: Job, requestId: string, payload: HfPayload): Promise<string> {
   const isVideo = payload.target === 'clip-video'
   const progressLabel =
@@ -284,6 +382,8 @@ async function finishHiggsfield(ctx: TaskCtx, job: Job, requestId: string, paylo
     const patch = { videoAssetId: asset.id, motionType: 'video' as const, mediaInMs: 0 }
     patchClip(job.clipId, patch)
     emit.clip({ clipId: job.clipId, patch })
+    const videoAbs = assetAbsPath(job.projectId, asset.localPath)
+    await extractVideoDialogueAudio(job.projectId, job.clipId, videoAbs, ctx.signal)
   }
   touchProject(job.projectId)
   return asset.id
@@ -904,6 +1004,7 @@ export function generateClipVideo(clipId: string): Job {
       patchClip(clipId, patch)
       emit.clip({ clipId, patch })
       touchProject(project.id)
+      await extractVideoDialogueAudio(project.id, clipId, abs, ctx.signal)
       return asset.id
     })
   }
@@ -928,9 +1029,19 @@ export function generateClipVideo(clipId: string): Job {
       clip: fresh,
       characters: allChars
     })
+    const isVideoDialog = !!(fresh.speakerId && project.dialogAudio === 'video' && fresh.narration.trim())
     return {
       endpoint: model.id,
-      body: videoBody(model, prompt, url, videoSecondsFor(project, fresh, prereqContext(project.id)).seconds, project.aspectRatio, project.videoResolution),
+      body: videoBody(
+        model,
+        prompt,
+        url,
+        videoSecondsFor(project, fresh, prereqContext(project.id)).seconds,
+        project.aspectRatio,
+        project.videoResolution,
+        null,
+        isVideoDialog
+      ),
       payload: { target: 'clip-video', model: model.id, prompt, basisHash }
     }
   })

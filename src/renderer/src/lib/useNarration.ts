@@ -18,18 +18,23 @@ export function useNarration(): {
   start(): Promise<void>
 } {
   const project = useProject((s) => s.project)
+  const episode = useProject((s) => s.episode)
   const clips = useProject((s) => s.clips)
   const assets = useProject((s) => s.assets)
   const jobs = useProject((s) => s.jobs)
   const flush = useProject((s) => s.flush)
   const { toast } = useApp()
   const job = jobFor(jobs, 'narration', {})
+  const isVideoDialog = (c: Clip): boolean => {
+    return !!(c.speakerId && project?.dialogAudio === 'video' && c.narration.trim())
+  }
   const outdated = (c: Clip): boolean => {
     if (!c.narration.trim()) return false
+    if (isVideoDialog(c)) return false
     const voice = c.audioAssetId ? assets[c.audioAssetId] : null
     return !voice || (voice.prompt ?? '').trim() !== c.narration.trim()
   }
-  const voiced = clips.filter((c) => c.audioAssetId).length
+  const voiced = clips.filter((c) => !isVideoDialog(c) && c.audioAssetId).length
 
   const start = async (): Promise<void> => {
     if (!project) return
@@ -43,7 +48,7 @@ export function useNarration(): {
     }
     try {
       await flush()
-      await window.api.generate.narration(project.id, 'all')
+      await window.api.generate.narration(project.id, 'all', episode?.id)
     } catch (e) {
       toast('error', errorText(e))
     }

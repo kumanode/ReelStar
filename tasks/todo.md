@@ -39,10 +39,10 @@ Rincian setiap tugas ada di [plan.md](plan.md); desain di
 
 ## Fase 4 — Prompt, suara & generate
 
-- [ ] Prasyarat — Uji suara Veo: 3–4 shot dialog bahasa Indonesia, tokoh yang sama.
-- [ ] Tugas 23 — Flag `nativeAudio`, prompt dialog, suara tidak dimatikan untuk klip dialog.
-- [ ] Tugas 24 — Ekstraksi audio video + Whisper menjadi aset audio klip.
-- [ ] Tugas 25 — Take TTS per suara untuk narator.
+- [ ] Prasyarat — Uji suara Veo: 3–4 shot dialog bahasa Indonesia, tokoh yang sama (ditunda sesuai instruksi).
+- [x] Tugas 23 — Flag `nativeAudio`, prompt dialog, suara tidak dimatikan untuk klip dialog.
+- [x] Tugas 24 — Ekstraksi audio video + Whisper menjadi aset audio klip.
+- [x] Tugas 25 — Take TTS per suara untuk narator.
 - [x] Tugas 26 — Kompilasi prompt berlabel dan urutan gambar referensi di `src/shared/`.
 - [x] Tugas 27 — Syarat sebelum generate.
 - [x] Tugas 28 — Hash basis, status hasil, badge di Storyboard.

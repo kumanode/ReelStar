@@ -31,6 +31,7 @@ interface MediaInfo {
   width: number | null
   height: number | null
   videoCodec: string | null
+  hasAudio: boolean
 }
 
 /** Reads duration and frame size from `ffmpeg -i`, which prints stream info and exits without an output file. */
@@ -41,11 +42,13 @@ function probe(absPath: string): Promise<MediaInfo> {
       const d = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(text)
       const size = /Stream #\d+:\d+.*?: Video:.*?,\s*(\d{2,5})x(\d{2,5})/.exec(text)
       const codec = /Stream #\d+:\d+.*?: Video:\s*([^,\s]+)/.exec(text)
+      const hasAudio = /Stream #\d+:\d+.*?: Audio:/.test(text)
       resolve({
         durationMs: d ? Math.round((+d[1] * 3600 + +d[2] * 60 + +d[3]) * 1000) : null,
         width: size ? +size[1] : null,
         height: size ? +size[2] : null,
-        videoCodec: codec?.[1] ?? null
+        videoCodec: codec?.[1] ?? null,
+        hasAudio
       })
     })
   })
@@ -64,6 +67,26 @@ export async function probeSize(absPath: string): Promise<{ width: number; heigh
 
 export async function probeVideoCodec(absPath: string): Promise<string | null> {
   return (await probe(absPath)).videoCodec
+}
+
+export async function probeHasAudio(absPath: string): Promise<boolean> {
+  return (await probe(absPath)).hasAudio
+}
+
+/**
+ * Extracts the audio track from a video into a 16kHz mono WAV file suitable for Whisper and editor.
+ */
+export function extractAudio(videoAbsPath: string, outWavAbsPath: string, signal?: AbortSignal): Promise<void> {
+  const args = ['-hide_banner', '-y', '-i', videoAbsPath, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', outWavAbsPath]
+  return new Promise((resolve, reject) => {
+    const p = execFile(binPath(ffmpegStatic!), args, { windowsHide: true }, (err, _stdout, stderr) => {
+      if (err) reject(new Error(`Gagal mengekstrak audio: ${String(stderr).trim().split('\n').pop() ?? err.message}`))
+      else resolve()
+    })
+    if (signal) {
+      signal.addEventListener('abort', () => p.kill(), { once: true })
+    }
+  })
 }
 
 /**

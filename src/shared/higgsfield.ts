@@ -1,3 +1,4 @@
+import { getFlow2ApiModel } from './flow2api-catalog'
 import catalog from './higgsfield-catalog.json'
 import type { AspectRatio, ModelOption } from './types'
 
@@ -153,9 +154,36 @@ export function imageBody(m: HfModel, prompt: string, aspect: AspectRatio, refs:
  */
 export const NO_MUSIC = 'Silent clip: no background music, no soundtrack, no singing or humming.'
 
-/** The video prompt with the no-music rule, trimmed so the rule itself never gets cut off. */
-export function videoPrompt(m: HfModel, prompt: string): string {
-  return `${clip(prompt.trim(), promptLimit(m) - NO_MUSIC.length - 1)} ${NO_MUSIC}`
+/** Dialogue closing directive (§6.C and §8.C): spoken line only, with Foley/ambient sound and no music. */
+export const NO_MUSIC_DIALOG = 'Clear spoken dialogue only: natural speech, ambient room sound, no background music, no soundtrack, no singing or humming.'
+
+/** Checks if a Higgsfield model supports native audio / speech track. */
+export function hfModelSupportsNativeAudio(m: HfModel): boolean {
+  if (m.props.generate_audio) return true
+  if (m.props.sound && (m.props.sound.enum?.includes('on') || m.props.sound.default === 'on')) return true
+  return false
+}
+
+/**
+ * Checks if a video model (Flow2API or Higgsfield) supports native audio generation (§6.C).
+ */
+export function modelSupportsNativeAudio(modelId: string | null | undefined, isFlow2Api: boolean): boolean {
+  if (isFlow2Api) {
+    const m = getFlow2ApiModel(modelId, 'video')
+    return !!m?.nativeAudio
+  }
+  const m = getVideoModel(modelId)
+  return hfModelSupportsNativeAudio(m)
+}
+
+/** The video prompt with the no-music or dialogue rule, trimmed so the rule itself never gets cut off. */
+export function videoPrompt(m: HfModel, prompt: string, isDialog = false): string {
+  const ending = isDialog ? NO_MUSIC_DIALOG : NO_MUSIC
+  const trimmed = prompt.trim()
+  if (trimmed.includes(NO_MUSIC) || trimmed.includes(NO_MUSIC_DIALOG)) {
+    return clip(trimmed, promptLimit(m))
+  }
+  return `${clip(trimmed, promptLimit(m) - ending.length - 1)} ${ending}`
 }
 
 export function videoBody(
@@ -165,15 +193,20 @@ export function videoBody(
   seconds: number,
   aspect: AspectRatio,
   resolution?: string | null,
-  audioUrl?: string | null
+  audioUrl?: string | null,
+  enableAudio = false
 ): Record<string, unknown> {
-  const body = common(m, videoPrompt(m, prompt), aspect, resolution)
+  const body = common(m, videoPrompt(m, prompt, enableAudio), aspect, resolution)
   const duration = fitDuration(m, seconds)
   if (duration != null) body.duration = duration
   if (m.input.field) body[m.input.field] = m.input.mode === 'reference' ? [imageUrl] : imageUrl
   if (audioUrl) {
     if (m.props.audio_url) body.audio_url = audioUrl
     if (m.props.audio_urls) body.audio_urls = [audioUrl]
+  }
+  if (enableAudio) {
+    if (m.props.sound) body.sound = m.props.sound.enum?.includes('on') ? 'on' : m.props.sound.default ?? 'on'
+    if (m.props.generate_audio) body.generate_audio = true
   }
   return checkRequired(m, body)
 }
