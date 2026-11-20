@@ -1,8 +1,12 @@
 # AGENTS.md — panduan untuk AI agent dan pengembang
 
-ReelStar adalah aplikasi desktop (Electron + React + TypeScript) yang mengubah ide cerita menjadi video YouTube:
-AI menulis naskah dan rencana visual, Higgsfield membuat gambar dan video, Gemini atau ElevenLabs membuat suara
-narator, lalu semuanya dirangkai di editor timeline dan diekspor jadi MP4 dengan FFmpeg.
+ReelStar adalah aplikasi desktop (Electron + React + TypeScript) untuk membuat serial drama pendek multi-episode
+dari novel atau naskah jadi. AI memecah sumber cerita menjadi episode, lalu menyusun naskah per shot dalam dua
+tahap (rencana → tinjau → konfirmasi). Tokoh, varian kostum, lokasi, dan prop dicatat di Lorebook. Higgsfield atau
+Flow2API membuat gambar dan video; dialog bisa diucapkan langsung oleh model video (Veo) dengan gerak bibir,
+sedangkan narator dan dialog mode TTS memakai Gemini atau ElevenLabs. Setiap episode dirangkai di editor timeline
+dan diekspor jadi MP4 dengan FFmpeg. Desain lengkapnya ada di
+[spec drama short](docs/superpowers/specs/2026-11-20-drama-short-flow-design.md).
 
 Baca file ini dulu sebelum mengubah kode. Detail lengkapnya ada di folder [`docs/`](docs/README.md).
 
@@ -28,8 +32,9 @@ src/
     ipc.ts         semua handler IPC (window.api)
     repo.ts        akses SQLite (proyek, klip, pemeran, aset, job)
     db/index.ts    skema + migrasi (PRAGMA user_version)
-    story.ts       prompt visual, musik, YouTube metadata (LLM)
-    generation.ts  gambar/video Higgsfield, lembar karakter/lokasi/prop, TTS, estimasi kredit
+    story.ts       planner episode, naskah dua tahap, prompt visual, musik, YouTube metadata (LLM)
+    generation.ts  gambar/video Higgsfield/Flow2API, lembar karakter/lokasi/prop, suara dialog dari video, TTS,
+                   estimasi kredit
     narration.ts   narasi satu rekaman utuh lalu dipotong per adegan; sinkron caption
     whisper.ts     whisper.cpp lokal (unduh model, kenali kata)
     align.ts, cuts.ts  cocokkan kata naskah ke hasil Whisper; pilih titik potong antar-adegan
@@ -44,8 +49,12 @@ src/
   shared/          kode yang dipakai main DAN renderer (tipe, aturan gerak, caption, timeline)
     filters.ts    preset filter warna untuk pratinjau dan ekspor
     sfx.ts        katalog efek suara bawaan
+    prompts.ts    prompt gambar/video berlabel dan urutan lembar referensi
+    validation.ts syarat generate, status hasil (terkini/basi/belum ada/terblokir), durasi video, batch
+    hash.ts       hash basis hasil generate
+    styles.ts, legacyStyles.ts  katalog gaya visual; gaya lama tetap terbaca untuk proyek lama
   renderer/src/    tampilan React + Tailwind v4 + Zustand
-    pages/project/  Studio Hub, Lorebook, Storyboard, Editor, Header, Sidebar
+    pages/project/  Episode Hub, Lorebook, Rencana & Tinjau, Storyboard, Editor, Header, Sidebar
     pages/project/editor/  pratinjau (Player), Timeline, Inspector (panel kanan), engine pemutaran
 resources/         font caption, SFX bawaan, whisper-cli.exe + DLL, file lisensi
 build/             ikon aplikasi untuk installer (icon.ico, icon.png), dibuat dari logo di components/Logo.tsx

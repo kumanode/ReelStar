@@ -71,10 +71,10 @@ Setiap job punya `AbortController` sehingga bisa dibatalkan (`generate:cancel`).
 ## Penyimpanan
 
 Semua data pengguna ada di folder data aplikasi (`app.getPath('userData')`). Di Windows:
-`%APPDATA%\Bang Story`.
+`%APPDATA%\ReelStar`.
 
 ```
-%APPDATA%\Bang Story\
+%APPDATA%\ReelStar\
   studio.db                 SQLite: proyek, klip, pemeran, aset, job, pengaturan, kunci terenkripsi, cache
   projects\<id-proyek>\
     images\  videos\  audio\  music\  overlays\     file hasil generate dan unggahan
@@ -85,7 +85,8 @@ Semua data pengguna ada di folder data aplikasi (`app.getPath('userData')`). Di 
 - Nama folder proyek dan file berupa ID acak; judul hanya ada di database.
 - Path aset disimpan **relatif** terhadap folder proyek (`assets.local_path`), sehingga proyek bisa disalin utuh.
 - Menghapus proyek menghapus foldernya.
-- Folder data lama `Studio Cerita` dipindahkan otomatis ke `Bang Story` saat pertama dibuka (`useDataFolder`).
+- Folder data lama `Bang Story` (atau `Studio Cerita`) dipindahkan otomatis ke `ReelStar` saat pertama dibuka
+  (`useDataFolder`). Pemindahan ini sekali jalan; migrasi database episode berjalan sesudahnya.
 
 ### Protokol `studio://`
 

@@ -1,3 +1,5 @@
+import { LEGACY_STYLES } from './legacyStyles'
+import { NO_TEXT } from './styleText'
 export type StyleCategory = 'liveaction' | 'animation' | 'custom'
 
 export interface VisualStyle {
@@ -21,8 +23,7 @@ export const STYLE_CATEGORIES: { id: StyleCategory | 'all'; label: string }[] = 
   { id: 'custom', label: 'Kustom' }
 ]
 
-/** Shared by every style; thumbnails with a text hook remove it again. */
-export const NO_TEXT = 'No text, no letters, no captions, no watermark, no logo.'
+export { NO_TEXT } from './styleText'
 
 export const VISUAL_STYLES: VisualStyle[] = [
   // ==========================================
@@ -32,7 +33,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'premium_drama',
     name: 'Premium Drama',
     category: 'liveaction',
-    niche: 'TV drama · Master framing',
+    niche: 'Drama TV · Komposisi rapi',
     swatch: '#3D342D',
     ink: '#F5EBE6',
     prompt:
@@ -44,7 +45,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'cinematic_historical',
     name: 'Cinematic Historical',
     category: 'liveaction',
-    niche: 'Pro lighting · TV quality',
+    niche: 'Cahaya profesional · Kualitas TV',
     swatch: '#4A3326',
     ink: '#EAD7C5',
     prompt:
@@ -56,7 +57,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'zhang_yimou',
     name: 'Zhang Yimou',
     category: 'liveaction',
-    niche: 'Bold colors · Ritual',
+    niche: 'Warna tegas · Ritual',
     swatch: '#8B1E1E',
     ink: '#FBE8A6',
     prompt:
@@ -68,7 +69,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'ancient_xianxia',
     name: 'Ancient Xianxia',
     category: 'liveaction',
-    niche: 'Linjiangxian · Soft filter',
+    niche: 'Linjiangxian · Filter lembut',
     swatch: '#3A506B',
     ink: '#E0FBFC',
     prompt:
@@ -80,7 +81,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'theatrical_film',
     name: 'Theatrical Film',
     category: 'liveaction',
-    niche: 'DaVinci grade · Filmic',
+    niche: 'Grading DaVinci · Sinematik',
     swatch: '#242B35',
     ink: '#F0F3F4',
     prompt:
@@ -92,7 +93,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'spartan_epic',
     name: 'Spartan Epic',
     category: 'liveaction',
-    niche: 'Gladiator · High contrast',
+    niche: 'Gladiator · Kontras tinggi',
     swatch: '#5C2D1E',
     ink: '#F5D6BA',
     prompt:
@@ -104,7 +105,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'blade_runner',
     name: 'Blade Runner',
     category: 'liveaction',
-    niche: 'Minimalist · Cyber particle',
+    niche: 'Minimalis · Partikel siber',
     swatch: '#0E3B43',
     ink: '#48E5C2',
     prompt:
@@ -116,7 +117,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'game_of_thrones',
     name: 'Game of Thrones',
     category: 'liveaction',
-    niche: 'Cold epic · Intrigue',
+    niche: 'Epik dingin · Intrik',
     swatch: '#2B2D42',
     ink: '#EDF2F4',
     prompt:
@@ -128,7 +129,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'breaking_bad',
     name: 'Breaking Bad',
     category: 'liveaction',
-    niche: 'Latin filter · Crime aesthetic',
+    niche: 'Filter Latin · Estetika kriminal',
     swatch: '#8C5A24',
     ink: '#FDE68A',
     prompt:
@@ -140,7 +141,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'kdrama_idol',
     name: 'K-Drama Idol',
     category: 'liveaction',
-    niche: 'Soft light · Romance',
+    niche: 'Cahaya lembut · Romansa',
     swatch: '#D4A373',
     ink: '#FEFAE0',
     prompt:
@@ -152,7 +153,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'kurosawa',
     name: 'Kurosawa',
     category: 'liveaction',
-    niche: 'B&W contrast · Epic',
+    niche: 'Hitam-putih kontras · Epik',
     swatch: '#262626',
     ink: '#F5F5F5',
     prompt:
@@ -164,7 +165,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'nolan',
     name: 'Nolan',
     category: 'liveaction',
-    niche: 'IMAX · Cool blue-gray',
+    niche: 'IMAX · Biru-abu dingin',
     swatch: '#1E293B',
     ink: '#E2E8F0',
     prompt:
@@ -176,7 +177,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'tarantino',
     name: 'Tarantino',
     category: 'liveaction',
-    niche: 'High contrast · Violent / Retro',
+    niche: 'Kontras tinggi · Keras, retro',
     swatch: '#7F1D1D',
     ink: '#FEF08A',
     prompt:
@@ -188,7 +189,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'david_lynch',
     name: 'David Lynch',
     category: 'liveaction',
-    niche: 'Banal · Surreal nightmare',
+    niche: 'Keseharian · Mimpi buruk surealis',
     swatch: '#31101E',
     ink: '#FCA5A5',
     prompt:
@@ -200,7 +201,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'wes_anderson',
     name: 'Wes Anderson',
     category: 'liveaction',
-    niche: 'Candy · Macaron',
+    niche: 'Warna permen · Makaron',
     swatch: '#BE185D',
     ink: '#FCE7F3',
     prompt:
@@ -212,7 +213,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'wong_kar_wai',
     name: 'Wong Kar-wai',
     category: 'liveaction',
-    niche: 'Film grain · Eastern city',
+    niche: 'Butiran film · Kota Asia',
     swatch: '#1C312E',
     ink: '#6EE7B7',
     prompt:
@@ -224,7 +225,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'shaw_brothers',
     name: 'Shaw Brothers',
     category: 'liveaction',
-    niche: 'HK wuxia · Cinematic',
+    niche: 'Wuxia Hong Kong · Sinematik',
     swatch: '#78350F',
     ink: '#FEF3C7',
     prompt:
@@ -236,7 +237,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'live_cyberpunk',
     name: 'Live Cyberpunk',
     category: 'liveaction',
-    niche: 'Cinematic · Ultra HD',
+    niche: 'Sinematik · Ultra HD',
     swatch: '#0284C7',
     ink: '#E0F2FE',
     prompt:
@@ -252,7 +253,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'game_cg_3d',
     name: '3D Game CG',
     category: 'animation',
-    niche: 'Cinematic · Unreal Engine',
+    niche: 'Sinematik · Unreal Engine',
     swatch: '#1F2937',
     ink: '#38BDF8',
     prompt:
@@ -264,7 +265,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'chinese_3d',
     name: 'Chinese 3D',
     category: 'animation',
-    niche: 'Cinematic · Unreal Engine',
+    niche: 'Sinematik · Unreal Engine',
     swatch: '#2D3A34',
     ink: '#A7F3D0',
     prompt:
@@ -276,7 +277,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'kyoto_animation',
     name: 'Kyoto Animation',
     category: 'animation',
-    niche: 'Soft cel · Tateishi',
+    niche: 'Cel lembut · Tateishi',
     swatch: '#FDA4AF',
     ink: '#4C0519',
     prompt:
@@ -300,7 +301,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'us_3d_animation',
     name: 'US 3D Animation',
     category: 'animation',
-    niche: 'Cinematic · Pixar',
+    niche: 'Sinematik · Pixar',
     swatch: '#1E3A8A',
     ink: '#DBEAFE',
     prompt:
@@ -312,7 +313,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'hardcore_ink',
     name: 'Hardcore Ink',
     category: 'animation',
-    niche: 'Wushan · Dry brush',
+    niche: 'Wushan · Kuas kering',
     swatch: '#18181B',
     ink: '#E4E4E7',
     prompt:
@@ -324,7 +325,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'ink_papercut',
     name: 'Ink & Papercut',
     category: 'animation',
-    niche: 'Wushan · Rich color',
+    niche: 'Wushan · Warna pekat',
     swatch: '#991B1B',
     ink: '#FEF2F2',
     prompt:
@@ -336,7 +337,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'felt_stopmotion',
     name: 'Felt Stopmotion',
     category: 'animation',
-    niche: 'Stopmotion · Realistic lighting',
+    niche: 'Stop-motion · Cahaya realistis',
     swatch: '#78350F',
     ink: '#FEF3C7',
     prompt:
@@ -348,7 +349,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'clay_stopmotion',
     name: 'Clay Stopmotion',
     category: 'animation',
-    niche: 'Stopmotion · Master framing',
+    niche: 'Stop-motion · Komposisi rapi',
     swatch: '#C2410C',
     ink: '#FFEDD5',
     prompt:
@@ -360,7 +361,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'jp_horror',
     name: 'JP Horror',
     category: 'animation',
-    niche: 'Low saturation · Anime horror',
+    niche: 'Saturasi rendah · Horor anime',
     swatch: '#27272A',
     ink: '#F4F4F5',
     prompt:
@@ -372,7 +373,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'kr_webtoon',
     name: 'KR Webtoon',
     category: 'animation',
-    niche: 'Semi-realistic · Romantic',
+    niche: 'Semi-realistis · Romantis',
     swatch: '#312E81',
     ink: '#E0E7FF',
     prompt:
@@ -384,7 +385,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'zenless_zone_zero',
     name: 'Zenless Zone Zero',
     category: 'animation',
-    niche: 'Zenless Zone Zero · Neo-cyber',
+    niche: 'Zenless Zone Zero · Neo-siber',
     swatch: '#1E1B4B',
     ink: '#A5B4FC',
     prompt:
@@ -396,7 +397,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'ghibli',
     name: 'Ghibli',
     category: 'animation',
-    niche: 'Miyazaki · Warm texture',
+    niche: 'Miyazaki · Tekstur hangat',
     swatch: '#065F46',
     ink: '#D1FAE5',
     prompt:
@@ -408,7 +409,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'demon_slayer',
     name: 'Demon Slayer',
     category: 'animation',
-    niche: 'Bold outline · Action',
+    niche: 'Garis tebal · Aksi',
     swatch: '#991B1B',
     ink: '#FEE2E2',
     prompt:
@@ -420,7 +421,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'anim_cyberpunk',
     name: 'Anim Cyberpunk',
     category: 'animation',
-    niche: 'Cinematic · HD',
+    niche: 'Sinematik · HD',
     swatch: '#4C1D95',
     ink: '#EDE9FE',
     prompt:
@@ -432,7 +433,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'bloodborne',
     name: 'Bloodborne',
     category: 'animation',
-    niche: 'Gothic · Cold mist',
+    niche: 'Gotik · Kabut dingin',
     swatch: '#18181B',
     ink: '#A1A1AA',
     prompt:
@@ -444,7 +445,7 @@ export const VISUAL_STYLES: VisualStyle[] = [
     id: 'junji_ito',
     name: 'Junji Ito',
     category: 'animation',
-    niche: 'Horror · Sharp lines',
+    niche: 'Horor · Garis tajam',
     swatch: '#111827',
     ink: '#F3F4F6',
     prompt:
@@ -481,5 +482,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
 ]
 
 export function getStyle(id: string): VisualStyle {
-  return VISUAL_STYLES.find((s) => s.id === id) ?? VISUAL_STYLES[0]
+  return VISUAL_STYLES.find((s) => s.id === id) ?? LEGACY_STYLES.find((s) => s.id === id) ?? VISUAL_STYLES[0]
+}
+
+/** True for a style from the old catalog: shown on its project, never offered in the picker. */
+export function isLegacyStyle(id: string): boolean {
+  return !VISUAL_STYLES.some((s) => s.id === id) && LEGACY_STYLES.some((s) => s.id === id)
 }

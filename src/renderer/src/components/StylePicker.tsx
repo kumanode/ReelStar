@@ -64,7 +64,7 @@ export function StylePicker({ value, onChange }: { value: string; onChange: (id:
       ) : (
         /* Horizontal Cards Grid (Compact & doesn't eat up vertical modal space) */
         <div className="scroll-thin max-h-[340px] overflow-y-auto pr-1">
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
             {list.map((s) => {
               const on = s.id === value
               const isDefault = s.id === 'premium_drama'

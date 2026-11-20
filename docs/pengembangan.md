@@ -34,7 +34,7 @@ Alias impor: `@shared/*` → `src/shared/*` (semua proses), `@renderer/*` → `s
 
 ## Folder data saat mengembangkan
 
-Mode pengembangan memakai folder data yang sama dengan aplikasi terpasang (`%APPDATA%\Bang Story`). Supaya
+Mode pengembangan memakai folder data yang sama dengan aplikasi terpasang (`%APPDATA%\ReelStar`). Supaya
 proyek dan kunci API asli tidak tersentuh saat bereksperimen, arahkan ke folder lain:
 
 ```powershell

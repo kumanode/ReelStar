@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, ArrowRight, Copy, FolderOpen, MoreHorizontal, Plus, RefreshCw, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
-import { DURATIONS, LANGUAGES, clipCountFor, llmName } from '@shared/models'
+import { LANGUAGES, llmName } from '@shared/models'
 import { getStyle } from '@shared/styles'
 import type { ApiProvider, AppSettings, AspectRatio, DialogAudio, KeyStatus, ProjectStatus, ProjectSummary, TtsProvider } from '@shared/types'
 import { Logo } from '../components/Logo'
@@ -30,9 +30,18 @@ const FILTERS: { id: 'all' | 'draft' | 'progress' | 'exported'; label: string; m
 ]
 
 const SUGGESTIONS = [
-  'Asal-usul Sumpah Palapa dan bagaimana Gajah Mada menepatinya',
-  'Misteri Segitiga Bermuda: fakta dan mitosnya',
-  'Kenapa kucing suka masuk ke dalam kotak?'
+  'Pewaris kaya menyamar jadi office girl dan dihina atasannya sendiri',
+  'Istri yang diusir mertuanya kembali lima tahun kemudian sebagai bos besar',
+  'Dua saudara kembar yang tertukar sejak lahir bertemu di hari pernikahan'
+]
+
+/** Target length of one episode; the planner keeps each episode within 30–180 seconds. */
+const EPISODE_DURATIONS: SelectOption<number>[] = [
+  { value: 45, label: '45 dtk / episode' },
+  { value: 60, label: '60 dtk / episode' },
+  { value: 75, label: '75 dtk / episode' },
+  { value: 90, label: '90 dtk / episode' },
+  { value: 120, label: '120 dtk / episode' }
 ]
 
 /** "a, b dan c" */
@@ -54,7 +63,6 @@ export function Home() {
   const [query, setQuery] = useState('')
   const [synopsis, setSynopsis] = useState('')
   const [durationSec, setDurationSec] = useState(60)
-  const [longImageCredit, setLongImageCredit] = useState<number | null>(null)
   const [language, setLanguage] = useState('id')
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('9:16')
   const [styleId, setStyleId] = useState('premium_drama')
@@ -77,18 +85,6 @@ export function Home() {
       setLanguage(s.defaultLanguage)
     })
   }, [])
-
-  useEffect(() => {
-    if (durationSec < 900 || !appSettings || appSettings.defaultVisualProvider === 'flow2api') {
-      setLongImageCredit(null)
-      return
-    }
-    let live = true
-    void window.api.generate.estimate('image', appSettings.imageModel, aspectRatio).then((estimate) => {
-      if (live) setLongImageCredit(estimate?.credits ?? null)
-    })
-    return () => { live = false }
-  }, [durationSec, aspectRatio, appSettings])
 
   // Start on a narrator service that has a working key.
   useEffect(() => {
@@ -153,9 +149,9 @@ export function Home() {
 
   const remove = async (p: ProjectSummary): Promise<void> => {
     const ok = await confirmDialog({
-      title: 'Hapus proyek?',
-      body: `“${p.title}” beserta semua gambar, video, dan suaranya akan dihapus dari komputer ini. Tindakan ini tidak bisa dibatalkan.`,
-      confirm: 'Hapus proyek',
+      title: 'Hapus serial?',
+      body: `“${p.title}” beserta semua episode, gambar, video, dan suaranya akan dihapus dari komputer ini. Tindakan ini tidak bisa dibatalkan.`,
+      confirm: 'Hapus serial',
       danger: true
     })
     if (!ok) return
@@ -182,8 +178,8 @@ export function Home() {
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Cari proyek"
-            aria-label="Cari proyek"
+            placeholder="Cari serial"
+            aria-label="Cari serial"
             className="flex-1 bg-transparent text-sm text-ink outline-none"
           />
         </label>
@@ -230,36 +226,31 @@ export function Home() {
             </div>
           )}
           <div>
-            <h1 className="font-display text-[46px] font-bold leading-[1.08] tracking-[-0.025em]">Mau bikin video apa hari ini?</h1>
+            <h1 className="font-display text-[46px] font-bold leading-[1.08] tracking-[-0.025em]">Mau bikin serial drama apa hari ini?</h1>
             <p className="mt-3 text-[17px] text-ink-2">
-              Tulis idenya. AI menyusun klip, naskah, dan suaranya, lalu kamu tinggal merapikan di editor.
+              Tulis premisnya. AI memecahnya jadi episode dan naskah per shot, kamu tinjau, lalu gambar, video, dan suaranya dibuat.
             </p>
           </div>
           <div className="flex flex-col gap-3 rounded-[18px] border-[1.5px] border-ink bg-surface py-5 pl-6 pr-5 shadow-ink-lg">
             <label htmlFor="ide" className="text-[13px] font-semibold text-ink-2">
-              Ide cerita atau sinopsis
+              Premis atau sinopsis serial
             </label>
             <textarea
               id="ide"
               rows={3}
               value={synopsis}
               onChange={(e) => setSynopsis(e.target.value)}
-              placeholder="Contoh: Gajah Mada bersumpah tidak akan menikmati palapa sebelum Nusantara bersatu. Para menteri menertawakannya, tapi dia membuktikannya…"
+              placeholder="Contoh: Rani, office girl yang selalu dihina manajernya, ternyata pewaris tunggal perusahaan tempat dia bekerja…"
               className="resize-none bg-transparent text-lg leading-relaxed outline-none placeholder:text-muted/70"
             />
             <div className="flex flex-wrap items-center gap-2 border-t border-dashed border-line pt-3.5">
               <Select
                 variant="pill"
-                label="Durasi"
+                label="Durasi episode"
                 value={durationSec}
                 onChange={setDurationSec}
-                options={DURATIONS.map((d) => ({ value: d.sec, label: d.label }))}
+                options={EPISODE_DURATIONS}
               />
-              {durationSec >= 900 && (
-                <span className="text-xs text-muted">
-                  ±{clipCountFor(durationSec)} adegan{longImageCredit != null ? ` · ≈${Math.round(longImageCredit * clipCountFor(durationSec))} kredit gambar` : ''}
-                </span>
-              )}
               <Select
                 variant="pill"
                 label="Bahasa"
@@ -295,7 +286,7 @@ export function Home() {
 
         <section className="mx-auto flex max-w-[1280px] flex-col gap-[18px] px-12 pb-12 pt-11">
           <div className="flex items-center gap-4">
-            <h2 className="font-display text-[27px] font-bold tracking-[-0.015em]">Proyek kamu</h2>
+            <h2 className="font-display text-[27px] font-bold tracking-[-0.015em]">Serial kamu</h2>
             <div className="ml-2 flex gap-1.5">
               {FILTERS.map((f) => {
                 const count = (projects ?? []).filter((p) => f.match(p.status)).length
@@ -481,12 +472,12 @@ function NewSerialModal({
           />
         </Field>
 
-        <Field label="Ide Cerita atau Sinopsis" hint="AI akan menggunakan ide ini untuk merencanakan alur dan adegan serial kamu.">
+        <Field label="Premis atau sinopsis serial" hint="AI memakai premis ini untuk merencanakan episode dan adegan serial kamu.">
           <textarea
             rows={3}
             value={synopsis}
             onChange={(e) => setSynopsis(e.target.value)}
-            placeholder="Contoh: Gajah Mada bersumpah tidak akan menikmati palapa sebelum Nusantara bersatu..."
+            placeholder="Contoh: Rani, office girl yang selalu dihina manajernya, ternyata pewaris tunggal perusahaan tempat dia bekerja…"
             className={cx(inputCls, 'resize-none py-2.5 leading-relaxed')}
           />
         </Field>
