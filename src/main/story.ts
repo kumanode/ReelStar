@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto'
 import { CAMERA_PRESETS, MOTION_STRENGTHS, TRANSITIONS } from '@shared/motion'
 import { formatChapters } from '@shared/chapters'
 import { LANGUAGES } from '@shared/models'
-import { needsVisual } from '@shared/script'
+import { isNarratorName, needsVisual, visualSourceOf } from '@shared/script'
 import { getStyle } from '@shared/styles'
 import type {
   CameraPresetId,
@@ -23,17 +24,20 @@ import type {
 import {
   applyVisuals,
   charactersOf,
+  clearEpisodesForReplan,
   clipsOf,
   confirmEpisodeScriptRepo,
   createEpisode,
   derivativesOf,
   getBundle,
   getEpisode,
+  getPlanProgress,
   getProject,
   listEpisodes,
   locationsOf,
   patchClip,
   propsOf,
+  setPlanProgress,
   updateEpisode,
   type SceneVisual
 } from './repo'
@@ -97,108 +101,158 @@ interface RawEpisodePlanResponse {
   episodes?: RawEpisodePlanItem[]
 }
 
+/** Source characters per planner call: small enough for any model's context and output, big enough for a few episodes. */
+const PLAN_WINDOW_CHARS = 9000
+const PLAN_ATTEMPTS = 3
+
+const hashText = (text: string): string => createHash('sha1').update(text).digest('hex')
+
+/** Cuts the source at paragraph (or sentence) boundaries so no episode starts mid-sentence. */
+function planWindows(text: string, from: number): { start: number; end: number }[] {
+  const windows: { start: number; end: number }[] = []
+  const minCut = PLAN_WINDOW_CHARS * 0.5
+  let start = from
+  while (start < text.length) {
+    let end = Math.min(text.length, start + PLAN_WINDOW_CHARS)
+    if (end < text.length) {
+      const slice = text.slice(start, end)
+      const para = slice.lastIndexOf('\n\n')
+      const line = slice.lastIndexOf('\n')
+      const sentence = Math.max(slice.lastIndexOf('. '), slice.lastIndexOf('! '), slice.lastIndexOf('? '))
+      const cut = para > minCut ? para + 2 : line > minCut ? line + 1 : sentence > minCut ? sentence + 2 : -1
+      if (cut > 0) end = start + cut
+    }
+    windows.push({ start, end })
+    start = end
+  }
+  return windows
+}
+
+/** Returns why a planner reply cannot be stored, or null when every episode has what the series needs. */
+function planProblem(items: RawEpisodePlanItem[]): string | null {
+  if (!items.length) return 'tidak ada episode'
+  for (const [i, item] of items.entries()) {
+    const n = i + 1
+    if (!str(item.title)) return `episode ${n} tanpa judul`
+    if (!str(item.summary)) return `episode ${n} tanpa ringkasan`
+    if (!str(item.hook)) return `episode ${n} tanpa hook`
+    if (!str(item.cliffhanger)) return `episode ${n} tanpa cliffhanger`
+    if (!Array.isArray(item.story_beats) || item.story_beats.map(str).filter(Boolean).length < 2) return `episode ${n} kurang dari 2 beat`
+  }
+  return null
+}
+
 export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]> {
   const projectId = input.projectId
   const project = getProject(projectId)
   const sourceText = (input.sourceText ?? project.sourceText ?? '').trim()
   const sourceKind: SourceKind = input.sourceKind ?? project.sourceKind ?? 'novel'
   const targetDuration = Math.max(30, Math.min(input.targetDurationSec ?? project.durationSec ?? 75, 180))
+  const mode = input.mode ?? 'replace'
 
   if (!sourceText) {
     throw new Error('Teks sumber cerita masih kosong. Masukkan novel atau naskah serial dulu.')
   }
 
-  emit.storyProgress({ projectId, message: 'Menganalisis teks sumber dan merencanakan episode drama...' })
+  let from = 0
+  if (mode === 'replace') {
+    clearEpisodesForReplan(projectId)
+  } else {
+    const progress = getPlanProgress(projectId)
+    if (progress) {
+      if (hashText(sourceText.slice(0, progress.coveredChars)) !== progress.coveredHash) {
+        throw new Error('Bagian sumber yang sudah direncanakan telah berubah. Pakai "Rencanakan ulang" supaya episode sesuai teks terbaru.')
+      }
+      from = progress.coveredChars
+    } else if (listEpisodes(projectId).some((e) => e.status !== 'draft')) {
+      throw new Error('Belum ada catatan sampai mana sumber direncanakan. Pakai "Rencanakan ulang" untuk memulai dari awal.')
+    }
+    if (from >= sourceText.length) {
+      throw new Error('Semua teks sumber sudah dipecah jadi episode. Tambahkan lanjutan cerita di bawah teks sumber, lalu lanjutkan lagi.')
+    }
+  }
 
+  const windows = planWindows(sourceText, from)
   const system = sourceKind === 'screenplay'
     ? [
         'You are an expert drama script supervisor.',
-        `You are structuring a completed screenplay into vertical short drama episodes (around ${targetDuration} seconds each).`,
+        `You are structuring one part of a completed screenplay into vertical short drama episodes (around ${targetDuration} seconds each).`,
         'CRITICAL RULE: Preserve all original character dialogue, narration, scene flow, and names VERBATIM.',
         'Do not rewrite, summarize, or alter character lines.',
-        'Divide the screenplay into cohesive episodes with clear beginning beats, middle escalation, and a strong cliffhanger moment.',
+        'Cover the given part completely and in order: every line of it belongs to exactly one episode, nothing outside it.',
+        'Divide it into cohesive episodes with clear beginning beats, middle escalation, and a strong cliffhanger moment.',
+        'source_excerpt must be the exact, unedited slice of the part that the episode covers.',
         'All output fields must be in Indonesian.'
       ].join(' ')
     : [
         'You are an award-winning vertical short drama showrunner adapting a novel/story into a viral multi-episode short drama series.',
-        `Target duration per episode is around ${targetDuration} seconds (about 12-18 shots).`,
+        `You receive one part of the source at a time. Target duration per episode is around ${targetDuration} seconds (about 12-18 shots).`,
+        'Cover the given part completely and in order, and nothing outside it.',
         'Every episode MUST follow the addictive short drama formula:',
         '1) Shocking or dramatic opening Hook in the first 5 seconds.',
         '2) Fast-paced conflict escalation with emotional stakes.',
         '3) Heart-pounding Cliffhanger ending that forces the viewer to watch the next episode immediately.',
-        'Ensure continuity: Episode 2 Hook must directly address or escalate Episode 1 Cliffhanger.',
+        'Ensure continuity: each episode Hook must directly address or escalate the previous episode Cliffhanger, including the one given as context.',
+        'source_excerpt must be the exact slice of the given part that the episode covers.',
         'All titles, summaries, hooks, beats, teasers, and excerpts must be in gripping, natural Indonesian.'
       ].join(' ')
 
-  const prompt = [
-    `Serial Title: ${project.title || '(untitled)'}`,
-    `Source Type: ${sourceKind === 'screenplay' ? 'Naskah Jadi (Screenplay)' : 'Novel / Prosa'}`,
-    `Target Duration per Episode: ${targetDuration} seconds`,
-    `Source Text:\n"""\n${sourceText}\n"""`
-  ].join('\n\n')
+  for (const [wi, w] of windows.entries()) {
+    const part = sourceText.slice(w.start, w.end)
+    const existing = listEpisodes(projectId)
+    const prev = existing[existing.length - 1]
+    const label = windows.length > 1 ? `bagian ${wi + 1} dari ${windows.length}` : 'teks sumber'
+    emit.storyProgress({ projectId, message: `Merencanakan episode dari ${label}...` })
 
-  const res = await generateJson<RawEpisodePlanResponse>({
-    system,
-    prompt,
-    schema: EPISODE_PLAN_SCHEMA,
-    name: 'episode_planner'
-  })
+    const prompt = [
+      `Serial Title: ${project.title || '(untitled)'}`,
+      `Source Type: ${sourceKind === 'screenplay' ? 'Naskah Jadi (Screenplay)' : 'Novel / Prosa'}`,
+      `Target Duration per Episode: ${targetDuration} seconds`,
+      prev && prev.status !== 'draft'
+        ? `Previous Episode ${prev.episodeNum} (${prev.title}): ${prev.summary}\nIts cliffhanger, which the first new episode must pick up: ${prev.cliffhanger}`
+        : 'This part starts the series.',
+      w.end < sourceText.length ? 'More source text follows after this part.' : 'This is the last part of the source: the final episode may resolve the story.',
+      `Source Part:\n"""\n${part}\n"""`
+    ].join('\n\n')
 
-  const rawEpisodes = res.episodes ?? []
-  if (!rawEpisodes.length) {
-    throw new Error('AI belum berhasil menghasilkan pembagian episode. Coba lagi.')
-  }
-
-  emit.storyProgress({ projectId, message: `Menyimpan ${rawEpisodes.length} episode hasil rencana...` })
-
-  const existing = listEpisodes(projectId)
-  const isContinuation = existing.length > 0 && existing.some((e) => e.status !== 'draft')
-
-  const startNum = isContinuation ? existing.length + 1 : 1
-
-  if (!isContinuation) {
-    for (const [idx, item] of rawEpisodes.entries()) {
-      const epNum = idx + 1
-      const epData = {
-        title: str(item.title) || `Episode ${epNum}`,
-        summary: str(item.summary),
-        hook: str(item.hook),
-        storyBeats: Array.isArray(item.story_beats) ? item.story_beats.map(str).filter(Boolean) : [],
-        cliffhanger: str(item.cliffhanger),
-        nextTeaser: str(item.next_teaser),
-        sourceText: str(item.source_excerpt) || sourceText,
-        sourceKind,
-        status: 'planned' as const,
-        durationSec: item.target_duration_sec ? Number(item.target_duration_sec) : targetDuration
-      }
-
-      if (idx === 0 && existing[0]) {
-        updateEpisode(existing[0].id, epData)
-      } else {
-        createEpisode(projectId, {
-          ...epData,
-          episodeNum: epNum
-        })
+    let items: RawEpisodePlanItem[] = []
+    let problem: string | null = 'belum dicoba'
+    for (let attempt = 1; attempt <= PLAN_ATTEMPTS && problem; attempt++) {
+      if (attempt > 1) emit.storyProgress({ projectId, message: `Mengulang ${label} (percobaan ${attempt}): ${problem}...` })
+      try {
+        const res = await generateJson<RawEpisodePlanResponse>({ system, prompt, schema: EPISODE_PLAN_SCHEMA, name: 'episode_planner' })
+        items = res.episodes ?? []
+        problem = planProblem(items)
+      } catch (e) {
+        problem = e instanceof Error ? e.message : String(e)
       }
     }
-  } else {
-    for (const [idx, item] of rawEpisodes.entries()) {
-      const epNum = startNum + idx
+    if (problem) {
+      const done = listEpisodes(projectId).filter((e) => e.status !== 'draft').length
+      throw new Error(
+        `Gagal merencanakan ${label} setelah ${PLAN_ATTEMPTS} percobaan (${problem}). ` +
+          (done ? `${done} episode sebelumnya sudah tersimpan; tekan "Lanjutkan perencanaan" untuk mencoba lagi dari bagian ini.` : 'Coba lagi.')
+      )
+    }
+
+    for (const item of items) {
       createEpisode(projectId, {
-        title: str(item.title) || `Episode ${epNum}`,
+        title: str(item.title),
         summary: str(item.summary),
         hook: str(item.hook),
-        storyBeats: Array.isArray(item.story_beats) ? item.story_beats.map(str).filter(Boolean) : [],
+        storyBeats: (item.story_beats ?? []).map(str).filter(Boolean),
         cliffhanger: str(item.cliffhanger),
         nextTeaser: str(item.next_teaser),
-        sourceText: str(item.source_excerpt),
+        sourceText: str(item.source_excerpt) || (items.length === 1 ? part : ''),
         sourceKind,
         status: 'planned',
-        durationSec: item.target_duration_sec ? Number(item.target_duration_sec) : targetDuration
+        durationSec: Math.max(30, Math.min(Number(item.target_duration_sec) || targetDuration, 180))
       })
     }
+    setPlanProgress(projectId, { coveredChars: w.end, coveredHash: hashText(sourceText.slice(0, w.end)) })
   }
 
+  emit.storyProgress({ projectId, message: 'Rencana episode tersimpan.' })
   return listEpisodes(projectId)
 }
 
@@ -231,7 +285,7 @@ const SCRIPT_DRAFT_SCHEMA = {
               },
               required: ['character', 'variant']
             },
-            description: 'Costume variant for each visible character.'
+            description: 'Costume variant for each visible character: a registered variant name, a newly proposed variant, or "default" for the look on the base character sheet.'
           },
           location: { type: 'string', description: 'Location name where the shot takes place.' },
           props: {
@@ -239,7 +293,10 @@ const SCRIPT_DRAFT_SCHEMA = {
             items: { type: 'string' },
             description: 'Key props visible or used in this shot.'
           },
-          speaker: { type: 'string', description: 'Name of the character speaking dialogue, or "Narator", or empty if silent.' },
+          speaker: {
+            type: 'string',
+            description: 'Name of the on-screen character who speaks the line, who must also be listed in characters. Empty string for narration (voice-over) and for silent shots.'
+          },
           text: { type: 'string', description: 'Dialogue line spoken in the shot, or narration text. Empty if silent.' },
           emotion: { type: 'string', description: 'Emotional delivery and facial expression, e.g. "marah, mencemooh".' },
           framing: { type: 'string', description: 'Shot framing: close-up, medium shot, extreme close-up, two-shot, over-the-shoulder, wide.' },
@@ -379,15 +436,21 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
       }
     }
 
+    // Narration has no on-screen speaker; a speaker who talks must be visible for the video model to lip-sync.
+    const rawSpeaker = str(s.speaker)
+    const speaker = rawSpeaker && !isNarratorName(rawSpeaker) ? rawSpeaker : null
+    const characters = Array.isArray(s.characters) ? s.characters.map(str).filter(Boolean) : []
+    if (speaker && !characters.some((c) => c.toLowerCase() === speaker.toLowerCase())) characters.unshift(speaker)
+
     return {
       title: str(s.title) || `Shot ${i + 1}`,
       sourceExcerpt: str(s.sourceExcerpt),
       visualAction: str(s.visualAction),
-      characters: Array.isArray(s.characters) ? s.characters.map(str).filter(Boolean) : [],
+      characters,
       costumes: costumeMap,
       location: str(s.location) || null,
       props: Array.isArray(s.props) ? s.props.map(str).filter(Boolean) : [],
-      speaker: str(s.speaker) || null,
+      speaker,
       text: str(s.text),
       emotion: str(s.emotion),
       framing: str(s.framing) || 'medium shot',
@@ -422,18 +485,19 @@ export async function confirmEpisodeScript(projectId: string, episodeId: string,
 
 export async function writePrompts(projectId: string, episodeId: string, clipIds?: string[]): Promise<ProjectBundle> {
   const clips = clipsOf(projectId, episodeId)
-  const targets = clips.filter((c) => clipIds ? clipIds.includes(c.id) : (!c.visualPrompt.trim() || !c.videoPrompt.trim()))
+  const targets = clips.filter((c) => (clipIds ? clipIds.includes(c.id) : needsVisual(c) || !c.videoPrompt.trim()))
   if (!targets.length) return getBundle(projectId, episodeId)
 
+  const project = getProject(projectId)
   const chars = charactersOf(projectId)
   const locs = locationsOf(projectId)
   const derivs = derivativesOf(projectId)
+  const orientation = project.aspectRatio === '9:16' ? 'vertical 9:16' : `horizontal ${project.aspectRatio}`
 
   for (const clip of targets) {
     const loc = clip.locationId ? locs.find((l) => l.id === clip.locationId) : null
-    const settingLine = loc
-      ? `Setting: ${loc.name}${loc.description ? `, ${loc.description}` : ''}`
-      : 'Setting: Modern atmospheric interior, dramatic ambient lighting'
+    // Without a registered location the action carries the setting; a made-up default would fight the story.
+    const settingLine = loc ? `Setting: ${loc.name}${loc.description ? `, ${loc.description}` : ''}` : ''
 
     const actionDesc = clip.story.trim() || clip.narration.trim() || 'Character facing camera'
     const emotionDesc = clip.emotion ? `, intense expression of ${clip.emotion}` : ''
@@ -455,13 +519,18 @@ export async function writePrompts(projectId: string, episodeId: string, clipIds
     }
     const wardrobeLine = wardrobeParts.length ? `Wardrobe: ${wardrobeParts.join('; ')}` : ''
 
-    const framingLine = `Framing: vertical 9:16 shot, ${clip.framing || 'medium close-up'}, shallow depth of field, cinematic lighting`
+    const framingLine = `Framing: ${orientation} shot, ${clip.framing || 'medium close-up'}, shallow depth of field, cinematic lighting`
     const avoidLine = `Avoid: deformed eyes, bad hands, blurry faces, on-screen text, subtitles, watermark`
 
     const visualPrompt = [settingLine, actionLine, wardrobeLine, framingLine, avoidLine].filter(Boolean).join('\n')
-    const videoPrompt = `Subtle micro-expressions, ${clip.story || 'looking with tension'}, subtle camera push-in, cinematic vertical short drama lighting`
+    const videoPrompt = `Subtle micro-expressions, ${clip.story || 'looking with tension'}, subtle camera push-in, cinematic short drama lighting`
 
-    patchClip(clip.id, { visualPrompt, videoPrompt })
+    // Without an explicit list only empty prompts (or ones whose scene text changed since) are written,
+    // so prompts the creator edited stay theirs.
+    const patch: Partial<Clip> = {}
+    if (clipIds || needsVisual(clip)) Object.assign(patch, { visualPrompt, visualSource: visualSourceOf(clip) })
+    if (clipIds || !clip.videoPrompt.trim()) patch.videoPrompt = videoPrompt
+    patchClip(clip.id, patch)
   }
 
   return getBundle(projectId, episodeId)

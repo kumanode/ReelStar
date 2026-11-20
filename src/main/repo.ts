@@ -8,6 +8,7 @@ import type {
   AssetUsageSummary,
   Character,
   CharacterDerivative,
+  DraftShot,
   Clip,
   EditorSettings,
   Episode,
@@ -26,7 +27,7 @@ import type {
   Prop,
   StoryPlan
 } from '@shared/types'
-import { visualSourceOf } from '@shared/script'
+import { isDefaultCostume, isNarratorName, visualSourceOf } from '@shared/script'
 import { detectGender, FEMALE_GEMINI_VOICES, MALE_GEMINI_VOICES, geminiVoiceGender } from '@shared/models'
 import { getDb } from './db'
 import { assetUrl, projectDir, projectsRoot } from './paths'
@@ -40,6 +41,31 @@ export const DEFAULT_EDITOR: EditorSettings = {
   musicVolumeDb: -18,
   duckMusic: true,
   overlays: []
+}
+
+/**
+ * The look a new episode inherits from the series: caption style, filter and volumes carry over, but music,
+ * sound effects and per-clip framing belong to another episode's timeline. Only full-length overlays
+ * (a logo or watermark) carry over; timed ones were placed for another cut.
+ */
+function seriesEditorTemplate(e: EditorSettings): EditorSettings {
+  return {
+    ...e,
+    musicAssetId: null,
+    musicStartMs: undefined,
+    musicEndMs: undefined,
+    musicInMs: undefined,
+    musicPrompt: null,
+    sfx: [],
+    clipFraming: undefined,
+    overlays: (e.overlays ?? []).filter((o) => o.start <= 0 && o.end == null)
+  }
+}
+
+/** Each episode has its own timeline settings; the project row only keeps the series template. */
+export function editorOf(project: Project, episode: Episode | null | undefined): EditorSettings {
+  if (episode?.editor) return { ...DEFAULT_EDITOR, ...episode.editor }
+  return seriesEditorTemplate(project.editor)
 }
 
 type Row = Record<string, any>
@@ -305,6 +331,50 @@ function setStoredSetting(key: string, value: string): void {
   ).run(key, JSON.stringify(value))
 }
 
+/** How far into the series source the episode planner got, so an interrupted run can pick up where it stopped. */
+export interface PlanProgress {
+  /** Characters of the source already turned into episodes. */
+  coveredChars: number
+  /** Hash of source.slice(0, coveredChars): continuing is only safe if that part is unchanged. */
+  coveredHash: string
+}
+
+export function getPlanProgress(projectId: string): PlanProgress | null {
+  const raw = getStoredSetting(`plan_progress:${projectId}`)
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as PlanProgress
+  } catch {
+    return null
+  }
+}
+
+export function setPlanProgress(projectId: string, progress: PlanProgress | null): void {
+  if (progress) setStoredSetting(`plan_progress:${projectId}`, JSON.stringify(progress))
+  else getDb().prepare('DELETE FROM settings WHERE key = ?').run(`plan_progress:${projectId}`)
+}
+
+/** Clears episodes before a fresh plan. Episodes that already have clips are never thrown away silently. */
+export function clearEpisodesForReplan(projectId: string): void {
+  const db = getDb()
+  const withClips = db
+    .prepare(
+      `SELECT e.episode_num AS n FROM episodes e
+       WHERE e.project_id = ? AND EXISTS (SELECT 1 FROM clips c WHERE c.episode_id = e.id)
+       ORDER BY e.sort`
+    )
+    .all(projectId) as { n: number }[]
+  if (withClips.length) {
+    throw new Error(
+      `Episode ${withClips.map((r) => r.n).join(', ')} sudah punya klip. Hapus episode itu dulu, atau pakai "Lanjutkan perencanaan" untuk menambah episode di belakang.`
+    )
+  }
+  db.transaction(() => {
+    db.prepare('DELETE FROM episodes WHERE project_id = ?').run(projectId)
+    db.prepare('DELETE FROM settings WHERE key = ?').run(`plan_progress:${projectId}`)
+  })()
+}
+
 // ---------- projects ----------
 
 export function listProjects(): ProjectSummary[] {
@@ -406,7 +476,8 @@ export function getBundle(id: string, episodeId?: string): ProjectBundle {
   setStoredSetting(`last_episode:${id}`, activeEpisode.id)
 
   return {
-    project,
+    // Preview and export both read project.editor, so it carries the active episode's timeline settings.
+    project: { ...project, editor: editorOf(project, activeEpisode) },
     episode: activeEpisode,
     episodes,
     characters: charactersOf(id),
@@ -1033,6 +1104,7 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
   if (!ep || ep.projectId !== projectId) throw new Error('Episode tidak ditemukan.')
 
   db.transaction(() => {
+    const problems: string[] = []
     // 1. Process proposed newAssets
     for (const p of draft.newAssets ?? []) {
       const pName = p.name.trim()
@@ -1046,10 +1118,11 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
             createCharacter({ projectId, name: pName, description: p.description || '' })
           }
         } else if (p.kind === 'derivative') {
-          const chars = charactersOf(projectId)
           const targetChar = p.target
-            ? chars.find((c) => c.id === p.target || c.name.toLowerCase() === p.target!.toLowerCase())
-            : chars[0]
+            ? charactersOf(projectId).find((c) => c.id === p.target || c.name.toLowerCase() === p.target!.trim().toLowerCase())
+            : undefined
+          // A variant without its character would end up on whoever happens to be first in the cast.
+          if (!targetChar) problems.push(`Usulan kostum "${pName}" belum punya karakter tujuan yang terdaftar`)
           if (targetChar) {
             const derivs = derivativesOf(projectId).filter((d) => d.characterId === targetChar.id)
             if (!derivs.some((d) => d.name.toLowerCase() === pName.toLowerCase())) {
@@ -1084,8 +1157,11 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
             updateProp(targetProp.id, { aliases: [...targetProp.aliases, pName] })
           }
         }
-      } else if (action === 'derivative' && p.target) {
-        const targetChar = charactersOf(projectId).find((c) => c.id === p.target || c.name.toLowerCase() === p.target!.toLowerCase())
+      } else if (action === 'derivative') {
+        const targetChar = p.target
+          ? charactersOf(projectId).find((c) => c.id === p.target || c.name.toLowerCase() === p.target!.trim().toLowerCase())
+          : undefined
+        if (!targetChar) problems.push(`Usulan kostum "${pName}" belum punya karakter tujuan yang terdaftar`)
         if (targetChar) {
           const derivs = derivativesOf(projectId).filter((d) => d.characterId === targetChar.id)
           if (!derivs.some((d) => d.name.toLowerCase() === pName.toLowerCase())) {
@@ -1099,7 +1175,6 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
     const allChars = charactersOf(projectId)
     const allLocs = locationsOf(projectId)
     const allProps = propsOf(projectId)
-    const allDerivs = derivativesOf(projectId)
 
     const findChar = (name: string): Character | undefined => {
       const q = name.trim().toLowerCase()
@@ -1114,14 +1189,29 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
       return allProps.find((pr) => pr.name.toLowerCase() === q || pr.aliases.some((a) => a.toLowerCase() === q))
     }
 
-    const unmapped: string[] = []
+    const findCostume = (charId: string, name: string): CharacterDerivative | undefined => {
+      const q = name.trim().toLowerCase()
+      return derivativesOf(projectId).find((d) => d.characterId === charId && d.name.toLowerCase() === q)
+    }
+    const speakerOf = (shot: DraftShot): string | null => (shot.speaker?.trim() && !isNarratorName(shot.speaker) ? shot.speaker.trim() : null)
+
+    const unmapped: string[] = [...problems]
     for (const [i, shot] of (draft.shots ?? []).entries()) {
       const n = i + 1
       for (const c of shot.characters ?? []) {
         if (!findChar(c)) unmapped.push(`Shot ${n}: karakter "${c}" belum terdaftar`)
       }
-      if (shot.speaker && !findChar(shot.speaker)) {
-        unmapped.push(`Shot ${n}: pembicara "${shot.speaker}" belum terdaftar`)
+      const speaker = speakerOf(shot)
+      if (speaker && !findChar(speaker)) {
+        unmapped.push(`Shot ${n}: pembicara "${speaker}" belum terdaftar`)
+      }
+      if (speaker && !(shot.characters ?? []).some((c) => findChar(c) && findChar(c)?.id === findChar(speaker)?.id)) {
+        unmapped.push(`Shot ${n}: pembicara "${speaker}" harus terlihat di shot`)
+      }
+      for (const [charName, variant] of Object.entries(shot.costumes ?? {})) {
+        if (isDefaultCostume(variant)) continue
+        const ch = findChar(charName)
+        if (!ch || !findCostume(ch.id, variant)) unmapped.push(`Shot ${n}: kostum "${variant}" untuk ${charName} belum terdaftar`)
       }
       if (shot.location && !findLoc(shot.location)) {
         unmapped.push(`Shot ${n}: lokasi "${shot.location}" belum terdaftar`)
@@ -1156,17 +1246,16 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
     for (const [idx, shot] of (draft.shots ?? []).entries()) {
       const clipId = randomUUID()
       const charIds = (shot.characters ?? []).map((cn) => findChar(cn)?.id).filter((id): id is string => !!id)
-      const speakerId = shot.speaker ? findChar(shot.speaker)?.id ?? null : null
+      const speaker = speakerOf(shot)
+      const speakerId = speaker ? findChar(speaker)?.id ?? null : null
       const locId = shot.location ? findLoc(shot.location)?.id ?? null : null
       const propIds = (shot.props ?? []).map((pn) => findProp(pn)?.id).filter((id): id is string => !!id)
 
       const costumeMap: Record<string, string> = {}
       for (const [charName, varName] of Object.entries(shot.costumes ?? {})) {
         const c = findChar(charName)
-        if (c) {
-          const deriv = allDerivs.find((d) => d.characterId === c.id && d.name.toLowerCase() === varName.trim().toLowerCase())
-          if (deriv) costumeMap[c.id] = deriv.id
-        }
+        const deriv = c && !isDefaultCostume(varName) ? findCostume(c.id, varName) : undefined
+        if (c && deriv) costumeMap[c.id] = deriv.id
       }
 
       const durMs = Math.max(1000, Math.round((shot.durationSec || 5) * 1000))
@@ -1297,7 +1386,21 @@ export function clipsOf(projectId: string, episodeId?: string): Clip[] {
   return (getDb().prepare('SELECT * FROM clips WHERE project_id = ? ORDER BY sort').all(projectId) as Row[]).map(toClip)
 }
 
+/** The series cover follows the opening clip of the first episode, not whichever episode was generated first. */
+export function firstClipOf(projectId: string): Clip | undefined {
+  const r = getDb()
+    .prepare(
+      `SELECT c.* FROM clips c JOIN episodes e ON e.id = c.episode_id
+       WHERE c.project_id = ? ORDER BY e.sort, c.sort LIMIT 1`
+    )
+    .get(projectId) as Row | undefined
+  return r ? toClip(r) : undefined
+}
+
 const CLIP_COLS: Partial<Record<keyof Clip, string>> = {
+  visualPrompt: 'visual_prompt',
+  videoPrompt: 'video_prompt',
+  visualSource: 'visual_source',
   imageAssetId: 'image_asset_id',
   videoAssetId: 'video_asset_id',
   audioAssetId: 'audio_asset_id',

@@ -149,7 +149,7 @@ Suara karakter disimpan bersama `ttsProvider`. Suara itu hanya dipakai jika prov
 
 Narasi dianggap **basi** (perlu direkam ulang) kalau `asset.prompt` berbeda dari `clip.narration`.
 
-## Pengaturan editor (`EditorSettings`, di `projects.editor_json`)
+## Pengaturan editor (`EditorSettings`, di `episodes.editor_json`; `projects.editor_json` hanya templat)
 
 | Properti | Arti |
 |---|---|

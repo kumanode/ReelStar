@@ -28,3 +28,10 @@ export function needsVisual(clip: Pick<Clip, 'story' | 'narration' | 'visualProm
   if (!clip.visualPrompt.trim()) return true
   return clip.visualSource != null && clip.visualSource !== visualSourceOf(clip)
 }
+
+/** The planner writes "default" (or similar) when a character keeps the look from their base sheet. */
+export const isDefaultCostume = (variant: string): boolean =>
+  !variant.trim() || /^(default|bawaan|standar|biasa|dasar|normal)$/i.test(variant.trim())
+
+/** Narration is read by the narrator voice, so a "Narator" speaker is no character at all. */
+export const isNarratorName = (name: string): boolean => /^(narat?or|narrator|pencerita|voice ?over|vo)$/i.test(name.trim())

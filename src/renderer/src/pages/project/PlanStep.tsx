@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { isDefaultCostume, isNarratorName } from '@shared/script'
 import {
   FileText,
   Sparkles,
@@ -52,6 +53,9 @@ const EMOTION_OPTIONS = [
   { value: 'lembut', label: 'Lembut / Tersipu' }
 ]
 
+/** Problems that would make confirming fail or produce a wrong clip; long lines are only advice. */
+const isBlocking = (i: { type: string }): boolean => i.type.startsWith('unmapped_') || i.type === 'speaker_hidden'
+
 export function PlanStep() {
   const {
     project,
@@ -63,6 +67,7 @@ export function PlanStep() {
     props,
     clips,
     load,
+    flush,
     setActiveTab,
     refreshLorebook
   } = useProject()
@@ -90,8 +95,6 @@ export function PlanStep() {
       }
     })
   }, [project?.id])
-
-  if (!project || !episode) return null
 
   // Sets of registered names (case-insensitive)
   const registeredCharNames = useMemo(() => {
@@ -125,7 +128,7 @@ export function PlanStep() {
   const proposedCharNames = useMemo(() => {
     const set = new Set<string>()
     for (const p of draft?.newAssets ?? []) {
-      if (p.kind === 'character' && p.action !== 'ignore') {
+      if (p.kind === 'character' && (p.action === 'create' || p.action === 'merge')) {
         set.add(p.name.trim().toLowerCase())
       }
     }
@@ -152,12 +155,37 @@ export function PlanStep() {
     return set
   }, [draft?.newAssets])
 
+  // Costume variants by character name: registered ones plus variants proposed in this draft.
+  const costumeNames = useMemo(() => {
+    const map = new Map<string, Set<string>>()
+    const add = (charName: string, variant: string): void => {
+      const key = charName.trim().toLowerCase()
+      if (!map.has(key)) map.set(key, new Set())
+      map.get(key)!.add(variant.trim().toLowerCase())
+    }
+    for (const c of characters) {
+      for (const d of derivatives.filter((x) => x.characterId === c.id)) {
+        add(c.name, d.name)
+        for (const a of c.aliases ?? []) add(a, d.name)
+      }
+    }
+    for (const p of draft?.newAssets ?? []) {
+      if (p.action === 'ignore' || !p.target) continue
+      if (p.kind === 'derivative' || p.action === 'derivative') {
+        const target = characters.find((c) => c.id === p.target || c.name.toLowerCase() === p.target!.trim().toLowerCase())
+        add(target?.name ?? p.target, p.name)
+        for (const a of target?.aliases ?? []) add(a, p.name)
+      }
+    }
+    return map
+  }, [characters, derivatives, draft?.newAssets])
+
   // Compute issues per shot
   const shotIssues = useMemo(() => {
     if (!draft?.shots) return []
     return draft.shots.map((s, idx) => {
       const issues: {
-        type: 'unmapped_char' | 'unmapped_speaker' | 'unmapped_location' | 'unmapped_prop' | 'long_dialogue' | 'missing_speaker'
+        type: 'unmapped_char' | 'unmapped_speaker' | 'unmapped_location' | 'unmapped_prop' | 'unmapped_costume' | 'speaker_hidden' | 'long_dialogue' | 'missing_speaker'
         message: string
         name?: string
         kind?: 'character' | 'location' | 'prop'
@@ -176,8 +204,8 @@ export function PlanStep() {
         }
       }
 
-      // Unmapped speaker
-      if (s.speaker?.trim()) {
+      // Unmapped speaker ("Narator" is the narrator voice, not a character)
+      if (s.speaker?.trim() && !isNarratorName(s.speaker)) {
         const q = s.speaker.trim().toLowerCase()
         if (!registeredCharNames.has(q) && !proposedCharNames.has(q)) {
           issues.push({
@@ -185,6 +213,25 @@ export function PlanStep() {
             message: `Pembicara "${s.speaker}" belum terdaftar di Lorebook atau usulan aset`,
             name: s.speaker,
             kind: 'character'
+          })
+        }
+      }
+
+      // Dialogue from the video model needs the speaker's face on screen to lip-sync.
+      if (s.speaker?.trim() && !isNarratorName(s.speaker) && !(s.characters ?? []).some((c) => c.trim().toLowerCase() === s.speaker!.trim().toLowerCase())) {
+        issues.push({
+          type: 'speaker_hidden',
+          message: `Pembicara "${s.speaker}" tidak ada di daftar tokoh yang terlihat di shot ini`
+        })
+      }
+
+      // Costume variants must exist, or the shot would silently fall back to the base look.
+      for (const [charName, variant] of Object.entries(s.costumes ?? {})) {
+        if (isDefaultCostume(variant)) continue
+        if (!costumeNames.get(charName.trim().toLowerCase())?.has(variant.trim().toLowerCase())) {
+          issues.push({
+            type: 'unmapped_costume',
+            message: `Kostum "${variant}" untuk ${charName} belum terdaftar sebagai varian di Lorebook atau usulan aset`
           })
         }
       }
@@ -224,24 +271,19 @@ export function PlanStep() {
             message: `Dialog panjang (${wordCount} kata). Disarankan bagi menjadi 2 shot untuk ritme vertical drama.`
           })
         }
-        if (!s.speaker?.trim()) {
-          issues.push({
-            type: 'missing_speaker',
-            message: 'Terdapat teks dialog namun nama pembicara belum ditentukan.'
-          })
-        }
       }
 
       return { shotIndex: idx, issues }
     })
-  }, [draft?.shots, registeredCharNames, proposedCharNames, registeredLocNames, proposedLocNames, registeredPropNames, proposedPropNames])
+  }, [draft?.shots, registeredCharNames, proposedCharNames, registeredLocNames, proposedLocNames, registeredPropNames, proposedPropNames, costumeNames])
 
   const totalUnmapped = useMemo(() => {
     return shotIssues.reduce((acc, curr) => {
-      const unmapped = curr.issues.filter((i) => i.type.startsWith('unmapped_'))
-      return acc + unmapped.length
+      return acc + curr.issues.filter(isBlocking).length
     }, 0)
   }, [shotIssues])
+
+  if (!project || !episode) return null
 
   // Handlers for AI Script Planning
   const handlePlanScript = async () => {
@@ -278,7 +320,7 @@ export function PlanStep() {
     }
 
     if (totalUnmapped > 0) {
-      toast('error', `Masih ada ${totalUnmapped} aset tak terdaftar yang belum diusulkan. Periksa peringatan merah pada shot.`)
+      toast('error', `Masih ada ${totalUnmapped} masalah di rencana. Periksa peringatan merah pada shot.`)
       return
     }
 
@@ -294,6 +336,8 @@ export function PlanStep() {
 
     setIsConfirming(true)
     try {
+      // A save still waiting would put the old clips back after they are replaced.
+      await flush()
       const bundle: ProjectBundle = await window.api.story.confirmEpisodeScript(project.id, episode.id, draft)
       load(bundle)
       await refreshLorebook()
@@ -640,7 +684,7 @@ export function PlanStep() {
                 {totalUnmapped > 0 ? (
                   <div className="flex items-center gap-1.5 rounded-lg bg-bad-soft px-2.5 py-1 text-xs font-semibold text-bad-ink">
                     <AlertCircle className="size-3.5" />
-                    <span>{totalUnmapped} aset belum terdaftar (perlu ditangani sebelum konfirmasi)</span>
+                    <span>{totalUnmapped} masalah perlu dibereskan sebelum konfirmasi</span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-1.5 rounded-lg bg-ok-soft px-2.5 py-1 text-xs font-semibold text-ok-ink">
@@ -659,7 +703,7 @@ export function PlanStep() {
                       key={idx}
                       className={cx(
                         'flex flex-col gap-3 rounded-2xl border bg-surface p-4 shadow-sm transition-all',
-                        issues.some((i) => i.type.startsWith('unmapped_'))
+                        issues.some(isBlocking)
                           ? 'border-bad-ink/40 bg-bad-soft/10'
                           : 'border-line hover:border-line-2'
                       )}

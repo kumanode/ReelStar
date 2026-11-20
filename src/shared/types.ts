@@ -259,6 +259,8 @@ export interface PlanEpisodesInput {
   sourceText?: string
   sourceKind?: SourceKind
   targetDurationSec?: number
+  /** replace: start over from the top of the source; continue: plan the part not yet covered. */
+  mode?: 'replace' | 'continue'
 }
 
 export interface CharacterDerivative {

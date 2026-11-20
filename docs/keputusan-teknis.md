@@ -171,8 +171,30 @@ diam-diam tanpa idempotensi atau pemeriksaan status yang didukung server.
 ### Klip diisolasi per episode dengan foreign key ON DELETE CASCADE
 Setiap klip memiliki `episode_id` yang terikat ke tabel `episodes`. Membaca (`getBundle`, `clipsOf`), menyimpan snapshot (`saveSnapshot`), menulis naskah (`replaceScript`), dan menyusun timeline selalu dibatasi ke episode aktif. Dengan demikian, penambahan, pengeditan, atau penghapusan adegan di satu episode tidak pernah mempengaruhi klip episode lain. Saat sebuah episode dihapus, semua klipnya otomatis terhapus lewat cascade SQLite.
 
-### Pengaturan editor tersimpan per episode dengan fallback proyek
-Setiap episode memiliki kolom `editor_json` sendiri yang menyimpan pengaturan timeline, musik latar, efek suara, dan gaya caption. `getBundle()` memadukan pengaturan ini ke `episode.editor`, sementara `project.editor` tetap menyimpan pengaturan bawaan serial. Di UI/renderer, perubahan editor langsung memperbarui keduanya sehingga transisi multi-episode tetap konsisten tanpa kehilangan kustomisasi spesifik episode.
+### Pengaturan editor tersimpan per episode, proyek hanya templat
+Setiap episode memiliki `editor_json` sendiri (musik, SFX, overlay, framing klip, gaya caption). `getBundle()`
+menaruh pengaturan episode aktif di `bundle.project.editor` lewat `editorOf()`, sehingga pratinjau dan ekspor yang
+membaca `project.editor` otomatis memakai milik episode itu. Renderer menyimpan `project.editor` sebagai
+`episodeEditor` di snapshot. `projects.editor_json` hanya templat untuk episode yang belum punya pengaturan sendiri:
+gaya caption, filter, dan volume ikut, tetapi musik, SFX, framing klip, dan overlay berwaktu **tidak** ikut, karena
+itu milik timeline episode lain (dulu Ep 2 mewarisi SFX Ep 1). Hanya overlay sepanjang video (logo/watermark) ikut.
+
+### Planner episode bertahap per bagian sumber
+Sumber dipecah per ±9.000 karakter di batas paragraf/kalimat, lalu tiap bagian direncanakan terpisah dengan konteks
+cliffhanger episode sebelumnya. Balasan divalidasi (judul, ringkasan, hook, cliffhanger, minimal 2 beat) dan dicoba
+ulang hingga 3 kali. Progres disimpan di `settings` kunci `plan_progress:<projectId>` (jumlah karakter yang sudah
+direncanakan + hash bagian itu), jadi "Lanjutkan perencanaan" meneruskan dari bagian yang gagal atau dari teks lanjutan
+yang ditambahkan di bawah sumber. "Rencanakan ulang" mengganti semua episode, tetapi menolak bila ada episode yang
+sudah punya klip, supaya klip tidak pernah terhapus diam-diam.
+
+### Narasi tidak punya pembicara
+Shot narasi (voice-over) disimpan dengan `speakerId = null` dan dibacakan suara narator. Nama "Narator" dari AI
+dinormalkan menjadi kosong (`isNarratorName`), bukan dijadikan karakter, karena karakter yang berbicara di fase 4
+diperlakukan sebagai dialog video dengan lip-sync. Pembicara dialog wajib ada di daftar tokoh yang terlihat di shot.
+
+### Tulis prompt visual tidak menimpa editan kreator
+`writePrompts` tanpa daftar klip hanya menulis prompt yang kosong atau yang adegannya berubah sejak prompt dibuat
+(`needsVisual`, lewat `visual_source`). Prompt yang diedit kreator tetap utuh.
 
 ### Episode aktif diingat lewat pengaturan `last_episode`
 Kreator yang berpindah-pindah proyek akan kembali ke episode terakhir yang sedang mereka kerjakan. Posisi ini disimpan di tabel `settings` dengan kunci `last_episode:<projectId>` tanpa menambah status mutabel ke tabel `projects`. Jika belum ada riwayat, sistem otomatis memilih episode pertama berdasarkan urutan `sort`.

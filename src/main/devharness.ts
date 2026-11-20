@@ -9,7 +9,7 @@ import { startExport } from './exporter'
 import { assetAbsPath, binPath } from './paths'
 import { probeDurationMs } from './services/audio'
 import { confirmEpisodeScriptRepo, createEpisode, createProject, getBundle, insertAsset, listEpisodes, patchClip, replaceStory, saveSnapshot, touchProject } from './repo'
-import { writePrompts } from './story'
+import { planEpisodes, writePrompts } from './story'
 import { recordCheck, setSecret } from './secrets'
 import type { ApiProvider, EpisodeScriptDraft, ExportOptions } from '@shared/types'
 
@@ -250,6 +250,32 @@ export function checkIsolation(projectId: string): boolean {
     throw new Error(`Episode 2 gagal diperbarui: klip sekarang ${b2After.clips.length}`)
   }
 
+  // Timeline settings (music, SFX, framing) belong to one episode; the caption style is shared as a template.
+  const sfxItem = { id: 'sfx-ep2', assetId: 'sfx-asset', name: 'uji', startMs: 500, durationMs: 800, volumeDb: 0 }
+  const ep2Editor = { ...b2After.project.editor, musicAssetId: 'music-ep2', sfx: [sfxItem], captionStyle: b2After.project.editor.captionStyle }
+  saveSnapshot({
+    project: { ...b2After.project, editor: ep2Editor },
+    episodeId: ep2.id,
+    episodeEditor: ep2Editor,
+    characters: b2After.characters,
+    clips: b2After.clips
+  })
+  const e1 = getBundle(projectId, ep1.id).project.editor
+  const e2 = getBundle(projectId, ep2.id).project.editor
+  if (e1.musicAssetId === 'music-ep2' || (e1.sfx ?? []).some((x) => x.id === 'sfx-ep2')) {
+    throw new Error('Isolasi editor bocor! Musik/SFX Episode 2 muncul di Episode 1')
+  }
+  if (e2.musicAssetId !== 'music-ep2' || !(e2.sfx ?? []).some((x) => x.id === 'sfx-ep2')) {
+    throw new Error('Pengaturan editor Episode 2 tidak tersimpan')
+  }
+  const ep3 = createEpisode(projectId, { title: 'Ep 3 kosong' })
+  const e3 = getBundle(projectId, ep3.id).project.editor
+  if (e3.musicAssetId || (e3.sfx ?? []).length || e3.clipFraming) {
+    throw new Error('Episode baru mewarisi musik/SFX/framing episode lain')
+  }
+  getBundle(projectId, ep1.id)
+
+  console.log('[checkIsolation] Isolasi klip dan editor per episode BERHASIL')
   return true
 }
 
@@ -386,6 +412,60 @@ export async function checkPhase3(projectId: string): Promise<boolean> {
   if (!pClips[0].visualPrompt.includes('Pendekar') || !pClips[0].visualPrompt.includes('Gerbang Istana Majapahit')) {
     throw new Error(`visualPrompt tidak menyertakan entitas: ${pClips[0].visualPrompt}`)
   }
+
+  // Test 4: writePrompts fills only empty prompts and keeps the creator's edits
+  patchClip(pClips[0].id, { visualPrompt: 'PROMPT BUATAN KREATOR', videoPrompt: '' })
+  const kept = (await writePrompts(projectId, ep.id)).clips[0]
+  if (kept.visualPrompt !== 'PROMPT BUATAN KREATOR') throw new Error('writePrompts menimpa prompt gambar yang sudah diedit')
+  if (!kept.videoPrompt) throw new Error('writePrompts tidak mengisi prompt video yang kosong')
+
+  const base = validDraft.shots[0]
+  const expectReject = (label: string, draft: EpisodeScriptDraft, needle: string): void => {
+    try {
+      confirmEpisodeScriptRepo(projectId, ep.id, draft)
+    } catch (err) {
+      if ((err as Error).message.includes(needle)) return
+      throw new Error(`${label}: ditolak dengan pesan lain: ${(err as Error).message}`)
+    }
+    throw new Error(`${label}: seharusnya ditolak`)
+  }
+  const one = (shot: Partial<EpisodeScriptDraft['shots'][number]>, newAssets: EpisodeScriptDraft['newAssets'] = []): EpisodeScriptDraft => ({
+    shots: [{ ...base, ...shot }],
+    newAssets,
+    createdAt: Date.now()
+  })
+
+  // Test 5: a speaker must be on screen; unknown costumes and orphan variants are refused
+  expectReject('Pembicara tak terlihat', one({ characters: ['Panglima Wira'], speaker: 'Pendekar' }), 'harus terlihat')
+  expectReject('Kostum tak terdaftar', one({ costumes: { Pendekar: 'Baju Zirah Emas' } }), 'kostum "Baju Zirah Emas"')
+  expectReject(
+    'Varian tanpa karakter',
+    one({}, [{ kind: 'derivative', name: 'Jubah Perak', description: '', action: 'create', reason: '' }]),
+    'Jubah Perak'
+  )
+  if (getBundle(projectId, ep.id).clips.length !== 2) throw new Error('Konfirmasi yang ditolak mengubah klip')
+
+  // Test 6: narration has no speaker character; "default" costume keeps the base sheet
+  const narrated = confirmEpisodeScriptRepo(projectId, ep.id, one({ speaker: 'Narator', text: 'Malam itu semuanya berubah.', costumes: { Pendekar: 'default' } }))
+  if (narrated.clips[0].speakerId !== null) throw new Error('Narator dianggap tokoh')
+  if (narrated.characters.some((c) => c.name.toLowerCase() === 'narator')) throw new Error('Karakter "Narator" ikut dibuat')
+  if (Object.keys(narrated.clips[0].costumeIds).length) throw new Error('Kostum "default" seharusnya memakai lembar dasar')
+
+  // Test 7: re-planning never throws away an episode that has clips, and needs no AI call to refuse
+  let guarded = false
+  try {
+    await planEpisodes({ projectId, sourceText: 'Cerita uji.', mode: 'replace' })
+  } catch (err) {
+    guarded = (err as Error).message.includes('sudah punya klip')
+  }
+  if (!guarded) throw new Error('Rencanakan ulang tidak menolak episode yang sudah punya klip')
+  let noProgress = false
+  try {
+    await planEpisodes({ projectId, sourceText: 'Cerita uji.', mode: 'continue' })
+  } catch (err) {
+    noProgress = (err as Error).message.includes('Belum ada catatan')
+  }
+  if (!noProgress) throw new Error('Lanjutkan perencanaan tanpa catatan progres seharusnya ditolak')
 
   console.log('[checkPhase3] Semua pengujian backend Fase 3 BERHASIL!')
   return true

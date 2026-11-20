@@ -14,6 +14,7 @@ import {
   activeJobFor,
   charactersOf,
   clipsOf,
+  firstClipOf,
   getAsset,
   getCharacter,
   getClip,
@@ -273,7 +274,7 @@ async function finishHiggsfield(ctx: TaskCtx, job: Job, requestId: string, paylo
     patchClip(job.clipId, { imageAssetId: asset.id })
     emit.clip({ clipId: job.clipId, patch: { imageAssetId: asset.id } })
     const project = getProject(job.projectId)
-    const first = clipsOf(job.projectId)[0]
+    const first = firstClipOf(job.projectId)
     if (!project.coverAssetId || first?.id === job.clipId) touchProject(job.projectId, { coverAssetId: asset.id })
   } else if (payload.target === 'clip-video' && job.clipId) {
     const patch = { videoAssetId: asset.id, motionType: 'video' as const, mediaInMs: 0 }
@@ -374,7 +375,7 @@ export function generateClipImage(clipId: string): Job {
       emit.asset(asset)
       patchClip(clipId, { imageAssetId: asset.id })
       emit.clip({ clipId, patch: { imageAssetId: asset.id } })
-      const first = clipsOf(project.id)[0]
+      const first = firstClipOf(project.id)
       if (!project.coverAssetId || first?.id === clipId) touchProject(project.id, { coverAssetId: asset.id })
       touchProject(project.id)
       return asset.id

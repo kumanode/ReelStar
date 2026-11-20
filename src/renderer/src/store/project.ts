@@ -181,7 +181,8 @@ function snapshot(s: ProjectState): ProjectSnapshot {
   return {
     project,
     episodeId: s.episode?.id || '',
-    episodeEditor: s.episode?.editor ?? s.project!.editor,
+    // project.editor holds the active episode's timeline settings (see getBundle).
+    episodeEditor: s.project!.editor,
     characters: s.characters.map(({ sheetAssetId: _s, ...c }) => c),
     clips: s.clips.map(({ imageAssetId: _i, videoAssetId: _v, audioAssetId: _a, ...c }) => c)
   }

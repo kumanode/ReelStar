@@ -23,7 +23,7 @@ import { errorText } from '../../lib/format'
 
 const STATUS_BADGE: Record<EpisodeStatus, { tone: 'draft' | 'info' | 'warn' | 'ok' | 'bad' | 'ink'; label: string }> = {
   draft: { tone: 'draft', label: 'Draf' },
-  planned: { tone: 'warn', label: 'Direncanakan' },
+  planned: { tone: 'info', label: 'Direncanakan' },
   script: { tone: 'info', label: 'Naskah' },
   storyboard: { tone: 'info', label: 'Storyboard' },
   editing: { tone: 'warn', label: 'Editor' },
@@ -39,9 +39,10 @@ export function EpisodeHub() {
     updateEpisode,
     removeEpisode,
     reorderEpisodes,
-    refreshEpisodes,
     switchEpisode,
-    setActiveView
+    setActiveView,
+    flush,
+    load
   } = useProject()
   const { toast } = useApp()
 
@@ -65,11 +66,11 @@ export function EpisodeHub() {
       toast('info', 'Masukkan atau unggah teks sumber cerita terlebih dahulu.')
       return
     }
-    if (!continuation && episodes.length > 0) {
+    if (!continuation && episodes.some((e) => e.status !== 'draft' || e.summary.trim())) {
       const ok = await confirmDialog({
         title: 'Rencanakan ulang serial?',
-        body: 'Struktur episode yang ada akan diperbarui atau digantikan dengan hasil analisis AI baru.',
-        confirm: 'Mulai rencanakan',
+        body: 'Semua episode akan diganti dengan hasil perencanaan baru dari awal teks sumber. Episode yang sudah punya klip tidak akan dihapus; kalau ada, perencanaan dibatalkan dan kamu diberi tahu episode mana.',
+        confirm: 'Rencanakan ulang',
         danger: true
       })
       if (!ok) return
@@ -78,17 +79,25 @@ export function EpisodeHub() {
     setIsPlanning(true)
     setPlanMessage('Menganalisis teks sumber...')
     try {
-      const planned = await window.api.story.planEpisodes({
+      // The planner reads the saved source and may replace the open episode, so pending edits go first.
+      await flush()
+      await window.api.story.planEpisodes({
         projectId: project.id,
         sourceText: project.sourceText,
         sourceKind: project.sourceKind ?? 'novel',
-        targetDurationSec: project.durationSec ?? 60
+        targetDurationSec: project.durationSec ?? 60,
+        mode: continuation ? 'continue' : 'replace'
       })
-      await refreshEpisodes()
-      toast('info', `Berhasil merencanakan ${planned.length} episode!`)
+      toast('success', continuation ? 'Perencanaan episode dilanjutkan.' : 'Serial selesai dipecah jadi episode.')
     } catch (err) {
       toast('error', `Gagal merencanakan episode: ${errorText(err)}`)
     } finally {
+      // Reload even after a failure: earlier parts of the source may already be saved as episodes.
+      try {
+        load(await window.api.projects.get(project.id), { keepHistory: false })
+      } catch {
+        // The hub keeps its current list; the toast above already told the creator what happened.
+      }
       setIsPlanning(false)
       setPlanMessage(null)
     }

@@ -23,7 +23,7 @@ export function MergeAssetModal({
   sourceName,
   onMerged
 }: MergeModalProps) {
-  const { project, characters, locations, props, assets, refreshLorebook, load } = useProject()
+  const { project, characters, locations, props, assets, refreshLorebook, load, flush } = useProject()
   const { toast } = useApp()
 
   const [targetId, setTargetId] = useState<string>('')
@@ -68,6 +68,8 @@ export function MergeAssetModal({
     }
     setMerging(true)
     try {
+      // A save still waiting would write the old references back after the merge.
+      await flush()
       const res = await window.api.lorebook.merge({
         projectId: project.id,
         kind,
@@ -79,7 +81,8 @@ export function MergeAssetModal({
       await refreshLorebook()
       // Reload current project bundle to update all clips and character references
       const freshBundle = await window.api.projects.get(project.id)
-      load(freshBundle, { keepHistory: true })
+      // Undo history points at the merged-away asset, so it cannot be replayed safely.
+      load(freshBundle, { keepHistory: false })
       if (onMerged) onMerged()
       onClose()
     } catch (err) {
