@@ -792,7 +792,7 @@ function VideoSelectModal({
 }
 
 export function StoryboardStep() {
-  const { project, clips, characters, assets, jobs, selectedClipId, select, addClip, updateProject, flush, load } = useProject()
+  const { project, episode, clips, characters, assets, jobs, selectedClipId, select, addClip, updateProject, flush, load } = useProject()
   const { toast } = useApp()
   /** A character id, "new" for an unsaved one, or null. */
   const [openChar, setOpenChar] = useState<string | null>(null)
@@ -925,12 +925,16 @@ export function StoryboardStep() {
 
   // Scenes added or rewritten in the script since the last visual plan.
   const stale = clips.filter(needsVisual).length
-  const planVisuals = async (): Promise<void> => {
+  const planVisuals = async (clipIds?: string[]): Promise<void> => {
     setPlanning(true)
     setPlanMessage('Menyusun rencana visual…')
     try {
       await flush()
-      load(await window.api.story.visuals(project.id, 'missing'))
+      if (episode?.id) {
+        load(await window.api.story.writePrompts(project.id, episode.id, clipIds))
+      } else {
+        load(await window.api.story.visuals(project.id, 'missing'))
+      }
       toast('success', 'Visual adegan sudah disusun.')
     } catch (e) {
       toast('error', errorText(e))
@@ -1067,6 +1071,15 @@ export function StoryboardStep() {
               {clips.length} klip · {mmss(stats.total)}
             </span>
             <div className="flex-1" />
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Sparkles className="size-3.5 text-sun" />}
+              loading={planning}
+              onClick={() => void planVisuals()}
+            >
+              Tulis prompt visual
+            </Button>
             <Button variant="ghost" icon={<Plus className="size-[17px]" />} onClick={() => addClip(sel?.id ?? null)}>
               Tambah klip
             </Button>

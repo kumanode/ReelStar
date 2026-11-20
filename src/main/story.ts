@@ -6,15 +6,37 @@ import { getStyle } from '@shared/styles'
 import type {
   CameraPresetId,
   Clip,
+  DraftShot,
+  Episode,
+  EpisodeScriptDraft,
   MotionStrength,
   MusicPrompt,
+  NewAssetProposal,
+  PlanEpisodesInput,
   ProjectBundle,
   SmartSfxCue,
+  SourceKind,
   ThumbnailConcept,
   TransitionId,
   YoutubeMetadata
 } from '@shared/types'
-import { applyVisuals, charactersOf, clipsOf, getBundle, getProject, type SceneVisual } from './repo'
+import {
+  applyVisuals,
+  charactersOf,
+  clipsOf,
+  confirmEpisodeScriptRepo,
+  createEpisode,
+  derivativesOf,
+  getBundle,
+  getEpisode,
+  getProject,
+  listEpisodes,
+  locationsOf,
+  patchClip,
+  propsOf,
+  updateEpisode,
+  type SceneVisual
+} from './repo'
 import { generateJson } from './services/llm'
 import { emit } from './events'
 
@@ -26,6 +48,423 @@ const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 
 function languageOf(code: string): string {
   return LANGUAGES.find((l) => l.code === code)?.english ?? 'Indonesian'
+}
+
+// ---------- Phase 3: AI Episode Planner & Script Drafting ----------
+
+const EPISODE_PLAN_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    episodes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          title: { type: 'string', description: 'Catchy, dramatic episode title in Indonesian (e.g. Penghinaan di Lobi).' },
+          summary: { type: 'string', description: '1-2 sentence synopsis of the episode arc in Indonesian.' },
+          hook: { type: 'string', description: 'Intense opening hook in Indonesian: high drama, confrontation, or mystery that immediately grips the audience.' },
+          story_beats: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '3 to 6 key dramatic story beats in chronological order, in Indonesian.'
+          },
+          cliffhanger: { type: 'string', description: 'Addictive closing cliffhanger in Indonesian: high suspense, secret reveal, or critical dilemma.' },
+          next_teaser: { type: 'string', description: 'One intriguing teaser sentence for the upcoming episode in Indonesian.' },
+          target_duration_sec: { type: 'integer', description: 'Estimated target duration in seconds (usually 60 to 90).' },
+          source_excerpt: { type: 'string', description: 'The exact slice of source text covered by this episode.' }
+        },
+        required: ['title', 'summary', 'hook', 'story_beats', 'cliffhanger', 'next_teaser', 'target_duration_sec', 'source_excerpt']
+      }
+    }
+  },
+  required: ['episodes']
+}
+
+interface RawEpisodePlanItem {
+  title?: string
+  summary?: string
+  hook?: string
+  story_beats?: string[]
+  cliffhanger?: string
+  next_teaser?: string
+  target_duration_sec?: number
+  source_excerpt?: string
+}
+
+interface RawEpisodePlanResponse {
+  episodes?: RawEpisodePlanItem[]
+}
+
+export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]> {
+  const projectId = input.projectId
+  const project = getProject(projectId)
+  const sourceText = (input.sourceText ?? project.sourceText ?? '').trim()
+  const sourceKind: SourceKind = input.sourceKind ?? project.sourceKind ?? 'novel'
+  const targetDuration = Math.max(30, Math.min(input.targetDurationSec ?? project.durationSec ?? 75, 180))
+
+  if (!sourceText) {
+    throw new Error('Teks sumber cerita masih kosong. Masukkan novel atau naskah serial dulu.')
+  }
+
+  emit.storyProgress({ projectId, message: 'Menganalisis teks sumber dan merencanakan episode drama...' })
+
+  const system = sourceKind === 'screenplay'
+    ? [
+        'You are an expert drama script supervisor.',
+        `You are structuring a completed screenplay into vertical short drama episodes (around ${targetDuration} seconds each).`,
+        'CRITICAL RULE: Preserve all original character dialogue, narration, scene flow, and names VERBATIM.',
+        'Do not rewrite, summarize, or alter character lines.',
+        'Divide the screenplay into cohesive episodes with clear beginning beats, middle escalation, and a strong cliffhanger moment.',
+        'All output fields must be in Indonesian.'
+      ].join(' ')
+    : [
+        'You are an award-winning vertical short drama showrunner adapting a novel/story into a viral multi-episode short drama series.',
+        `Target duration per episode is around ${targetDuration} seconds (about 12-18 shots).`,
+        'Every episode MUST follow the addictive short drama formula:',
+        '1) Shocking or dramatic opening Hook in the first 5 seconds.',
+        '2) Fast-paced conflict escalation with emotional stakes.',
+        '3) Heart-pounding Cliffhanger ending that forces the viewer to watch the next episode immediately.',
+        'Ensure continuity: Episode 2 Hook must directly address or escalate Episode 1 Cliffhanger.',
+        'All titles, summaries, hooks, beats, teasers, and excerpts must be in gripping, natural Indonesian.'
+      ].join(' ')
+
+  const prompt = [
+    `Serial Title: ${project.title || '(untitled)'}`,
+    `Source Type: ${sourceKind === 'screenplay' ? 'Naskah Jadi (Screenplay)' : 'Novel / Prosa'}`,
+    `Target Duration per Episode: ${targetDuration} seconds`,
+    `Source Text:\n"""\n${sourceText}\n"""`
+  ].join('\n\n')
+
+  const res = await generateJson<RawEpisodePlanResponse>({
+    system,
+    prompt,
+    schema: EPISODE_PLAN_SCHEMA,
+    name: 'episode_planner'
+  })
+
+  const rawEpisodes = res.episodes ?? []
+  if (!rawEpisodes.length) {
+    throw new Error('AI belum berhasil menghasilkan pembagian episode. Coba lagi.')
+  }
+
+  emit.storyProgress({ projectId, message: `Menyimpan ${rawEpisodes.length} episode hasil rencana...` })
+
+  const existing = listEpisodes(projectId)
+  const isContinuation = existing.length > 0 && existing.some((e) => e.status !== 'draft')
+
+  const startNum = isContinuation ? existing.length + 1 : 1
+
+  if (!isContinuation) {
+    for (const [idx, item] of rawEpisodes.entries()) {
+      const epNum = idx + 1
+      const epData = {
+        title: str(item.title) || `Episode ${epNum}`,
+        summary: str(item.summary),
+        hook: str(item.hook),
+        storyBeats: Array.isArray(item.story_beats) ? item.story_beats.map(str).filter(Boolean) : [],
+        cliffhanger: str(item.cliffhanger),
+        nextTeaser: str(item.next_teaser),
+        sourceText: str(item.source_excerpt) || sourceText,
+        sourceKind,
+        status: 'planned' as const,
+        durationSec: item.target_duration_sec ? Number(item.target_duration_sec) : targetDuration
+      }
+
+      if (idx === 0 && existing[0]) {
+        updateEpisode(existing[0].id, epData)
+      } else {
+        createEpisode(projectId, {
+          ...epData,
+          episodeNum: epNum
+        })
+      }
+    }
+  } else {
+    for (const [idx, item] of rawEpisodes.entries()) {
+      const epNum = startNum + idx
+      createEpisode(projectId, {
+        title: str(item.title) || `Episode ${epNum}`,
+        summary: str(item.summary),
+        hook: str(item.hook),
+        storyBeats: Array.isArray(item.story_beats) ? item.story_beats.map(str).filter(Boolean) : [],
+        cliffhanger: str(item.cliffhanger),
+        nextTeaser: str(item.next_teaser),
+        sourceText: str(item.source_excerpt),
+        sourceKind,
+        status: 'planned',
+        durationSec: item.target_duration_sec ? Number(item.target_duration_sec) : targetDuration
+      })
+    }
+  }
+
+  return listEpisodes(projectId)
+}
+
+const SCRIPT_DRAFT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    shots: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          title: { type: 'string', description: 'Short scene label, e.g. "Shot 1: Tamparan Manajer".' },
+          sourceExcerpt: { type: 'string', description: 'Source text excerpt corresponding to this shot.' },
+          visualAction: { type: 'string', description: 'Concise, clear visual action describing what happens on screen.' },
+          characters: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Names of characters visible in the shot.'
+          },
+          costumes: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                character: { type: 'string' },
+                variant: { type: 'string' }
+              },
+              required: ['character', 'variant']
+            },
+            description: 'Costume variant for each visible character.'
+          },
+          location: { type: 'string', description: 'Location name where the shot takes place.' },
+          props: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Key props visible or used in this shot.'
+          },
+          speaker: { type: 'string', description: 'Name of the character speaking dialogue, or "Narator", or empty if silent.' },
+          text: { type: 'string', description: 'Dialogue line spoken in the shot, or narration text. Empty if silent.' },
+          emotion: { type: 'string', description: 'Emotional delivery and facial expression, e.g. "marah, mencemooh".' },
+          framing: { type: 'string', description: 'Shot framing: close-up, medium shot, extreme close-up, two-shot, over-the-shoulder, wide.' },
+          durationSec: { type: 'integer', description: 'Shot duration in seconds (typically 3 to 7).' }
+        },
+        required: ['title', 'sourceExcerpt', 'visualAction', 'characters', 'costumes', 'location', 'props', 'speaker', 'text', 'emotion', 'framing', 'durationSec']
+      }
+    },
+    newAssets: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          kind: { type: 'string', enum: ['character', 'derivative', 'location', 'prop'] },
+          name: { type: 'string', description: 'Name of the entity.' },
+          description: { type: 'string', description: 'Visual appearance, style, or details.' },
+          action: { type: 'string', enum: ['create', 'merge', 'derivative', 'ignore'] },
+          target: { type: 'string', description: 'Name or ID of existing target entity if action is merge or derivative' },
+          reason: { type: 'string', description: 'Explanation why this asset is needed in this episode.' }
+        },
+        required: ['kind', 'name', 'description', 'action', 'target', 'reason']
+      }
+    }
+  },
+  required: ['shots', 'newAssets']
+}
+
+interface RawCostumeItem {
+  character?: string
+  variant?: string
+}
+
+interface RawDraftShot {
+  title?: string
+  sourceExcerpt?: string
+  visualAction?: string
+  characters?: string[]
+  costumes?: RawCostumeItem[] | Record<string, string>
+  location?: string
+  props?: string[]
+  speaker?: string
+  text?: string
+  emotion?: string
+  framing?: string
+  durationSec?: number
+}
+
+interface RawScriptDraftResponse {
+  shots?: RawDraftShot[]
+  newAssets?: NewAssetProposal[]
+}
+
+export async function planEpisodeScript(projectId: string, episodeId: string): Promise<EpisodeScriptDraft> {
+  const project = getProject(projectId)
+  const ep = getEpisode(episodeId)
+  if (!ep || ep.projectId !== projectId) throw new Error('Episode tidak ditemukan.')
+
+  const allEpisodes = listEpisodes(projectId)
+  const epIdx = allEpisodes.findIndex((e) => e.id === episodeId)
+  const prevEp = epIdx > 0 ? allEpisodes[epIdx - 1] : null
+  const nextEp = epIdx >= 0 && epIdx < allEpisodes.length - 1 ? allEpisodes[epIdx + 1] : null
+
+  const chars = charactersOf(projectId)
+  const locs = locationsOf(projectId)
+  const prs = propsOf(projectId)
+  const derivs = derivativesOf(projectId)
+
+  emit.storyProgress({ projectId, message: `Menyusun rencana naskah shot untuk ${ep.title}...` })
+
+  const castSummary = chars.length
+    ? chars.map((c) => {
+        const cDerivs = derivs.filter((d) => d.characterId === c.id).map((d) => d.name)
+        return `- ${c.name} (aliases: ${c.aliases.join(', ') || 'none'}, variants: ${cDerivs.join(', ') || 'default'}): ${c.description}`
+      }).join('\n')
+    : '(Belum ada karakter terdaftar di Lorebook)'
+
+  const locSummary = locs.length
+    ? locs.map((l) => `- ${l.name} (aliases: ${l.aliases.join(', ') || 'none'}): ${l.description}`).join('\n')
+    : '(Belum ada lokasi terdaftar di Lorebook)'
+
+  const propSummary = prs.length
+    ? prs.map((p) => `- ${p.name}: ${p.description}`).join('\n')
+    : '(Belum ada prop terdaftar di Lorebook)'
+
+  const system = [
+    'You are a master vertical short drama scriptwriter and director.',
+    'You are planning the shot-by-shot script for an episode in an intense vertical short drama series (9:16 format).',
+    'Follow these critical short drama directing rules:',
+    '1. SHOT-REVERSE-SHOT: Around 80% of conversation shots must be close-up or reaction shots of the speaker or listener with intense facial expressions.',
+    '2. ONE SHOT = AT MOST ONE SPEECH: Exactly one character speaks per shot. If a character speaks dialogue, they MUST be visible in that shot.',
+    '3. HOOK AND CLIFFHANGER: The first shot must vividly display the opening Hook. The last shot must land on the heart-stopping Cliffhanger.',
+    '4. CONTINUITY: If a previous episode ended on a cliffhanger, this episode must immediately resolve or escalate it in the opening beats.',
+    '5. DEFAULT COSTUMES: Each character wears a consistent costume variant for the episode unless an explicit wardrobe change occurs in the story.',
+    '6. LOREBOOK & ASSET DETECTION: Match characters, locations, and props to registered entities whenever possible.',
+    'If the story introduces a new recurring character, costume variant, location, or prop not in the Lorebook, propose it in "newAssets" with kind, name, description, action, target, and reason.',
+    'Write dialogue, action, emotions, and titles in natural, dramatic Indonesian.'
+  ].join('\n')
+
+  const prompt = [
+    `Current Episode: ${ep.title} (Target duration: ${ep.durationSec}s)`,
+    `Episode Hook: ${ep.hook || '(none)'}`,
+    `Story Beats:\n${(ep.storyBeats ?? []).map((b, i) => `${i + 1}. ${b}`).join('\n')}`,
+    `Episode Cliffhanger: ${ep.cliffhanger || '(none)'}`,
+    ep.sourceText ? `Episode Source Text:\n"""\n${ep.sourceText}\n"""` : `Serial Synopsis:\n${project.synopsis}`,
+    prevEp ? `Previous Episode (${prevEp.title}): Summary: ${prevEp.summary}. Cliffhanger to resolve: ${prevEp.cliffhanger}` : 'This is Episode 1 (Premiere).',
+    nextEp ? `Next Episode (${nextEp.title}): Hook leading to: ${nextEp.hook}. Beats: ${(nextEp.storyBeats ?? []).join(', ')}` : 'This is the Final Episode.',
+    `\n--- REGISTERED LOREBOOK ASSETS ---`,
+    `Characters:\n${castSummary}`,
+    `Locations:\n${locSummary}`,
+    `Props:\n${propSummary}`
+  ].join('\n\n')
+
+  const res = await generateJson<RawScriptDraftResponse>({
+    system,
+    prompt,
+    schema: SCRIPT_DRAFT_SCHEMA,
+    name: `episode_script_${episodeId}`
+  })
+
+  const rawShots = res.shots ?? []
+  if (!rawShots.length) {
+    throw new Error('AI belum menghasilkan shot untuk episode ini. Coba lagi.')
+  }
+
+  const cleanShots: DraftShot[] = rawShots.map((s, i) => {
+    const costumeMap: Record<string, string> = {}
+    if (Array.isArray(s.costumes)) {
+      for (const item of s.costumes) {
+        if (item.character && item.variant) {
+          costumeMap[str(item.character)] = str(item.variant)
+        }
+      }
+    } else if (s.costumes && typeof s.costumes === 'object') {
+      for (const [k, v] of Object.entries(s.costumes)) {
+        if (typeof v === 'string') costumeMap[str(k)] = str(v)
+      }
+    }
+
+    return {
+      title: str(s.title) || `Shot ${i + 1}`,
+      sourceExcerpt: str(s.sourceExcerpt),
+      visualAction: str(s.visualAction),
+      characters: Array.isArray(s.characters) ? s.characters.map(str).filter(Boolean) : [],
+      costumes: costumeMap,
+      location: str(s.location) || null,
+      props: Array.isArray(s.props) ? s.props.map(str).filter(Boolean) : [],
+      speaker: str(s.speaker) || null,
+      text: str(s.text),
+      emotion: str(s.emotion),
+      framing: str(s.framing) || 'medium shot',
+      durationSec: Math.max(2, Math.min(Number(s.durationSec) || 5, 12))
+    }
+  })
+
+  const cleanProposals: NewAssetProposal[] = (res.newAssets ?? []).map((p) => ({
+    kind: p.kind,
+    name: str(p.name),
+    description: str(p.description),
+    action: p.action,
+    target: str(p.target) || undefined,
+    reason: str(p.reason)
+  })).filter((p) => p.name)
+
+  const draft: EpisodeScriptDraft = {
+    shots: cleanShots,
+    newAssets: cleanProposals,
+    createdAt: Date.now()
+  }
+
+  updateEpisode(episodeId, { scriptDraft: draft })
+  emit.storyProgress({ projectId, message: `Rencana naskah untuk ${ep.title} (${cleanShots.length} shot) selesai disusun!` })
+
+  return draft
+}
+
+export async function confirmEpisodeScript(projectId: string, episodeId: string, draft: EpisodeScriptDraft): Promise<ProjectBundle> {
+  return confirmEpisodeScriptRepo(projectId, episodeId, draft)
+}
+
+export async function writePrompts(projectId: string, episodeId: string, clipIds?: string[]): Promise<ProjectBundle> {
+  const clips = clipsOf(projectId, episodeId)
+  const targets = clips.filter((c) => clipIds ? clipIds.includes(c.id) : (!c.visualPrompt.trim() || !c.videoPrompt.trim()))
+  if (!targets.length) return getBundle(projectId, episodeId)
+
+  const chars = charactersOf(projectId)
+  const locs = locationsOf(projectId)
+  const derivs = derivativesOf(projectId)
+
+  for (const clip of targets) {
+    const loc = clip.locationId ? locs.find((l) => l.id === clip.locationId) : null
+    const settingLine = loc
+      ? `Setting: ${loc.name}${loc.description ? `, ${loc.description}` : ''}`
+      : 'Setting: Modern atmospheric interior, dramatic ambient lighting'
+
+    const actionDesc = clip.story.trim() || clip.narration.trim() || 'Character facing camera'
+    const emotionDesc = clip.emotion ? `, intense expression of ${clip.emotion}` : ''
+    const actionLine = `Action: ${actionDesc}${emotionDesc}`
+
+    const wardrobeParts: string[] = []
+    const charIds = clip.characterIds || []
+    const costumeIds = clip.costumeIds || {}
+    for (const cid of charIds) {
+      const ch = chars.find((c) => c.id === cid)
+      if (!ch) continue
+      const did = costumeIds[cid]
+      const deriv = did ? derivs.find((d) => d.id === did) : null
+      if (deriv) {
+        wardrobeParts.push(`${ch.name} - custom: ${deriv.name} (${deriv.promptChange || 'formal clothes'})`)
+      } else {
+        wardrobeParts.push(`${ch.name} - default appearance as on character sheet`)
+      }
+    }
+    const wardrobeLine = wardrobeParts.length ? `Wardrobe: ${wardrobeParts.join('; ')}` : ''
+
+    const framingLine = `Framing: vertical 9:16 shot, ${clip.framing || 'medium close-up'}, shallow depth of field, cinematic lighting`
+    const avoidLine = `Avoid: deformed eyes, bad hands, blurry faces, on-screen text, subtitles, watermark`
+
+    const visualPrompt = [settingLine, actionLine, wardrobeLine, framingLine, avoidLine].filter(Boolean).join('\n')
+    const videoPrompt = `Subtle micro-expressions, ${clip.story || 'looking with tension'}, subtle camera push-in, cinematic vertical short drama lighting`
+
+    patchClip(clip.id, { visualPrompt, videoPrompt })
+  }
+
+  return getBundle(projectId, episodeId)
 }
 
 // ---------- visual prompts for reviewed scenes ----------

@@ -11,6 +11,7 @@ import type {
   Clip,
   EditorSettings,
   Episode,
+  EpisodeScriptDraft,
   FilterId,
   Job,
   JobKind,
@@ -80,6 +81,7 @@ const toEpisode = (r: Row): Episode => ({
   nextTeaser: r.next_teaser,
   sourceText: r.source_text ?? '',
   sourceKind: r.source_kind ?? null,
+  scriptDraft: r.script_draft_json ? JSON.parse(r.script_draft_json) : null,
   status: r.status,
   durationSec: r.duration_sec,
   sort: r.sort,
@@ -266,6 +268,7 @@ export function updateEpisode(id: string, patch: Partial<Episode>): Episode {
   if (patch.nextTeaser !== undefined) entries.push(['next_teaser', patch.nextTeaser])
   if (patch.sourceText !== undefined) entries.push(['source_text', patch.sourceText])
   if (patch.sourceKind !== undefined) entries.push(['source_kind', patch.sourceKind])
+  if (patch.scriptDraft !== undefined) entries.push(['script_draft_json', patch.scriptDraft ? JSON.stringify(patch.scriptDraft) : null])
   if (patch.status !== undefined) entries.push(['status', patch.status])
   if (patch.durationSec !== undefined) entries.push(['duration_sec', patch.durationSec])
   if (patch.sort !== undefined) entries.push(['sort', patch.sort])
@@ -1014,6 +1017,192 @@ export function replaceScript(projectId: string, title: string, scenes: ScriptSc
     db.prepare("UPDATE episodes SET title = ?, status = 'script', updated_at = ? WHERE id = ?").run(title, Date.now(), epId)
     db.prepare("UPDATE projects SET title = ?, status = 'script', step = 2, updated_at = ? WHERE id = ?").run(title, Date.now(), projectId)
   })()
+}
+
+/**
+ * Confirms an episode's script draft:
+ * 1. Registers approved new assets in Lorebook.
+ * 2. Rejects if any shots reference unmapped/unregistered character, location, or prop names.
+ * 3. Deletes existing clips of the episode and inserts the newly planned shots with mapped IDs.
+ * 4. Clears script_draft_json, updates episode status to 'script'.
+ * 5. Returns the updated project bundle.
+ */
+export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, draft: EpisodeScriptDraft): ProjectBundle {
+  const db = getDb()
+  const ep = getEpisode(episodeId)
+  if (!ep || ep.projectId !== projectId) throw new Error('Episode tidak ditemukan.')
+
+  db.transaction(() => {
+    // 1. Process proposed newAssets
+    for (const p of draft.newAssets ?? []) {
+      const pName = p.name.trim()
+      if (!pName) continue
+      const action = p.action || 'create'
+
+      if (action === 'create') {
+        if (p.kind === 'character') {
+          const chars = charactersOf(projectId)
+          if (!chars.some((c) => c.name.toLowerCase() === pName.toLowerCase())) {
+            createCharacter({ projectId, name: pName, description: p.description || '' })
+          }
+        } else if (p.kind === 'derivative') {
+          const chars = charactersOf(projectId)
+          const targetChar = p.target
+            ? chars.find((c) => c.id === p.target || c.name.toLowerCase() === p.target!.toLowerCase())
+            : chars[0]
+          if (targetChar) {
+            const derivs = derivativesOf(projectId).filter((d) => d.characterId === targetChar.id)
+            if (!derivs.some((d) => d.name.toLowerCase() === pName.toLowerCase())) {
+              createDerivative({ projectId, characterId: targetChar.id, name: pName, promptChange: p.description || '' })
+            }
+          }
+        } else if (p.kind === 'location') {
+          const locs = locationsOf(projectId)
+          if (!locs.some((l) => l.name.toLowerCase() === pName.toLowerCase())) {
+            createLocation({ projectId, name: pName, description: p.description || '' })
+          }
+        } else if (p.kind === 'prop') {
+          const prs = propsOf(projectId)
+          if (!prs.some((pr) => pr.name.toLowerCase() === pName.toLowerCase())) {
+            createProp({ projectId, name: pName, description: p.description || '' })
+          }
+        }
+      } else if (action === 'merge' && p.target) {
+        if (p.kind === 'character') {
+          const targetChar = charactersOf(projectId).find((c) => c.id === p.target || c.name.toLowerCase() === p.target!.toLowerCase())
+          if (targetChar && !targetChar.aliases.some((a) => a.toLowerCase() === pName.toLowerCase())) {
+            updateCharacter(targetChar.id, { aliases: [...targetChar.aliases, pName] })
+          }
+        } else if (p.kind === 'location') {
+          const targetLoc = locationsOf(projectId).find((l) => l.id === p.target || l.name.toLowerCase() === p.target!.toLowerCase())
+          if (targetLoc && !targetLoc.aliases.some((a) => a.toLowerCase() === pName.toLowerCase())) {
+            updateLocation(targetLoc.id, { aliases: [...targetLoc.aliases, pName] })
+          }
+        } else if (p.kind === 'prop') {
+          const targetProp = propsOf(projectId).find((pr) => pr.id === p.target || pr.name.toLowerCase() === p.target!.toLowerCase())
+          if (targetProp && !targetProp.aliases.some((a) => a.toLowerCase() === pName.toLowerCase())) {
+            updateProp(targetProp.id, { aliases: [...targetProp.aliases, pName] })
+          }
+        }
+      } else if (action === 'derivative' && p.target) {
+        const targetChar = charactersOf(projectId).find((c) => c.id === p.target || c.name.toLowerCase() === p.target!.toLowerCase())
+        if (targetChar) {
+          const derivs = derivativesOf(projectId).filter((d) => d.characterId === targetChar.id)
+          if (!derivs.some((d) => d.name.toLowerCase() === pName.toLowerCase())) {
+            createDerivative({ projectId, characterId: targetChar.id, name: pName, promptChange: p.description || '' })
+          }
+        }
+      }
+    }
+
+    // 2. Validate all names referenced in draft.shots
+    const allChars = charactersOf(projectId)
+    const allLocs = locationsOf(projectId)
+    const allProps = propsOf(projectId)
+    const allDerivs = derivativesOf(projectId)
+
+    const findChar = (name: string): Character | undefined => {
+      const q = name.trim().toLowerCase()
+      return allChars.find((c) => c.name.toLowerCase() === q || c.aliases.some((a) => a.toLowerCase() === q))
+    }
+    const findLoc = (name: string): Location | undefined => {
+      const q = name.trim().toLowerCase()
+      return allLocs.find((l) => l.name.toLowerCase() === q || l.aliases.some((a) => a.toLowerCase() === q))
+    }
+    const findProp = (name: string): Prop | undefined => {
+      const q = name.trim().toLowerCase()
+      return allProps.find((pr) => pr.name.toLowerCase() === q || pr.aliases.some((a) => a.toLowerCase() === q))
+    }
+
+    const unmapped: string[] = []
+    for (const [i, shot] of (draft.shots ?? []).entries()) {
+      const n = i + 1
+      for (const c of shot.characters ?? []) {
+        if (!findChar(c)) unmapped.push(`Shot ${n}: karakter "${c}" belum terdaftar`)
+      }
+      if (shot.speaker && !findChar(shot.speaker)) {
+        unmapped.push(`Shot ${n}: pembicara "${shot.speaker}" belum terdaftar`)
+      }
+      if (shot.location && !findLoc(shot.location)) {
+        unmapped.push(`Shot ${n}: lokasi "${shot.location}" belum terdaftar`)
+      }
+      for (const p of shot.props ?? []) {
+        if (!findProp(p)) unmapped.push(`Shot ${n}: prop "${p}" belum terdaftar`)
+      }
+    }
+
+    if (unmapped.length > 0) {
+      throw new Error(`Rencana belum bisa dikonfirmasi karena ada aset yang belum terdaftar:\n${unmapped.slice(0, 10).join('\n')}${unmapped.length > 10 ? `\n...dan ${unmapped.length - 10} lainnya` : ''}`)
+    }
+
+    // 3. Delete existing clips of this episode
+    db.prepare('DELETE FROM clips WHERE project_id = ? AND episode_id = ?').run(projectId, episodeId)
+
+    // 4. Insert clips
+    const insertClip = db.prepare(`
+      INSERT INTO clips (
+        id, project_id, episode_id, sort, title, visual_prompt, narration,
+        duration_ms, character_ids, motion_type, camera_preset, motion_strength,
+        video_prompt, transition, speaker_id, emotion, costume_ids, location_id,
+        prop_ids, framing, source_excerpt, story
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?
+      )
+    `)
+
+    for (const [idx, shot] of (draft.shots ?? []).entries()) {
+      const clipId = randomUUID()
+      const charIds = (shot.characters ?? []).map((cn) => findChar(cn)?.id).filter((id): id is string => !!id)
+      const speakerId = shot.speaker ? findChar(shot.speaker)?.id ?? null : null
+      const locId = shot.location ? findLoc(shot.location)?.id ?? null : null
+      const propIds = (shot.props ?? []).map((pn) => findProp(pn)?.id).filter((id): id is string => !!id)
+
+      const costumeMap: Record<string, string> = {}
+      for (const [charName, varName] of Object.entries(shot.costumes ?? {})) {
+        const c = findChar(charName)
+        if (c) {
+          const deriv = allDerivs.find((d) => d.characterId === c.id && d.name.toLowerCase() === varName.trim().toLowerCase())
+          if (deriv) costumeMap[c.id] = deriv.id
+        }
+      }
+
+      const durMs = Math.max(1000, Math.round((shot.durationSec || 5) * 1000))
+
+      insertClip.run(
+        clipId,
+        projectId,
+        episodeId,
+        idx,
+        shot.title || `Shot ${idx + 1}`,
+        '',
+        shot.text || '',
+        durMs,
+        JSON.stringify(charIds),
+        'camera',
+        'zoomin',
+        'sedang',
+        '',
+        'fade',
+        speakerId,
+        shot.emotion || '',
+        JSON.stringify(costumeMap),
+        locId,
+        JSON.stringify(propIds),
+        shot.framing || 'medium shot',
+        shot.sourceExcerpt || '',
+        shot.visualAction || ''
+      )
+    }
+
+    // 5. Update episode
+    db.prepare('UPDATE episodes SET script_draft_json = NULL, status = ?, updated_at = ? WHERE id = ?').run('script', Date.now(), episodeId)
+    touchProject(projectId)
+  })()
+
+  return getBundle(projectId, episodeId)
 }
 
 export interface SceneVisual {

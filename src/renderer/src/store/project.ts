@@ -51,6 +51,7 @@ interface ProjectState {
   updateEpisode(id: string, patch: Partial<Episode>): Promise<void>
   removeEpisode(id: string): Promise<void>
   reorderEpisodes(episodeIds: string[]): Promise<void>
+  refreshEpisodes(): Promise<void>
 
   addDerivative(input: { characterId: string; name: string; promptChange?: string }): Promise<CharacterDerivative>
   updateDerivative(id: string, patch: Partial<CharacterDerivative>): Promise<void>
@@ -280,6 +281,16 @@ export const useProject = create<ProjectState>((set, get) => {
       if (!p) return
       const updated = await window.api.episodes.reorder(p.id, episodeIds)
       set({ episodes: updated })
+    },
+    refreshEpisodes: async () => {
+      const p = get().project
+      if (!p) return
+      const eps = await window.api.episodes.list(p.id)
+      set({ episodes: eps })
+      if (get().episode) {
+        const cur = eps.find((e) => e.id === get().episode!.id)
+        if (cur) set({ episode: cur })
+      }
     },
 
     addDerivative: async (input) => {
@@ -691,6 +702,8 @@ export const useProject = create<ProjectState>((set, get) => {
     }
   }
 })
+
+;(window as unknown as { useProject?: typeof useProject }).useProject = useProject
 
 /** Latest active or recent job of a kind for a clip or character. */
 export function jobFor(jobs: Record<string, Job>, kind: Job['kind'], target: { clipId?: string; characterId?: string }): Job | null {

@@ -30,3 +30,5 @@ export const useApp = create<AppState>((set, get) => ({
   },
   dismiss: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) })
 }))
+
+;(window as unknown as { useApp?: typeof useApp }).useApp = useApp

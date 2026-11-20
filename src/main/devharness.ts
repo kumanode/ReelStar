@@ -8,9 +8,10 @@ import { anchorPoint } from '@shared/overlays'
 import { startExport } from './exporter'
 import { assetAbsPath, binPath } from './paths'
 import { probeDurationMs } from './services/audio'
-import { createEpisode, createProject, getBundle, insertAsset, listEpisodes, patchClip, replaceStory, saveSnapshot, touchProject } from './repo'
+import { confirmEpisodeScriptRepo, createEpisode, createProject, getBundle, insertAsset, listEpisodes, patchClip, replaceStory, saveSnapshot, touchProject } from './repo'
+import { writePrompts } from './story'
 import { recordCheck, setSecret } from './secrets'
-import type { ApiProvider, ExportOptions } from '@shared/types'
+import type { ApiProvider, EpisodeScriptDraft, ExportOptions } from '@shared/types'
 
 /**
  * Real speech for the demo clips (Windows' built-in English voice) with estimated caption timings, so
@@ -252,6 +253,144 @@ export function checkIsolation(projectId: string): boolean {
   return true
 }
 
+/** Verifies Phase 3 script planning, validation, confirmation, and prompt writing. */
+export async function checkPhase3(projectId: string): Promise<boolean> {
+  const eps = listEpisodes(projectId)
+  if (!eps.length) throw new Error('checkPhase3 butuh episode yang sudah di-seed')
+  const ep = eps[0]
+
+  // Test 1: Reject unmapped entity
+  const invalidDraft: EpisodeScriptDraft = {
+    shots: [
+      {
+        title: 'Shot 1',
+        sourceExcerpt: 'Hook',
+        visualAction: 'Kemunculan musuh asing',
+        characters: ['KarakterMisteriusTakDikenal'],
+        costumes: {},
+        location: null,
+        props: [],
+        speaker: 'KarakterMisteriusTakDikenal',
+        text: 'Siapa kalian?',
+        emotion: 'marah',
+        framing: 'close_up',
+        durationSec: 4
+      }
+    ],
+    newAssets: [],
+    createdAt: Date.now()
+  }
+
+  let rejected = false
+  try {
+    confirmEpisodeScriptRepo(projectId, ep.id, invalidDraft)
+  } catch (err) {
+    if ((err as Error).message.includes('belum terdaftar')) {
+      rejected = true
+    }
+  }
+  if (!rejected) {
+    throw new Error('confirmEpisodeScriptRepo GAGAL menolak nama karakter yang belum terdaftar!')
+  }
+
+  // Test 2: Successful confirmation with proposed newAssets
+  const validDraft: EpisodeScriptDraft = {
+    shots: [
+      {
+        title: 'Shot 1 - Pembukaan',
+        sourceExcerpt: 'Adegan 1',
+        visualAction: 'Pendekar mencabut pedang di depan gerbang istana',
+        characters: ['Pendekar'],
+        costumes: { Pendekar: 'Jubah Naga' },
+        location: 'Gerbang Istana Majapahit',
+        props: ['Pedang Pusaka'],
+        speaker: 'Pendekar',
+        text: 'Demi kehormatan kerajaan!',
+        emotion: 'tegas',
+        framing: 'close_up',
+        durationSec: 5
+      },
+      {
+        title: 'Shot 2 - Jawaban Sekutu',
+        sourceExcerpt: 'Adegan 2',
+        visualAction: 'Panglima Wira mengangguk mantap memberi hormat',
+        characters: ['Panglima Wira'],
+        costumes: {},
+        location: 'Gerbang Istana Majapahit',
+        props: [],
+        speaker: 'Panglima Wira',
+        text: 'Pasukan kami siap bergerak.',
+        emotion: 'dingin',
+        framing: 'medium shot',
+        durationSec: 4
+      }
+    ],
+    newAssets: [
+      {
+        kind: 'character',
+        name: 'Panglima Wira',
+        description: 'Panglima perang perkasa',
+        action: 'create',
+        reason: 'Tokoh baru dalam cerita'
+      },
+      {
+        kind: 'derivative',
+        name: 'Jubah Naga',
+        description: 'Jubah tempur bersulam naga',
+        action: 'derivative',
+        target: 'Pendekar',
+        reason: 'Varian kostum Pendekar'
+      },
+      {
+        kind: 'location',
+        name: 'Gerbang Istana Majapahit',
+        description: 'Gerbang utama bata merah',
+        action: 'create',
+        reason: 'Lokasi pertemuan'
+      },
+      {
+        kind: 'prop',
+        name: 'Pedang Pusaka',
+        description: 'Pedang berukir pamor emas',
+        action: 'create',
+        reason: 'Senjata utama'
+      }
+    ],
+    createdAt: Date.now()
+  }
+
+  const bundle = confirmEpisodeScriptRepo(projectId, ep.id, validDraft)
+
+  // Verify bundle & database state
+  if (bundle.clips.length !== 2) {
+    throw new Error(`Klip hasil konfirmasi salah: diharapkan 2, didapat ${bundle.clips.length}`)
+  }
+  if (!bundle.characters.some((c) => c.name === 'Panglima Wira')) {
+    throw new Error('Aset karakter baru "Panglima Wira" gagal didaftarkan!')
+  }
+  const updatedEps = listEpisodes(projectId)
+  const updatedEp = updatedEps.find((e) => e.id === ep.id)
+  if (updatedEp?.status !== 'script') {
+    throw new Error(`Status episode seharusnya 'script', didapat '${updatedEp?.status}'`)
+  }
+  if (updatedEp.scriptDraft !== null && updatedEp.scriptDraft !== undefined) {
+    throw new Error('Draf naskah seharusnya dibersihkan setelah konfirmasi!')
+  }
+
+  // Test 3: writePrompts
+  const promptedBundle = await writePrompts(projectId, ep.id)
+  const pClips = promptedBundle.clips
+  if (!pClips[0].visualPrompt || !pClips[0].videoPrompt) {
+    throw new Error('writePrompts gagal mengisi visualPrompt dan videoPrompt!')
+  }
+  if (!pClips[0].visualPrompt.includes('Pendekar') || !pClips[0].visualPrompt.includes('Gerbang Istana Majapahit')) {
+    throw new Error(`visualPrompt tidak menyertakan entitas: ${pClips[0].visualPrompt}`)
+  }
+
+  console.log('[checkPhase3] Semua pengujian backend Fase 3 BERHASIL!')
+  return true
+}
+
 /**
  * For harness runs: keep painting and timers going while the test window sits behind other windows, so
  * screenshots show the current state. Must run before the app is ready.
@@ -282,7 +421,8 @@ export function attachDevHarness(win: BrowserWindow): void {
   const planPath = process.env.STUDIO_CAPTURE_PLAN
   if (!planPath) return
   let plan: {
-    main?: 'seed' | 'seedEpisodes' | 'checkIsolation' | 'export' | 'key' | 'overlays' | 'speech' | 'videos'
+    main?: 'seed' | 'seedEpisodes' | 'checkIsolation' | 'checkPhase3' | 'export' | 'key' | 'overlays' | 'speech' | 'videos'
+    openProject?: boolean
     exportTo?: string
     encoder?: ExportOptions['encoder']
     /** For main "export": an existing project instead of the seeded demo. */
@@ -317,6 +457,10 @@ export function attachDevHarness(win: BrowserWindow): void {
         if (step.main === 'seed') demoId = seedDemo()
         if (step.main === 'seedEpisodes') demoId = seedEpisodes().projectId
         if (step.main === 'checkIsolation' && (step.projectId ?? demoId)) checkIsolation((step.projectId ?? demoId)!)
+        if (step.main === 'checkPhase3' && (step.projectId ?? demoId)) await checkPhase3((step.projectId ?? demoId)!)
+        if (step.openProject && demoId) {
+          await win.webContents.executeJavaScript(`(() => { window.useApp?.getState().go({ name: 'project', id: ${JSON.stringify(demoId)} }); })()`)
+        }
         if (step.main === 'overlays' && demoId) addDemoOverlays(demoId)
         if (step.main === 'videos' && demoId) addDemoVideos(demoId)
         if (step.main === 'speech' && demoId) await addDemoSpeech(demoId)

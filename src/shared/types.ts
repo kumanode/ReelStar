@@ -214,6 +214,8 @@ export interface Episode {
   nextTeaser: string
   sourceText: string
   sourceKind: SourceKind | null
+  sourceExcerpt?: string
+  scriptDraft?: EpisodeScriptDraft | null
   status: EpisodeStatus
   durationSec: number
   sort: number
@@ -250,6 +252,13 @@ export interface NewAssetProposal {
   action: 'create' | 'merge' | 'derivative' | 'ignore'
   target?: string
   reason: string
+}
+
+export interface PlanEpisodesInput {
+  projectId: string
+  sourceText?: string
+  sourceKind?: SourceKind
+  targetDurationSec?: number
 }
 
 export interface CharacterDerivative {

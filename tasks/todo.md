@@ -29,13 +29,13 @@ Rincian setiap tugas ada di [plan.md](plan.md); desain di
 
 ## Fase 3 — Planner & naskah dua tahap
 
-- [ ] Tugas 17 — Input sumber (novel / naskah jadi) di Episode Hub.
-- [ ] Tugas 18 — Planner episode bertahap dengan validasi, coba ulang, dan lanjutkan.
-- [ ] Tugas 19 — Rencana isi per episode dengan konteks antar-episode dan usulan aset baru.
-- [ ] Tugas 20 — Tab Rencana & Tinjau.
-- [ ] Tugas 21 — Konfirmasi rencana menjadi klip.
-- [ ] Tugas 22 — Tahap prompt visual untuk klip yang kosong.
-- [ ] Checkpoint 3 — novel contoh, naskah jadi kata per kata, Ep 2 menjawab cliffhanger Ep 1.
+- [x] Tugas 17 — Input sumber (novel / naskah jadi) di Episode Hub.
+- [x] Tugas 18 — Planner episode bertahap dengan validasi, coba ulang, dan lanjutkan.
+- [x] Tugas 19 — Rencana isi per episode dengan konteks antar-episode dan usulan aset baru.
+- [x] Tugas 20 — Tab Rencana & Tinjau.
+- [x] Tugas 21 — Konfirmasi rencana menjadi klip.
+- [x] Tugas 22 — Tahap prompt visual untuk klip yang kosong.
+- [x] Checkpoint 3 — novel contoh, naskah jadi kata per kata, Ep 2 menjawab cliffhanger Ep 1.
 
 ## Fase 4 — Prompt, suara & generate
 

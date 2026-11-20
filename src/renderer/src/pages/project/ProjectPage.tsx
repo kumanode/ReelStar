@@ -8,6 +8,7 @@ import { StudioHeader } from './StudioHeader'
 import { StudioSidebar } from './StudioSidebar'
 import { EpisodeHub } from './EpisodeHub'
 import { LorebookPage } from './LorebookPage'
+import { PlanStep } from './PlanStep'
 import { StoryboardStep } from './StoryboardStep'
 import { EditorStep } from './EditorStep'
 import { ExportDialog } from './ExportDialog'
@@ -104,18 +105,7 @@ export function ProjectPage({ id }: { id: string }) {
 
               {/* Workspace Content */}
               <div className="min-h-0 flex-1 overflow-hidden">
-                {activeTab === 'plan' && (
-                  <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-ink-2">
-                    <FileText className="size-10 text-muted" />
-                    <div>
-                      <h3 className="font-display text-base font-bold text-ink">Rencana & Tinjau Episode</h3>
-                      <p className="mt-1 max-w-md text-xs text-muted">
-                        Fitur peninjauan shot, balon dialog, dan verifikasi aset sebelum generate akan aktif di Fase 3.
-                        Kamu bisa langsung mengedit naskah dan gambar di tab Storyboard sekarang.
-                      </p>
-                    </div>
-                  </div>
-                )}
+                {activeTab === 'plan' && <PlanStep />}
                 {activeTab === 'storyboard' && <StoryboardStep />}
                 {activeTab === 'editor' && <EditorStep />}
               </div>

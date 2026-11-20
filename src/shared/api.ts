@@ -11,6 +11,7 @@ import type {
   ClipPatchEvent,
   CreditEstimate,
   Episode,
+  EpisodeScriptDraft,
   StoryProgressEvent,
   WhisperStatus,
   WordTiming,
@@ -24,6 +25,7 @@ import type {
   ModelSource,
   MusicPrompt,
   NewProjectInput,
+  PlanEpisodesInput,
   ProjectBundle,
   ProjectSnapshot,
   ProjectSummary,
@@ -85,6 +87,14 @@ export interface StudioApi {
     merge(input: MergeAssetInput): Promise<{ message: string }>
   }
   story: {
+    /** Adapts serial source text into structured episodes with hook, cliffhanger, and story beats. */
+    planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
+    /** Writes the detailed draft script (shots + new asset proposals) for an episode before confirmation. */
+    planEpisodeScript(projectId: string, episodeId: string): Promise<EpisodeScriptDraft>
+    /** Confirms the episode script draft, registers new assets, and creates actual clips in an atomic transaction. */
+    confirmEpisodeScript(projectId: string, episodeId: string, draft: EpisodeScriptDraft): Promise<ProjectBundle>
+    /** Generates labelled visualPrompt and videoPrompt for clips in an episode. */
+    writePrompts(projectId: string, episodeId: string, clipIds?: string[]): Promise<ProjectBundle>
     /** Script → one image plan per scene; "missing" skips scenes whose plan still matches their story. */
     visuals(projectId: string, mode: 'missing' | 'all'): Promise<ProjectBundle>
     /** A background-music prompt that fits the finished script, for use in Suno or another music AI. */

@@ -9,12 +9,14 @@ import type {
   Character,
   CharacterDerivative,
   Episode,
+  EpisodeScriptDraft,
   ExportOptions,
   KeyTestResult,
   Location,
   MergeAssetInput,
   ModelSource,
   NewProjectInput,
+  PlanEpisodesInput,
   ProjectSnapshot,
   Prop,
   ThumbnailRequest,
@@ -101,7 +103,17 @@ import * as gemini from './services/gemini'
 import * as f2a from './services/flow2api'
 import * as hf from './services/higgsfield'
 import * as llm from './services/llm'
-import { generateVisuals, generateMusicPrompt, generateThumbnailConcept, generateYoutubeMetadata, planSmartSfx } from './story'
+import {
+  confirmEpisodeScript,
+  generateVisuals,
+  generateMusicPrompt,
+  generateThumbnailConcept,
+  generateYoutubeMetadata,
+  planEpisodes,
+  planEpisodeScript,
+  planSmartSfx,
+  writePrompts
+} from './story'
 
 
 type Handler = (...args: any[]) => unknown
@@ -316,6 +328,11 @@ export function registerIpc(): void {
 
   handle('lorebook:assetUsage', (projectId: string, kind: 'character' | 'derivative' | 'location' | 'prop', id: string) => getAssetUsage(projectId, kind, id))
   handle('lorebook:merge', (input: MergeAssetInput) => mergeAssets(input))
+
+  handle('story:planEpisodes', (input: PlanEpisodesInput) => planEpisodes(input))
+  handle('story:planEpisodeScript', (projectId: string, episodeId: string) => planEpisodeScript(projectId, episodeId))
+  handle('story:confirmEpisodeScript', (projectId: string, episodeId: string, draft: EpisodeScriptDraft) => confirmEpisodeScript(projectId, episodeId, draft))
+  handle('story:writePrompts', (projectId: string, episodeId: string, clipIds?: string[]) => writePrompts(projectId, episodeId, clipIds))
 
   handle('story:musicPrompt', (projectId: string, episodeId?: string) => generateMusicPrompt(projectId, episodeId))
   handle('story:planSmartSfx', (projectId: string, episodeId?: string) => planSmartSfx(projectId, episodeId))

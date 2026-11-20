@@ -1,4 +1,4 @@
-import { useState, useRef, type ChangeEvent } from 'react'
+import { useState, useRef, useEffect, type ChangeEvent } from 'react'
 import {
   Plus,
   Upload,
@@ -10,10 +10,12 @@ import {
   ArrowDown,
   Trash2,
   Clock,
-  Layers
+  Layers,
+  Loader2
 } from 'lucide-react'
 import type { Episode, EpisodeStatus, SourceKind } from '@shared/types'
 import { Badge, Button, IconButton, Menu, Segmented, confirmDialog } from '../../components/ui'
+import { Select } from '../../components/Select'
 import { AutoTextarea } from '../../components/AutoTextarea'
 import { useApp } from '../../store/app'
 import { useProject } from '../../store/project'
@@ -37,15 +39,60 @@ export function EpisodeHub() {
     updateEpisode,
     removeEpisode,
     reorderEpisodes,
+    refreshEpisodes,
     switchEpisode,
     setActiveView
   } = useProject()
   const { toast } = useApp()
 
   const [showSource, setShowSource] = useState(Boolean(project?.sourceText))
+  const [isPlanning, setIsPlanning] = useState(false)
+  const [planMessage, setPlanMessage] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  useEffect(() => {
+    return window.api.on.storyProgress((progress) => {
+      if (progress.projectId === project?.id) {
+        setPlanMessage(progress.message)
+      }
+    })
+  }, [project?.id])
+
   if (!project) return null
+
+  const handlePlanEpisodes = async (continuation = false) => {
+    if (!project.sourceText?.trim()) {
+      toast('info', 'Masukkan atau unggah teks sumber cerita terlebih dahulu.')
+      return
+    }
+    if (!continuation && episodes.length > 0) {
+      const ok = await confirmDialog({
+        title: 'Rencanakan ulang serial?',
+        body: 'Struktur episode yang ada akan diperbarui atau digantikan dengan hasil analisis AI baru.',
+        confirm: 'Mulai rencanakan',
+        danger: true
+      })
+      if (!ok) return
+    }
+
+    setIsPlanning(true)
+    setPlanMessage('Menganalisis teks sumber...')
+    try {
+      const planned = await window.api.story.planEpisodes({
+        projectId: project.id,
+        sourceText: project.sourceText,
+        sourceKind: project.sourceKind ?? 'novel',
+        targetDurationSec: project.durationSec ?? 60
+      })
+      await refreshEpisodes()
+      toast('info', `Berhasil merencanakan ${planned.length} episode!`)
+    } catch (err) {
+      toast('error', `Gagal merencanakan episode: ${errorText(err)}`)
+    } finally {
+      setIsPlanning(false)
+      setPlanMessage(null)
+    }
+  }
 
   const handleFileUpload = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -192,22 +239,53 @@ export function EpisodeHub() {
               <div className="flex flex-wrap items-center justify-between gap-3 pt-2 text-xs text-muted">
                 <div className="flex items-center gap-4">
                   <span>{(project.sourceText ?? '').length.toLocaleString()} karakter</span>
-                  <div className="flex items-center gap-1.5">
-                    <Clock className="size-3.5" />
-                    <span>Target durasi default: {project.durationSec ?? 60} dtk/episode</span>
+                  <div className="flex items-center gap-2">
+                    <Clock className="size-3.5 text-ink-2" />
+                    <span>Target durasi:</span>
+                    <div className="w-40">
+                      <Select
+                        label="Target durasi episode"
+                        value={project.durationSec ?? 60}
+                        options={[
+                          { value: 45, label: '45 detik' },
+                          { value: 60, label: '60 detik (default)' },
+                          { value: 75, label: '75 detik' },
+                          { value: 90, label: '90 detik' },
+                          { value: 120, label: '120 detik' }
+                        ]}
+                        onChange={(v) => updateProject({ durationSec: Number(v) })}
+                        size="sm"
+                      />
+                    </div>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2">
+                  {isPlanning && (
+                    <div className="flex items-center gap-2 rounded-xl bg-accent-soft px-3 py-1.5 text-xs font-medium text-accent-dark">
+                      <Loader2 className="size-3.5 animate-spin" />
+                      <span>{planMessage || 'Sedang merencanakan episode...'}</span>
+                    </div>
+                  )}
+                  {episodes.length > 0 && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<Sparkles className="size-3.5" />}
+                      disabled={isPlanning || !project.sourceText?.trim()}
+                      onClick={() => void handlePlanEpisodes(true)}
+                    >
+                      Lanjutkan perencanaan
+                    </Button>
+                  )}
                   <Button
                     variant="ink"
                     size="sm"
-                    icon={<Sparkles className="size-3.5 text-sun" />}
-                    onClick={() => {
-                      toast('info', 'Planner AI otomatis akan diaktifkan di Fase 3. Kamu bisa membuat dan menyusun episode secara langsung sekarang.')
-                    }}
+                    icon={isPlanning ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5 text-sun" />}
+                    disabled={isPlanning || !project.sourceText?.trim()}
+                    onClick={() => void handlePlanEpisodes(false)}
                   >
-                    Pecah jadi episode
+                    {episodes.length > 0 ? 'Rencanakan ulang' : 'Pecah jadi episode'}
                   </Button>
                 </div>
               </div>

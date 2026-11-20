@@ -62,6 +62,10 @@ const api: StudioApi = {
     merge: call('lorebook:merge')
   },
   story: {
+    planEpisodes: call('story:planEpisodes'),
+    planEpisodeScript: call('story:planEpisodeScript'),
+    confirmEpisodeScript: call('story:confirmEpisodeScript'),
+    writePrompts: call('story:writePrompts'),
     visuals: call('story:visuals'),
     musicPrompt: call('story:musicPrompt'),
     planSmartSfx: call('story:planSmartSfx'),
