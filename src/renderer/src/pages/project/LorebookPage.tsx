@@ -14,6 +14,7 @@ import {
   Shirt
 } from 'lucide-react'
 import type { Character, Location, Prop, VoiceOption } from '@shared/types'
+import { computeDerivativeSheetBasisHash } from '@shared/hash'
 import { geminiVoiceGender } from '@shared/models'
 import { Badge, Button, Field, IconButton, Menu, Segmented, Spinner, confirmDialog, cx, inputCls } from '../../components/ui'
 import { AutoTextarea } from '../../components/AutoTextarea'
@@ -854,9 +855,21 @@ export function LorebookPage() {
                       const baseSheet = selectedCharacter.sheetAssetId
                         ? assets[selectedCharacter.sheetAssetId]
                         : null
-                      // Stale check (§6.G): generated variant sheet is stale if base sheet was recreated after it
+                      // Stale (§6.G): a generated variant sheet records the base sheet and prompt_change it was made from,
+                      // so editing the costume change or remaking the base sheet both mark it. Uploaded sheets never go
+                      // stale; sheets from before basis hashes fall back to "base sheet is newer".
+                      const storedBasis = variantSheet?.meta?.basisHash
                       const isStale =
-                        Boolean(variantSheet && baseSheet && baseSheet.createdAt > variantSheet.createdAt && !variantSheet.meta?.uploaded)
+                        !!variantSheet &&
+                        !variantSheet.meta?.uploaded &&
+                        (typeof storedBasis === 'string'
+                          ? storedBasis !==
+                            computeDerivativeSheetBasisHash({
+                              baseSheetAssetId: selectedCharacter.sheetAssetId,
+                              promptChange: variant.promptChange,
+                              imageModel: project?.imageModel ?? null
+                            })
+                          : !!baseSheet && baseSheet.createdAt > variantSheet.createdAt)
 
                       return (
                         <div

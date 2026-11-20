@@ -8,7 +8,7 @@ import { estimateWordTimings } from '@shared/captions'
 import { anchorPoint } from '@shared/overlays'
 import { NO_MUSIC, NO_MUSIC_DIALOG, modelSupportsNativeAudio } from '@shared/higgsfield'
 import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt } from '@shared/prompts'
-import { computeClipImageBasisHash, computeClipVideoBasisHash } from '@shared/hash'
+import { computeClipImageBasisHash, computeClipVideoBasisHash, computeDerivativeSheetBasisHash } from '@shared/hash'
 import { checkClipImagePrerequisites, checkClipVideoPrerequisites, clipImageBasis, getClipImageStatus, getClipVideoStatus, planBatch, referenceLimit, videoSecondsFor } from '@shared/validation'
 import { startExport } from './exporter'
 import { assetAbsPath, binPath } from './paths'
@@ -29,7 +29,8 @@ import {
   setDerivativeSheet,
   setLocationSheet,
   setPropSheet,
-  touchProject
+  touchProject,
+  updateDerivative
 } from './repo'
 import { getSettings, setSettings } from './settings'
 import { planEpisodes, writePrompts } from './story'
@@ -744,6 +745,33 @@ async function checkPhase4(projectId: string): Promise<boolean> {
     throw new Error('Video dialog tidak boleh jadi basi hanya karena klip mengikuti panjang videonya')
   }
   console.log(`[checkPhase4] Ekstraksi audio video OK: asset ${extractedAsset.id}, durasi: ${extractedAsset.durationMs}ms`)
+
+  // 11. Kriteria fase 4: editing a costume's prompt_change makes the variant sheet and the images wearing it stale.
+  const lb = getBundle(projectId, ep.id)
+  const deriv = lb.derivatives[0]
+  if (!deriv) throw new Error('Butuh varian kostum dari checkPhase3')
+  const wearer = lb.clips.find((c) => c.characterIds.includes(deriv.characterId)) ?? lb.clips[0]
+  patchClip(wearer.id, { costumeIds: { [deriv.characterId]: deriv.id } })
+  const ctxA = { ...flowCtx, characters: lb.characters, derivatives: lb.derivatives, locations: lb.locations, props: lb.props, assets: lb.assets }
+  const worn = getClip(wearer.id)
+  if (worn.costumeIds[deriv.characterId] !== deriv.id) throw new Error('patchClip gagal menyimpan costumeIds')
+  patchClip(wearer.id, { imageAssetId: fakeImage({ basisHash: clipImageBasis(worn, project, ctxA).basisHash }) })
+  const lbB = getBundle(projectId, ep.id)
+  const ctxB = { ...ctxA, assets: lbB.assets }
+  if (getClipImageStatus(getClip(wearer.id), project, ctxB).status !== 'current') throw new Error('Gambar berkostum harus current sebelum kostum diubah')
+  const sheetBasis = (change: string): string =>
+    computeDerivativeSheetBasisHash({ baseSheetAssetId: lb.characters.find((c) => c.id === deriv.characterId)?.sheetAssetId ?? null, promptChange: change, imageModel: project.imageModel })
+  updateDerivative(deriv.id, { promptChange: `${deriv.promptChange} dengan sabuk emas` })
+  const lbC = getBundle(projectId, ep.id)
+  const ctxC = { ...ctxB, derivatives: lbC.derivatives, assets: lbC.assets }
+  if (getClipImageStatus(getClip(wearer.id), project, ctxC).status !== 'stale') throw new Error('Mengubah prompt_change harus membuat gambar yang memakainya basi')
+  if (sheetBasis(deriv.promptChange) === sheetBasis(lbC.derivatives.find((d) => d.id === deriv.id)!.promptChange)) {
+    throw new Error('Mengubah prompt_change harus mengubah basis lembar varian')
+  }
+  const compiled = compileClipPrompt({ project, clip: getClip(wearer.id), characters: lbC.characters, derivatives: lbC.derivatives, locations: lbC.locations, props: lbC.props })
+  if (!compiled.includes('sabuk emas') || (compiled.match(/^Wardrobe:/gm) ?? []).length !== 1) {
+    throw new Error(`Prompt harus memakai kostum terbaru dari Lorebook, sekali saja: ${compiled}`)
+  }
 
   console.log('[checkPhase4] Semua pengujian backend Fase 4 BERHASIL!')
   return true

@@ -334,6 +334,8 @@ async function finishHiggsfield(ctx: TaskCtx, job: Job, requestId: string, paylo
     derivativeId: payload.derivativeId ?? null,
     locationId: payload.locationId ?? null,
     propId: payload.propId ?? null,
+    // Episode of the clip, so the header can total credits per episode; sheets belong to the whole series.
+    episodeId: job.clipId ? getClip(job.clipId).episodeId || null : null,
     kind: isVideo ? 'video' : 'image',
     provider: 'higgsfield',
     model: payload.model,
@@ -348,7 +350,8 @@ async function finishHiggsfield(ctx: TaskCtx, job: Job, requestId: string, paylo
     meta: {
       ...(payload.target === 'thumbnail' ? { thumbnail: true } : {}),
       ...(payload.resolution ? { resolution: payload.resolution } : {}),
-      ...(payload.basisHash ? { basisHash: payload.basisHash } : {})
+      ...(payload.basisHash ? { basisHash: payload.basisHash } : {}),
+      ...(typeof payload.credits === 'number' ? { credits: payload.credits } : {})
     }
   })
   emit.asset(asset)
@@ -387,6 +390,8 @@ function startHiggsfield(
     ctx.progress(0.04, 'Menyiapkan prompt')
     const { endpoint, body, payload } = await build(ctx)
     if (typeof body.resolution === 'string' || typeof body.resolution === 'number') payload.resolution = String(body.resolution)
+    // What this request costs is stored with its result, so the header adds up real prices instead of guesses.
+    if (payload.credits == null) payload.credits = (await requestCredits(endpoint, body)) ?? undefined
     ctx.progress(0.08, 'Mengirim ke Higgsfield')
     const submitStartedAt = Date.now()
     const requestId = await hf.submit(endpoint, body, ctx.signal)
@@ -395,6 +400,26 @@ function startHiggsfield(
     updateJobPayload(job.id, payload)
     return finishHiggsfield(ctx, job, requestId, payload)
   }, beforeQueue)
+}
+
+/**
+ * Credits Higgsfield quotes for a request. The price depends on the settings, not on the prompt or the
+ * reference images, so those are left out of the cache key and one quote serves every similar request.
+ */
+async function requestCredits(endpoint: string, body: Record<string, unknown>): Promise<number | null> {
+  const priced: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(body)) {
+    if (k === 'prompt') priced[k] = 'estimate'
+    else if (typeof v === 'string' && /^https?:\/\//.test(v)) priced[k] = 'https://example.com/ref.png'
+    else if (Array.isArray(v) && v.every((x) => typeof x === 'string' && /^https?:\/\//.test(x))) priced[k] = v.map(() => 'https://example.com/ref.png')
+    else priced[k] = v
+  }
+  const key = `estimate:${endpoint}:${JSON.stringify(priced)}`
+  const hit = readCache<CreditEstimate>(key)
+  if (hit && Date.now() - hit.updatedAt < DAY) return hit.value.credits
+  const value = await hf.estimate(endpoint, priced)
+  if (value) writeCache(key, value)
+  return value?.credits ?? null
 }
 
 function updateJobPayload(jobId: string, payload: HfPayload): void {

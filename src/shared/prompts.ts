@@ -155,8 +155,16 @@ function compactCharacterLine(c: Character, deriv: CharacterDerivative | null): 
   return deriv ? `${c.name}: ${c.description}; wears ${deriv.name} (${deriv.promptChange || 'custom outfit'})` : `${c.name}: ${c.description}`
 }
 
-/** True when the storyboard prompt (written by writePrompts or the creator) already has a "<label>:" line. */
-const hasLine = (text: string, label: string): boolean => new RegExp(`^\\s*${label}\\s*:`, 'im').test(text)
+/** Drops "<label>:" lines from the storyboard prompt; the compiled prompt writes those from Lorebook data instead. */
+const withoutLines = (text: string, labels: string[]): string => {
+  if (!labels.length) return text
+  const pattern = new RegExp(`^\\s*(${labels.join('|')})\\s*:`, 'i')
+  return text
+    .split('\n')
+    .filter((l) => !pattern.test(l))
+    .join('\n')
+    .trim()
+}
 
 /**
  * Compiles a structured, labelled image prompt for a clip (§8.C):
@@ -165,7 +173,8 @@ const hasLine = (text: string, label: string): boolean => new RegExp(`^\\s*${lab
 export function compileClipPrompt(opts: CompileClipPromptOptions): string {
   const { project, clip, characters, derivatives = [], locations = [], props = [], refNames = [], limit = 4000 } = opts
   const style = getStyle(project.styleId)
-  const { scene, avoid } = splitAvoid(clip.visualPrompt)
+  const split = splitAvoid(clip.visualPrompt)
+  const avoid = split.avoid
 
   const charMap = new Map(characters.map((c) => [c.id, c]))
   const derivMap = new Map(derivatives.map((d) => [d.id, d]))
@@ -183,11 +192,12 @@ export function compileClipPrompt(opts: CompileClipPromptOptions): string {
 
   const parts: string[] = []
 
-  // Setting line if location is defined
   const loc = clip.locationId ? locMap.get(clip.locationId) : null
-  // The storyboard prompt may already carry Setting/Framing/Wardrobe lines; repeating them in other words
-  // gives the model two instructions for the same thing.
-  const settingLine = loc && !hasLine(scene, 'setting') ? `Setting: ${loc.name}${loc.description ? `, ${loc.description}` : ''}.` : ''
+  // Lorebook data is the source of truth for setting, framing and costumes. writePrompts copied them into the
+  // storyboard prompt when it ran; those copies go stale when a costume's prompt_change or a location is edited,
+  // so they are replaced here, and the basis hash (built from this prompt) marks the image stale.
+  const scene = withoutLines(split.scene, ['framing', ...(loc ? ['setting'] : []), ...(visibleChars.length ? ['wardrobe'] : [])])
+  const settingLine = loc ? `Setting: ${loc.name}${loc.description ? `, ${loc.description}` : ''}.` : ''
 
   // Props line
   const clipProps = (clip.propIds || []).map((pid) => propMap.get(pid)).filter(Boolean) as Prop[]
@@ -198,9 +208,7 @@ export function compileClipPrompt(opts: CompileClipPromptOptions): string {
 
   // Framing line
   const orientation = project.aspectRatio === '9:16' ? 'vertical 9:16 full-bleed' : `${project.aspectRatio} full-bleed`
-  const framingLine = hasLine(scene, 'framing')
-    ? ''
-    : `Framing & composition: ${clip.framing || 'medium close-up'}, ${orientation}, shallow depth of field, clear atmospheric lighting.`
+  const framingLine = `Framing & composition: ${clip.framing || 'medium close-up'}, ${orientation}, shallow depth of field, clear atmospheric lighting.`
 
   // Scene description
   const sceneBlock = [settingLine, scene, emotionLine, propsLine, framingLine].filter(Boolean).join('\n')
@@ -216,7 +224,7 @@ export function compileClipPrompt(opts: CompileClipPromptOptions): string {
     })
 
     parts.push(
-      (hasLine(scene, 'wardrobe') ? '' : `Wardrobe:\n${wardrobeLines.join('\n')}\n\n`) +
+      `Wardrobe:\n${wardrobeLines.join('\n')}\n\n` +
       `Recurring characters in this scene. Keep each one's body, face, hair and skin exactly as described${refNames.length ? ' and as on their reference sheet' : ''}:\n` +
       visibleChars.map(({ char }) => characterLine(char)).join('\n')
     )

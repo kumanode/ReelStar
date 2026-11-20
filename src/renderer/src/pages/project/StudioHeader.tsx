@@ -48,7 +48,7 @@ function SaveStatus() {
 }
 
 export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
-  const { project, episode, episodes, switchEpisode, updateProject, flush, jobs, activeView, activeTab, setActiveTab } = useProject()
+  const { project, episode, episodes, switchEpisode, updateProject, flush, assets, activeView, activeTab, setActiveTab } = useProject()
   const { go, toast } = useApp()
   const [editingTitle, setEditingTitle] = useState(false)
   const [creditOpen, setCreditOpen] = useState(false)
@@ -62,19 +62,18 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
     }))
   }, [episodes])
 
-  // Count estimated credits used per episode from completed generation jobs
+  // Credits are read from results: Higgsfield's quote is stored on each image/video it made. Flow2API results and
+  // older ones carry none, so they add nothing instead of a guessed price.
   const episodeCreditsMap = useMemo(() => {
     const map = new Map<string, number>()
-    for (const j of Object.values(jobs)) {
-      if (j.status === 'done') {
-        const payload = (j as any).payload ?? {}
-        const creds = typeof payload.credits === 'number' ? payload.credits : j.kind === 'video' ? 10 : 1
-        const epKey = j.episodeId || 'unassigned'
-        map.set(epKey, (map.get(epKey) ?? 0) + creds)
-      }
+    for (const a of Object.values(assets)) {
+      const creds = a.meta.credits
+      if (typeof creds !== 'number' || !Number.isFinite(creds)) continue
+      const epKey = a.episodeId || 'series'
+      map.set(epKey, (map.get(epKey) ?? 0) + creds)
     }
     return map
-  }, [jobs])
+  }, [assets])
 
   const currentEpisodeCredits = episode?.id ? episodeCreditsMap.get(episode.id) ?? 0 : 0
   const totalSeriesCredits = useMemo(() => {
@@ -265,6 +264,13 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
                   )
                 })}
               </div>
+              {(episodeCreditsMap.get('series') ?? 0) > 0 && (
+                <div className="flex items-center justify-between px-2 text-xs text-ink-2">
+                  <span>Lembar Lorebook</span>
+                  <span className="font-mono text-[11px]">{(episodeCreditsMap.get('series') ?? 0).toLocaleString('id-ID')} kr</span>
+                </div>
+              )}
+              <p className="px-2 text-[11px] leading-snug text-muted">Dihitung dari harga Higgsfield tiap hasil. Hasil Flow2API tidak memakai kredit.</p>
               <div className="mt-1 flex items-center justify-between border-t border-line pt-2 text-xs font-bold text-ink">
                 <span>Total Seluruh Serial</span>
                 <span className="font-mono text-accent-dark">{totalSeriesCredits.toLocaleString('id-ID')} kredit</span>

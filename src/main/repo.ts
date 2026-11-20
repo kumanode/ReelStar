@@ -1436,7 +1436,8 @@ export function patchClip(id: string, patch: Partial<Clip>): void {
   const sets = entries.map(([k]) => `${CLIP_COLS[k as keyof Clip]} = ?`).join(', ')
   getDb()
     .prepare(`UPDATE clips SET ${sets} WHERE id = ?`)
-    .run(...entries.map(([, v]) => v), id)
+    // costumeIds and propIds are stored as JSON text; SQLite cannot bind objects or arrays directly.
+    .run(...entries.map(([, v]) => (v !== null && typeof v === 'object' ? JSON.stringify(v) : v)), id)
 }
 
 /** Puts a new clip right after another one (used when the editor splits a clip). */
