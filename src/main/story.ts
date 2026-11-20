@@ -737,7 +737,7 @@ function briefFromChapterPlan(plan: StoryPlan): StoryBrief {
   }
 }
 
-export async function generateScript(projectId: string): Promise<ProjectBundle> {
+export async function generateScript(projectId: string, episodeId?: string): Promise<ProjectBundle> {
   const project = getProject(projectId)
   if (!project.synopsis.trim()) throw new Error('Tulis ide cerita atau sinopsis dulu.')
   const savedPlan = project.storyPlan
@@ -791,9 +791,10 @@ export async function generateScript(projectId: string): Promise<ProjectBundle> 
       durationMs: estimateNarrationMs(c.narration),
       speaker: c.speaker || null,
       gender: c.speakerGender || null
-    }))
+    })),
+    episodeId
   )
-  return getBundle(projectId)
+  return getBundle(projectId, episodeId)
 }
 
 /** Rewrites one scene with nearby context so edits still fit the brief, hook, and act outline. */
@@ -969,14 +970,14 @@ function visualText(a: VisualScene): string {
  * Designs one image per scene (plus camera move, transition and AI-video direction) from the reviewed
  * script. "missing" only covers scenes without a plan or whose story changed since; "all" redoes every scene.
  */
-export async function generateVisuals(projectId: string, mode: 'missing' | 'all'): Promise<ProjectBundle> {
+export async function generateVisuals(projectId: string, mode: 'missing' | 'all', episodeId?: string): Promise<ProjectBundle> {
   const project = getProject(projectId)
-  const clips = clipsOf(projectId)
+  const clips = clipsOf(projectId, episodeId)
   if (!clips.length) throw new Error('Naskah masih kosong. Tambahkan adegan dulu.')
   const empty = clips.findIndex((c) => !c.story.trim() && !c.narration.trim())
   if (empty >= 0) throw new Error(`Adegan ${empty + 1} masih kosong. Isi alur atau narasinya dulu.`)
   const targets = clips.map((c, i) => ({ clip: c, n: i + 1 })).filter((t) => mode === 'all' || needsVisual(t.clip))
-  if (!targets.length) return getBundle(projectId)
+  if (!targets.length) return getBundle(projectId, episodeId)
 
   let known = charactersOf(projectId)
   const system = [
@@ -1036,7 +1037,7 @@ export async function generateVisuals(projectId: string, mode: 'missing' | 'all'
     known = charactersOf(projectId)
     emit.storyProgress({ projectId, message: `Visual ${gi + 1} dari ${groups.length} kelompok selesai` })
   }
-  return getBundle(projectId)
+  return getBundle(projectId, episodeId)
 }
 
 function toSceneVisual(clip: Clip, a: NonNullable<VisualPlan['scenes']>[number]): SceneVisual {
@@ -1078,8 +1079,8 @@ const MUSIC_SCHEMA = {
 }
 
 /** A prompt for background music that suits the story, to paste into Suno or another music AI. */
-export async function generateMusicPrompt(projectId: string): Promise<MusicPrompt> {
-  const b = getBundle(projectId)
+export async function generateMusicPrompt(projectId: string, episodeId?: string): Promise<MusicPrompt> {
+  const b = getBundle(projectId, episodeId)
   const p = b.project
   const clips = b.clips
   if (!clips.some((c) => c.narration.trim() || c.story.trim()) && !p.synopsis.trim()) throw new Error('Naskah masih kosong.')
@@ -1157,8 +1158,8 @@ const SMART_SFX_SCHEMA = {
 }
 
 /** Plans 3–6 contextual sound effects based on the story script and visual descriptions. */
-export async function planSmartSfx(projectId: string): Promise<SmartSfxCue[]> {
-  const b = getBundle(projectId)
+export async function planSmartSfx(projectId: string, episodeId?: string): Promise<SmartSfxCue[]> {
+  const b = getBundle(projectId, episodeId)
   const clips = b.clips
   if (!clips.length) throw new Error('Belum ada adegan dalam proyek.')
 
@@ -1247,8 +1248,8 @@ const YOUTUBE_SCHEMA = {
   required: ['titles', 'description', 'hashtags']
 }
 
-export async function generateYoutubeMetadata(projectId: string): Promise<YoutubeMetadata> {
-  const b = getBundle(projectId)
+export async function generateYoutubeMetadata(projectId: string, episodeId?: string): Promise<YoutubeMetadata> {
+  const b = getBundle(projectId, episodeId)
   const p = b.project
   const clips = b.clips
   if (!clips.length) throw new Error('Naskah masih kosong.')
@@ -1301,8 +1302,8 @@ const THUMBNAIL_SCHEMA = {
  * A thumbnail concept for the title the user picked. Written after the title on purpose: a thumbnail that
  * shows the same promise as the title converts better than one planned in isolation.
  */
-export async function generateThumbnailConcept(projectId: string, title: string): Promise<ThumbnailConcept> {
-  const b = getBundle(projectId)
+export async function generateThumbnailConcept(projectId: string, title: string, episodeId?: string): Promise<ThumbnailConcept> {
+  const b = getBundle(projectId, episodeId)
   const p = b.project
   const clean = title.trim()
   if (!clean) throw new Error('Pilih atau tulis judul dulu.')

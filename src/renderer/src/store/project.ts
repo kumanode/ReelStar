@@ -1,5 +1,18 @@
 import { create } from 'zustand'
-import type { Asset, Character, Clip, Job, Project, ProjectBundle, ProjectSnapshot, WordTiming } from '@shared/types'
+import type {
+  Asset,
+  Character,
+  CharacterDerivative,
+  Clip,
+  Episode,
+  Job,
+  Location,
+  Project,
+  ProjectBundle,
+  ProjectSnapshot,
+  Prop,
+  WordTiming
+} from '@shared/types'
 import { errorText } from '../lib/format'
 import { useApp } from './app'
 
@@ -8,6 +21,11 @@ export type SaveState = 'saved' | 'dirty' | 'saving' | 'error'
 interface ProjectState {
   loaded: boolean
   project: Project | null
+  episode: Episode | null
+  episodes: Episode[]
+  derivatives: CharacterDerivative[]
+  locations: Location[]
+  props: Prop[]
   characters: Character[]
   clips: Clip[]
   assets: Record<string, Asset>
@@ -53,6 +71,7 @@ interface ProjectState {
 
 interface HistoryEntry {
   project: Project
+  episode?: Episode | null
   characters: Character[]
   clips: Clip[]
   assets: Record<string, Asset>
@@ -78,6 +97,7 @@ function recordHistory(get: () => ProjectState, set: (patch: Partial<ProjectStat
   lastHistoryTime = now
   const entry: HistoryEntry = {
     project: structuredClone(s.project),
+    episode: s.episode ? structuredClone(s.episode) : null,
     characters: structuredClone(s.characters),
     clips: structuredClone(s.clips),
     assets: copyAssetIndex(s.assets),
@@ -130,6 +150,8 @@ function snapshot(s: ProjectState): ProjectSnapshot {
   const { createdAt: _c, updatedAt: _u, coverAssetId: _cv, ...project } = s.project!
   return {
     project,
+    episodeId: s.episode?.id || '',
+    episodeEditor: s.episode?.editor ?? s.project!.editor,
     characters: s.characters.map(({ sheetAssetId: _s, ...c }) => c),
     clips: s.clips.map(({ imageAssetId: _i, videoAssetId: _v, audioAssetId: _a, ...c }) => c)
   }
@@ -149,6 +171,11 @@ export const useProject = create<ProjectState>((set, get) => {
   return {
     loaded: false,
     project: null,
+    episode: null,
+    episodes: [],
+    derivatives: [],
+    locations: [],
+    props: [],
     characters: [],
     clips: [],
     assets: {},
@@ -170,6 +197,11 @@ export const useProject = create<ProjectState>((set, get) => {
       set({
         loaded: true,
         project: b.project,
+        episode: b.episode ?? null,
+        episodes: b.episodes ?? [],
+        derivatives: b.derivatives ?? [],
+        locations: b.locations ?? [],
+        props: b.props ?? [],
         characters: b.characters,
         clips: b.clips,
         assets: Object.fromEntries(b.assets.map((a) => [a.id, a])),
@@ -188,7 +220,23 @@ export const useProject = create<ProjectState>((set, get) => {
       future = []
       historyGestureDepth = 0
       lastHistoryTime = -Infinity
-      set({ loaded: false, project: null, characters: [], clips: [], assets: {}, jobs: {}, selectedClipId: null, saveState: 'saved', canUndo: false, canRedo: false })
+      set({
+        loaded: false,
+        project: null,
+        episode: null,
+        episodes: [],
+        derivatives: [],
+        locations: [],
+        props: [],
+        characters: [],
+        clips: [],
+        assets: {},
+        jobs: {},
+        selectedClipId: null,
+        saveState: 'saved',
+        canUndo: false,
+        canRedo: false
+      })
     },
     select: (clipId) => set({ selectedClipId: clipId }),
 
@@ -205,6 +253,7 @@ export const useProject = create<ProjectState>((set, get) => {
       if (!s.project || past.length === 0) return
       const current: HistoryEntry = {
         project: structuredClone(s.project),
+        episode: s.episode ? structuredClone(s.episode) : null,
         characters: structuredClone(s.characters),
         clips: structuredClone(s.clips),
         assets: copyAssetIndex(s.assets),
@@ -223,6 +272,7 @@ export const useProject = create<ProjectState>((set, get) => {
 
       set({
         project: prev.project,
+        episode: prev.episode ?? get().episode,
         characters: prev.characters,
         clips: prev.clips,
         assets: prev.assets,
@@ -239,6 +289,7 @@ export const useProject = create<ProjectState>((set, get) => {
       if (!s.project || future.length === 0) return
       const current: HistoryEntry = {
         project: structuredClone(s.project),
+        episode: s.episode ? structuredClone(s.episode) : null,
         characters: structuredClone(s.characters),
         clips: structuredClone(s.clips),
         assets: copyAssetIndex(s.assets),
@@ -257,6 +308,7 @@ export const useProject = create<ProjectState>((set, get) => {
 
       set({
         project: next.project,
+        episode: next.episode ?? get().episode,
         characters: next.characters,
         clips: next.clips,
         assets: next.assets,
@@ -282,13 +334,23 @@ export const useProject = create<ProjectState>((set, get) => {
     updateEditor: (patch) => {
       recordHistory(get, set)
       const p = get().project!
-      set({ project: { ...p, editor: { ...p.editor, ...patch } } })
+      const ep = get().episode
+      const editor = { ...p.editor, ...patch }
+      set({
+        project: { ...p, editor },
+        ...(ep ? { episode: { ...ep, editor: { ...(ep.editor ?? p.editor), ...patch } } } : {})
+      })
       touch()
     },
     applyEditor: (patch) => {
       const p = get().project
       if (!p) return
-      set({ project: { ...p, editor: { ...p.editor, ...patch } } })
+      const ep = get().episode
+      const editor = { ...p.editor, ...patch }
+      set({
+        project: { ...p, editor },
+        ...(ep ? { episode: { ...ep, editor: { ...(ep.editor ?? p.editor), ...patch } } } : {})
+      })
       touch()
     },
     updateClip: (id, patch) => {
@@ -314,6 +376,7 @@ export const useProject = create<ProjectState>((set, get) => {
       const clip: Clip = {
         id: newId(),
         projectId: p.id,
+        episodeId: get().episode?.id || '',
         sort: at,
         title: 'Adegan baru',
         story: '',
@@ -322,6 +385,12 @@ export const useProject = create<ProjectState>((set, get) => {
         narration: '',
         durationMs: 5000,
         characterIds: [],
+        emotion: '',
+        costumeIds: {},
+        locationId: null,
+        propIds: [],
+        framing: '',
+        sourceExcerpt: '',
         motionType: 'camera',
         cameraPreset: 'zoomin',
         motionStrength: 'halus',
@@ -336,7 +405,7 @@ export const useProject = create<ProjectState>((set, get) => {
         voiceOutMs: null,
         voiceStartMs: 0,
         speakerId: null,
-        filter: p.editor.filter ?? 'normal',
+        filter: (get().episode?.editor ?? p.editor).filter ?? 'normal',
         imageAssetId: null,
         videoAssetId: null,
         audioAssetId: null
@@ -379,7 +448,9 @@ export const useProject = create<ProjectState>((set, get) => {
         sheetAssetId: null,
         sort: get().characters.length,
         ttsVoice: init?.ttsVoice ?? null,
-        ttsProvider: init?.ttsProvider ?? null
+        ttsProvider: init?.ttsProvider ?? null,
+        voiceStyle: '',
+        aliases: []
       }
       set({ characters: [...get().characters, c] })
       touch()

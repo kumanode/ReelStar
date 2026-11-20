@@ -150,6 +150,94 @@ const MIGRATIONS: string[] = [
   // Reviewed hooks and story outlines belong to the project so interrupted writing can resume.
   `
   ALTER TABLE projects ADD COLUMN story_plan_json TEXT;
+  `,
+  // Drama studio multi-episode: serial projects, episodes, drama clip fields, and lorebook assets.
+  `
+  ALTER TABLE projects ADD COLUMN source_text TEXT NOT NULL DEFAULT '';
+  ALTER TABLE projects ADD COLUMN source_kind TEXT NOT NULL DEFAULT 'novel';
+  ALTER TABLE projects ADD COLUMN dialog_audio TEXT NOT NULL DEFAULT 'video';
+
+  CREATE TABLE episodes (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    episode_num INTEGER NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    hook TEXT NOT NULL DEFAULT '',
+    story_beats_json TEXT NOT NULL DEFAULT '[]',
+    cliffhanger TEXT NOT NULL DEFAULT '',
+    next_teaser TEXT NOT NULL DEFAULT '',
+    source_text TEXT NOT NULL DEFAULT '',
+    source_kind TEXT,
+    script_draft_json TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',
+    duration_sec INTEGER NOT NULL DEFAULT 75,
+    sort INTEGER NOT NULL DEFAULT 0,
+    editor_json TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX episodes_project ON episodes(project_id, sort);
+
+  INSERT INTO episodes (id, project_id, episode_num, title, summary, status, duration_sec, sort, editor_json, created_at, updated_at)
+    SELECT lower(hex(randomblob(16))), id, 1, title, synopsis,
+      CASE WHEN status IN ('draft','script','storyboard','editing','exported') THEN status ELSE 'editing' END,
+      duration_sec, 0, editor_json, created_at, updated_at
+    FROM projects;
+  UPDATE projects SET dialog_audio = 'tts';
+
+  ALTER TABLE clips ADD COLUMN episode_id TEXT REFERENCES episodes(id) ON DELETE CASCADE;
+  UPDATE clips SET episode_id = (SELECT e.id FROM episodes e WHERE e.project_id = clips.project_id);
+  CREATE INDEX clips_episode ON clips(episode_id, sort);
+
+  ALTER TABLE clips ADD COLUMN emotion TEXT NOT NULL DEFAULT '';
+  ALTER TABLE clips ADD COLUMN costume_ids TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE clips ADD COLUMN location_id TEXT;
+  ALTER TABLE clips ADD COLUMN prop_ids TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE clips ADD COLUMN framing TEXT NOT NULL DEFAULT '';
+  ALTER TABLE clips ADD COLUMN source_excerpt TEXT NOT NULL DEFAULT '';
+
+  ALTER TABLE characters ADD COLUMN voice_style TEXT NOT NULL DEFAULT '';
+  ALTER TABLE characters ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]';
+
+  CREATE TABLE character_derivatives (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    prompt_change TEXT NOT NULL DEFAULT '',
+    sheet_asset_id TEXT,
+    sort INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX character_derivatives_character ON character_derivatives(character_id, sort);
+
+  CREATE TABLE locations (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    sheet_asset_id TEXT,
+    sort INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX locations_project ON locations(project_id, sort);
+
+  CREATE TABLE props (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    sheet_asset_id TEXT,
+    sort INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX props_project ON props(project_id, sort);
+
+  ALTER TABLE assets ADD COLUMN derivative_id TEXT;
+  ALTER TABLE assets ADD COLUMN location_id TEXT;
+  ALTER TABLE assets ADD COLUMN prop_id TEXT;
+  ALTER TABLE assets ADD COLUMN episode_id TEXT;
+  ALTER TABLE jobs ADD COLUMN episode_id TEXT;
   `
 ]
 

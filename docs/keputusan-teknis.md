@@ -175,3 +175,12 @@ otomatis karena potongan itu dapat merusak intonasi dan membuat naskah terputus 
 Penolakan HTTP 429/503 sebelum stream adalah satu-satunya kondisi generasi yang dicoba ulang otomatis. Setelah stream
 dimulai, koneksi yang putus bisa berarti server sudah menerima dan membuat hasil; permintaan tidak boleh dikirim ulang
 diam-diam tanpa idempotensi atau pemeriksaan status yang didukung server.
+
+### Klip diisolasi per episode dengan foreign key ON DELETE CASCADE
+Setiap klip memiliki `episode_id` yang terikat ke tabel `episodes`. Membaca (`getBundle`, `clipsOf`), menyimpan snapshot (`saveSnapshot`), menulis naskah (`replaceScript`), dan menyusun timeline selalu dibatasi ke episode aktif. Dengan demikian, penambahan, pengeditan, atau penghapusan adegan di satu episode tidak pernah mempengaruhi klip episode lain. Saat sebuah episode dihapus, semua klipnya otomatis terhapus lewat cascade SQLite.
+
+### Pengaturan editor tersimpan per episode dengan fallback proyek
+Setiap episode memiliki kolom `editor_json` sendiri yang menyimpan pengaturan timeline, musik latar, efek suara, dan gaya caption. `getBundle()` memadukan pengaturan ini ke `episode.editor`, sementara `project.editor` tetap menyimpan pengaturan bawaan serial. Di UI/renderer, perubahan editor langsung memperbarui keduanya sehingga transisi multi-episode tetap konsisten tanpa kehilangan kustomisasi spesifik episode.
+
+### Episode aktif diingat lewat pengaturan `last_episode`
+Kreator yang berpindah-pindah proyek akan kembali ke episode terakhir yang sedang mereka kerjakan. Posisi ini disimpan di tabel `settings` dengan kunci `last_episode:<projectId>` tanpa menambah status mutabel ke tabel `projects`. Jika belum ada riwayat, sistem otomatis memilih episode pertama berdasarkan urutan `sort`.

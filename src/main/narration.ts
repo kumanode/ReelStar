@@ -247,13 +247,13 @@ function store(p: Project, s: Segment, voice: string, takeId: string, bytes: Buf
 }
 
 /** Voices the scenes that need it ("missing") or every scene ("all") as one continuous take. */
-export function generateNarration(projectId: string, mode: 'missing' | 'all'): Job {
-  const running = activeProjectJob(projectId, 'narration')
+export function generateNarration(projectId: string, mode: 'missing' | 'all', episodeId?: string): Job {
+  const running = activeProjectJob(projectId, 'narration', episodeId)
   if (running) return running
   const project = getProject(projectId)
-  const targets = clipsOf(projectId).filter((c) => c.narration.trim() && (mode === 'all' || !c.audioAssetId))
+  const targets = clipsOf(projectId, episodeId).filter((c) => c.narration.trim() && (mode === 'all' || !c.audioAssetId))
   if (!targets.length) throw new Error('Tidak ada naskah narasi yang perlu disuarakan.')
-  const job = insertJob({ projectId, kind: 'narration', provider: project.ttsProvider, payload: { mode, clipIds: targets.map((c) => c.id) } })
+  const job = insertJob({ projectId, episodeId, kind: 'narration', provider: project.ttsProvider, payload: { mode, clipIds: targets.map((c) => c.id) } })
   emit.job(job)
   return runJob(job, 'tts', async (ctx) => {
     const p = getProject(projectId)
@@ -301,11 +301,11 @@ export function generateNarration(projectId: string, mode: 'missing' | 'all'): J
  * Re-times caption words with the local Whisper model on each scene's audio: scenes whose timings are
  * estimates or came from an older Whisper method, or every Gemini-voiced scene with "all".
  */
-export function syncCaptions(projectId: string, mode: 'stale' | 'all' | 'force' = 'stale'): Job {
-  const running = activeProjectJob(projectId, 'align')
+export function syncCaptions(projectId: string, mode: 'stale' | 'all' | 'force' = 'stale', episodeId?: string): Job {
+  const running = activeProjectJob(projectId, 'align', episodeId)
   if (running) return running
   if (!whisperReady()) throw new Error('Model Whisper belum diunduh. Unduh dulu di Pengaturan, bagian Caption akurat.')
-  const allCandidates = clipsOf(projectId).filter((c) => {
+  const allCandidates = clipsOf(projectId, episodeId).filter((c) => {
     const a = getAsset(c.audioAssetId)
     return !!a && (mode === 'all' || mode === 'force' ? a.provider !== 'elevenlabs' : captionNeedsSync(a))
   })
@@ -313,7 +313,7 @@ export function syncCaptions(projectId: string, mode: 'stale' | 'all' | 'force' 
   const skipped = allCandidates.length - targets.length
   if (!targets.length && skipped) throw new Error(`${skipped} klip dilewati karena caption diedit manual. Pilih “Timpa juga edit manual” bila ingin menggantinya.`)
   if (!targets.length) throw new Error('Semua caption sudah memakai waktu dari suara aslinya.')
-  const job = insertJob({ projectId, kind: 'align', provider: 'whisper', payload: { mode, skipped } })
+  const job = insertJob({ projectId, episodeId, kind: 'align', provider: 'whisper', payload: { mode, skipped } })
   emit.job(job)
   return runJob(job, 'whisper', async (ctx) => {
     const project = getProject(projectId)

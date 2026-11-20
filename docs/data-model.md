@@ -8,15 +8,19 @@ Tipe TypeScript-nya ada di `src/shared/types.ts`; skema SQLite di `src/main/db/i
 | Tabel | Isi |
 |---|---|
 | `projects` | satu baris per proyek; pengaturan editor disimpan sebagai JSON di `editor_json` |
-| `clips` | adegan/klip berurutan (`sort`) dalam proyek |
-| `characters` | pemeran proyek + lembar karakternya (`sheet_asset_id`) |
+| `episodes` | serial episode per proyek, masing-masing memiliki naskah, status, dan `editor_json` terpisah |
+| `clips` | adegan/klip berurutan (`sort`) dalam episode (`episode_id`) |
+| `characters` | pemeran proyek + lembar karakternya (`sheet_asset_id`), `voice_style`, dan `aliases` |
+| `character_derivatives` | varian kostum atau ekspresi karakter per proyek |
+| `locations` | lokasi/latar cerita per proyek |
+| `props` | barang/properti kunci per proyek |
 | `assets` | setiap file: gambar, video, audio narasi, musik, overlay, ekspor; menyimpan `local_path` relatif |
 | `jobs` | pekerjaan AI/render beserta status dan progresnya |
 | `settings` | pengaturan aplikasi (key → JSON) |
 | `secrets` | kunci API terenkripsi + hasil tes terakhir |
 | `cache` | cache bebas (daftar model, estimasi kredit, daftar suara), dengan `updated_at` |
 
-Relasi `project_id` memakai `ON DELETE CASCADE`. Tidak ada foreign key antara klip dan aset; klip menunjuk aset
+Relasi `project_id` dan `episode_id` memakai `ON DELETE CASCADE`. Tidak ada foreign key antara klip dan aset; klip menunjuk aset
 lewat `image_asset_id`, `video_asset_id`, `audio_asset_id`. Aset lama tetap tersimpan sebagai riwayat versi.
 
 ## Migrasi
@@ -37,6 +41,7 @@ dalam transaksi, lalu `user_version` dinaikkan.
 | 9 | `characters.tts_voice` |
 | 10 | `clips.speaker_id`, `characters.tts_provider` |
 | 11 | `projects.story_plan_json` untuk hook dan kerangka cerita yang ditinjau |
+| 12 | Studio multi-episode: `episodes` + backfill Episode 1; kolom drama `clips` (`episode_id`, `emotion`, `costume_ids`, `location_id`, `prop_ids`, `framing`, `source_excerpt`); tabel `character_derivatives`, `locations`, `props`; kolom aset & job `episode_id` |
 
 **Aturan:** tambahkan migrasi baru di akhir. Jangan mengubah migrasi yang sudah ada, karena pengguna lama sudah
 menjalankannya.
@@ -46,6 +51,8 @@ menjalankannya.
 | Properti | Arti |
 |---|---|
 | `title`, `synopsis` | judul (diisi AI saat menulis naskah) dan ide cerita |
+| `sourceText`, `sourceKind` | bahan sumber serial (novel / naskah jadi) |
+| `dialogAudio` | mode suara serial: `video` (suara bawaan video Veo/Sora) atau `tts` (suara narasi/karakter dipotong) |
 | `storyPlan` | plan cerita JSON sebelum naskah dibuat: gaya narasi, judul, pertanyaan, pembuka, bab (ringkasan, detail kunci, `beats`, sasaran adegan), penutup, hal yang dihindari, sifat isi, serta fakta untuk dicek. Field baru bersifat opsional agar plan lama (`hook` + `brief` + babak) tetap terbaca; dinormalisasi saat naskah dibuat. |
 | `durationSec`, `language`, `aspectRatio` | target durasi, bahasa naskah/suara, `16:9` atau `9:16` |
 | `styleId` | gaya visual (`src/shared/styles.ts`, 24 gaya) |
@@ -53,19 +60,40 @@ menjalankannya.
 | `imageModel`, `videoModel`, `videoResolution` | model Higgsfield per proyek (null = bawaan aplikasi) |
 | `status`, `step` | `draft`/`script`/`storyboard`/`editing`/`exported`; langkah 1 Ide, 2 Naskah, 3 Storyboard, 4 Editor |
 | `coverAssetId` | gambar sampul kartu proyek |
-| `editor` | `EditorSettings` (JSON), lihat di bawah |
+| `editor` | `EditorSettings` (JSON), bawaan proyek/fallback untuk episode |
 
-## Klip (`Clip`)
+## Episode (`Episode`)
 
-Satu klip = satu adegan: gambar atau video, suara narasinya, dan geraknya.
+Satu episode = satu bab/bagian serial dengan naskah, durasi target, status produksi, dan pengaturan timeline terpisah (`editor_json`).
 
 | Properti | Arti |
 |---|---|
+| `projectId` | relasi ke proyek serial |
+| `episodeNum`, `sort` | nomor episode (1..N) dan urutan di serial |
+| `title`, `summary` | judul episode dan ringkasan isi |
+| `hook`, `cliffhanger`, `nextTeaser` | hook pembuka, cliffhanger penutup, dan teaser episode selanjutnya |
+| `storyBeats` | daftar beat cerita yang direncanakan |
+| `sourceText`, `sourceKind` | kutipan/potongan teks sumber khusus episode ini |
+| `scriptDraft` | draft naskah dua tahap (adegan, pemeran, properti, lokasi, usulan aset baru) |
+| `status` | status produksi episode (`draft`/`script`/`storyboard`/`editing`/`exported`) |
+| `durationSec` | target durasi episode (detik, default 75) |
+| `editor` | `EditorSettings` (JSON) per episode; menimpa pengaturan proyek untuk timeline dan caption |
+
+## Klip (`Clip`)
+
+Satu klip = satu adegan: gambar atau video, suara narasinya, dan geraknya. Klip selalu terisolasi per episode (`episodeId`).
+
+| Properti | Arti |
+|---|---|
+| `episodeId` | ID episode pemilik klip (`ON DELETE CASCADE`) |
 | `sort` | urutan di timeline (klip selalu bersambung tanpa celah) |
 | `title`, `story`, `narration` | judul adegan, alur cerita (langkah Naskah), teks narasi (VO, boleh berisi tag `<short pause>` dll.) |
 | `visualPrompt` | prompt gambar berlabel: `Setting:`, `Action:`, `Wardrobe:`, `Framing:`, `Avoid:` |
 | `visualSource` | teks naskah saat rencana visual dibuat; kalau berbeda dari naskah sekarang, adegan perlu visual baru (`needsVisual`) |
 | `characterIds` | pemeran yang tampil |
+| `emotion`, `costumeIds` | emosi karakter pada adegan ini dan varian kostum per karakter |
+| `locationId`, `propIds` | relasi ke Lorebook lokasi dan properti kunci yang digunakan |
+| `framing`, `sourceExcerpt` | komposisi/tipe bidikan (CU, MS, WS, dll.) dan kutipan teks sumber |
 | `durationMs` | panjang klip di timeline (diatur ulang ke panjang suara setiap narasi direkam) |
 | `motionType` | `camera` (gerak kamera di atas gambar) atau `video` (video AI) |
 | `cameraPreset`, `motionStrength` | gerak kamera untuk gambar: zoomin/zoomout/panleft/panright/kenburns/shake/static; halus/sedang/kuat |

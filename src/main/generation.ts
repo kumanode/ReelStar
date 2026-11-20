@@ -635,19 +635,20 @@ export function generateClipTts(clipId: string): Job {
   })
 }
 
-export function generateMissingImages(projectId: string): Job[] {
+export function generateMissingImages(projectId: string, episodeId?: string): Job[] {
   const jobs: Job[] = []
   const project = getProject(projectId)
   const canRef = isFlow2Api()
     ? getFlow2ApiModel(project.imageModel || getSettings().flow2apiImageModel, 'image').supportsRef
     : maxRefs(getImageModel(project.imageModel)) > 0
+  const clips = clipsOf(projectId, episodeId)
   if (canRef) {
-    const needed = new Set(clipsOf(projectId).flatMap((c) => c.characterIds))
+    const needed = new Set(clips.flatMap((c) => c.characterIds))
     for (const c of charactersOf(projectId)) {
       if (needed.has(c.id) && !c.sheetAssetId) jobs.push(generateCharacterSheet(c.id))
     }
   }
-  for (const clip of clipsOf(projectId)) {
+  for (const clip of clips) {
     if (!clip.imageAssetId) jobs.push(generateClipImage(clip.id))
   }
   return jobs
@@ -666,14 +667,14 @@ export function generateClipsVideo(clipIds: string[]): Job[] {
 }
 
 /** Turns every clip that has an image but no AI video yet into a video. */
-export function generateMissingVideos(projectId: string): Job[] {
-  const clips = clipsOf(projectId)
+export function generateMissingVideos(projectId: string, episodeId?: string): Job[] {
+  const clips = clipsOf(projectId, episodeId)
   if (clips.some((c) => !c.imageAssetId)) throw new Error('Buat gambar semua klip dulu sebelum menjadikannya video.')
   return clips.filter((c) => !c.videoAssetId).map((c) => generateClipVideo(c.id))
 }
 
-export function generateMissingTts(projectId: string): Job[] {
-  return clipsOf(projectId)
+export function generateMissingTts(projectId: string, episodeId?: string): Job[] {
+  return clipsOf(projectId, episodeId)
     .filter((c) => !c.audioAssetId && c.narration.trim())
     .map((c) => generateClipTts(c.id))
 }

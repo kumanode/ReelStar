@@ -6,17 +6,21 @@ import type {
   AssetKind,
   AssetMeta,
   Character,
+  CharacterDerivative,
   Clip,
   EditorSettings,
+  Episode,
   FilterId,
   Job,
   JobKind,
   JobStatus,
+  Location,
   NewProjectInput,
   Project,
   ProjectBundle,
   ProjectSnapshot,
   ProjectSummary,
+  Prop,
   StoryPlan
 } from '@shared/types'
 import { visualSourceOf } from '@shared/script'
@@ -41,6 +45,9 @@ const toProject = (r: Row): Project => ({
   id: r.id,
   title: r.title,
   synopsis: r.synopsis,
+  sourceText: r.source_text ?? '',
+  sourceKind: r.source_kind ?? 'novel',
+  dialogAudio: r.dialog_audio ?? 'video',
   storyPlan: r.story_plan_json ? JSON.parse(r.story_plan_json) : null,
   durationSec: r.duration_sec,
   language: r.language,
@@ -59,6 +66,26 @@ const toProject = (r: Row): Project => ({
   updatedAt: r.updated_at
 })
 
+const toEpisode = (r: Row): Episode => ({
+  id: r.id,
+  projectId: r.project_id,
+  episodeNum: r.episode_num,
+  title: r.title,
+  summary: r.summary,
+  hook: r.hook,
+  storyBeats: JSON.parse(r.story_beats_json || '[]'),
+  cliffhanger: r.cliffhanger,
+  nextTeaser: r.next_teaser,
+  sourceText: r.source_text ?? '',
+  sourceKind: r.source_kind ?? null,
+  status: r.status,
+  durationSec: r.duration_sec,
+  sort: r.sort,
+  editor: r.editor_json ? JSON.parse(r.editor_json) : null,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at
+})
+
 const toCharacter = (r: Row): Character => ({
   id: r.id,
   projectId: r.project_id,
@@ -67,12 +94,45 @@ const toCharacter = (r: Row): Character => ({
   sheetAssetId: r.sheet_asset_id,
   sort: r.sort,
   ttsVoice: r.tts_voice ?? null,
-  ttsProvider: r.tts_provider ?? null
+  ttsProvider: r.tts_provider ?? null,
+  voiceStyle: r.voice_style ?? '',
+  aliases: JSON.parse(r.aliases_json || '[]')
+})
+
+const toCharacterDerivative = (r: Row): CharacterDerivative => ({
+  id: r.id,
+  projectId: r.project_id,
+  characterId: r.character_id,
+  name: r.name,
+  promptChange: r.prompt_change,
+  sheetAssetId: r.sheet_asset_id ?? null,
+  sort: r.sort
+})
+
+const toLocation = (r: Row): Location => ({
+  id: r.id,
+  projectId: r.project_id,
+  name: r.name,
+  description: r.description,
+  aliases: JSON.parse(r.aliases_json || '[]'),
+  sheetAssetId: r.sheet_asset_id ?? null,
+  sort: r.sort
+})
+
+const toProp = (r: Row): Prop => ({
+  id: r.id,
+  projectId: r.project_id,
+  name: r.name,
+  description: r.description,
+  aliases: JSON.parse(r.aliases_json || '[]'),
+  sheetAssetId: r.sheet_asset_id ?? null,
+  sort: r.sort
 })
 
 const toClip = (r: Row): Clip => ({
   id: r.id,
   projectId: r.project_id,
+  episodeId: r.episode_id,
   sort: r.sort,
   title: r.title,
   story: r.story ?? '',
@@ -98,7 +158,13 @@ const toClip = (r: Row): Clip => ({
   filter: r.filter || 'normal',
   imageAssetId: r.image_asset_id,
   videoAssetId: r.video_asset_id,
-  audioAssetId: r.audio_asset_id
+  audioAssetId: r.audio_asset_id,
+  emotion: r.emotion ?? '',
+  costumeIds: JSON.parse(r.costume_ids || '{}'),
+  locationId: r.location_id ?? null,
+  propIds: JSON.parse(r.prop_ids || '[]'),
+  framing: r.framing ?? '',
+  sourceExcerpt: r.source_excerpt ?? ''
 })
 
 export const toAsset = (r: Row): Asset => ({
@@ -106,6 +172,10 @@ export const toAsset = (r: Row): Asset => ({
   projectId: r.project_id,
   clipId: r.clip_id,
   characterId: r.character_id,
+  derivativeId: r.derivative_id ?? null,
+  locationId: r.location_id ?? null,
+  propId: r.prop_id ?? null,
+  episodeId: r.episode_id ?? null,
   kind: r.kind,
   provider: r.provider,
   model: r.model,
@@ -124,6 +194,7 @@ export const toAsset = (r: Row): Asset => ({
 export const toJob = (r: Row): Job => ({
   id: r.id,
   projectId: r.project_id,
+  episodeId: r.episode_id ?? null,
   clipId: r.clip_id,
   characterId: r.character_id,
   kind: r.kind,
@@ -136,6 +207,98 @@ export const toJob = (r: Row): Job => ({
   createdAt: r.created_at,
   updatedAt: r.updated_at
 })
+
+// ---------- episodes ----------
+
+export function listEpisodes(projectId: string): Episode[] {
+  return (getDb().prepare('SELECT * FROM episodes WHERE project_id = ? ORDER BY sort ASC').all(projectId) as Row[]).map(toEpisode)
+}
+
+export function getEpisode(id: string): Episode {
+  const r = getDb().prepare('SELECT * FROM episodes WHERE id = ?').get(id) as Row | undefined
+  if (!r) throw new Error('Episode tidak ditemukan')
+  return toEpisode(r)
+}
+
+export function createEpisode(projectId: string, input?: Partial<Episode>): Episode {
+  const db = getDb()
+  const now = Date.now()
+  const id = randomUUID()
+  const nextNum = (db.prepare('SELECT COALESCE(MAX(episode_num), 0) + 1 AS n FROM episodes WHERE project_id = ?').get(projectId) as Row).n as number
+  const nextSort = (db.prepare('SELECT COALESCE(MAX(sort), -1) + 1 AS s FROM episodes WHERE project_id = ?').get(projectId) as Row).s as number
+  const title = input?.title?.trim() || `Episode ${nextNum}`
+  db.prepare(
+    `INSERT INTO episodes (id, project_id, episode_num, title, summary, hook, story_beats_json, cliffhanger, next_teaser,
+       source_text, source_kind, script_draft_json, status, duration_sec, sort, editor_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    projectId,
+    nextNum,
+    title,
+    input?.summary ?? '',
+    input?.hook ?? '',
+    JSON.stringify(input?.storyBeats ?? []),
+    input?.cliffhanger ?? '',
+    input?.nextTeaser ?? '',
+    input?.sourceText ?? '',
+    input?.sourceKind ?? null,
+    null,
+    input?.status ?? 'draft',
+    input?.durationSec ?? 75,
+    nextSort,
+    input?.editor ? JSON.stringify(input.editor) : null,
+    now,
+    now
+  )
+  return getEpisode(id)
+}
+
+export function updateEpisode(id: string, patch: Partial<Episode>): Episode {
+  const entries: [string, unknown][] = []
+  if (patch.title !== undefined) entries.push(['title', patch.title])
+  if (patch.summary !== undefined) entries.push(['summary', patch.summary])
+  if (patch.hook !== undefined) entries.push(['hook', patch.hook])
+  if (patch.storyBeats !== undefined) entries.push(['story_beats_json', JSON.stringify(patch.storyBeats)])
+  if (patch.cliffhanger !== undefined) entries.push(['cliffhanger', patch.cliffhanger])
+  if (patch.nextTeaser !== undefined) entries.push(['next_teaser', patch.nextTeaser])
+  if (patch.sourceText !== undefined) entries.push(['source_text', patch.sourceText])
+  if (patch.sourceKind !== undefined) entries.push(['source_kind', patch.sourceKind])
+  if (patch.status !== undefined) entries.push(['status', patch.status])
+  if (patch.durationSec !== undefined) entries.push(['duration_sec', patch.durationSec])
+  if (patch.sort !== undefined) entries.push(['sort', patch.sort])
+  if (patch.editor !== undefined) entries.push(['editor_json', patch.editor ? JSON.stringify(patch.editor) : null])
+  if (!entries.length) return getEpisode(id)
+  entries.push(['updated_at', Date.now()])
+  const sets = entries.map(([col]) => `${col} = ?`).join(', ')
+  getDb().prepare(`UPDATE episodes SET ${sets} WHERE id = ?`).run(...entries.map(([, val]) => val), id)
+  return getEpisode(id)
+}
+
+export function removeEpisode(id: string): void {
+  getDb().prepare('DELETE FROM episodes WHERE id = ?').run(id)
+}
+
+export function reorderEpisodes(projectId: string, episodeIds: string[]): Episode[] {
+  const db = getDb()
+  db.transaction(() => {
+    const stmt = db.prepare('UPDATE episodes SET sort = ?, updated_at = ? WHERE id = ? AND project_id = ?')
+    const now = Date.now()
+    episodeIds.forEach((id, sort) => stmt.run(sort, now, id, projectId))
+  })()
+  return listEpisodes(projectId)
+}
+
+function getStoredSetting(key: string): string | null {
+  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined
+  return row ? JSON.parse(row.value) : null
+}
+
+function setStoredSetting(key: string, value: string): void {
+  getDb().prepare(
+    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).run(key, JSON.stringify(value))
+}
 
 // ---------- projects ----------
 
@@ -167,13 +330,13 @@ export function createProject(input: NewProjectInput): Project {
   const now = Date.now()
   const id = randomUUID()
   const tts = input.ttsProvider ?? s.defaultTtsProvider
-  getDb()
-    .prepare(
+  const db = getDb()
+  db.transaction(() => {
+    db.prepare(
       `INSERT INTO projects (id, title, synopsis, duration_sec, language, aspect_ratio, style_id, tts_provider, tts_voice,
-        image_model, video_model, status, step, editor_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 1, ?, ?, ?)`
-    )
-    .run(
+        image_model, video_model, status, step, editor_json, source_text, source_kind, dialog_audio, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 1, ?, '', 'novel', 'video', ?, ?)`
+    ).run(
       id,
       'Proyek tanpa judul',
       input.synopsis ?? '',
@@ -189,6 +352,13 @@ export function createProject(input: NewProjectInput): Project {
       now,
       now
     )
+    const epId = randomUUID()
+    db.prepare(
+      `INSERT INTO episodes (id, project_id, episode_num, title, summary, status, duration_sec, sort, editor_json, created_at, updated_at)
+       VALUES (?, ?, 1, 'Episode 1', '', 'draft', ?, 0, NULL, ?, ?)`
+    ).run(epId, id, input.durationSec ?? 75, now, now)
+    setStoredSetting(`last_episode:${id}`, epId)
+  })()
   projectDir(id)
   return getProject(id)
 }
@@ -199,12 +369,35 @@ export function getProject(id: string): Project {
   return toProject(r)
 }
 
-export function getBundle(id: string): ProjectBundle {
+export function getBundle(id: string, episodeId?: string): ProjectBundle {
   const db = getDb()
+  const project = getProject(id)
+  const episodes = listEpisodes(id)
+  let activeEpisode: Episode | undefined
+  if (episodeId) {
+    activeEpisode = episodes.find((e) => e.id === episodeId)
+  }
+  if (!activeEpisode) {
+    const lastId = getStoredSetting(`last_episode:${id}`)
+    if (lastId) activeEpisode = episodes.find((e) => e.id === lastId)
+  }
+  if (!activeEpisode) {
+    activeEpisode = episodes[0]
+  }
+  if (!activeEpisode) {
+    activeEpisode = createEpisode(id, { title: 'Episode 1' })
+  }
+  setStoredSetting(`last_episode:${id}`, activeEpisode.id)
+
   return {
-    project: getProject(id),
-    characters: (db.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toCharacter),
-    clips: (db.prepare('SELECT * FROM clips WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toClip),
+    project,
+    episode: activeEpisode,
+    episodes,
+    characters: charactersOf(id),
+    derivatives: (db.prepare('SELECT * FROM character_derivatives WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toCharacterDerivative),
+    locations: (db.prepare('SELECT * FROM locations WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toLocation),
+    props: (db.prepare('SELECT * FROM props WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toProp),
+    clips: clipsOf(id, activeEpisode.id),
     assets: (db.prepare('SELECT * FROM assets WHERE project_id = ? ORDER BY created_at').all(id) as Row[]).map(toAsset),
     jobs: (
       db
@@ -235,49 +428,87 @@ export function saveSnapshot(snap: ProjectSnapshot): number {
   const db = getDb()
   const now = Date.now()
   const p = snap.project
+  const epId = snap.episodeId
   db.transaction(() => {
     db.prepare(
       `UPDATE projects SET title = @title, synopsis = @synopsis, story_plan_json = @storyPlan, duration_sec = @durationSec, language = @language,
         aspect_ratio = @aspectRatio, style_id = @styleId, tts_provider = @ttsProvider, tts_voice = @ttsVoice,
-        image_model = @imageModel, video_model = @videoModel, video_resolution = @videoResolution, status = @status, step = @step, editor_json = @editor, updated_at = @now
+        image_model = @imageModel, video_model = @videoModel, video_resolution = @videoResolution, status = @status, step = @step, editor_json = @editor,
+        source_text = @sourceText, source_kind = @sourceKind, dialog_audio = @dialogAudio, updated_at = @now
        WHERE id = @id`
-    ).run({ ...p, storyPlan: p.storyPlan ? JSON.stringify(p.storyPlan) : null, editor: JSON.stringify(p.editor), now })
+    ).run({
+      ...p,
+      storyPlan: p.storyPlan ? JSON.stringify(p.storyPlan) : null,
+      editor: JSON.stringify(p.editor),
+      sourceText: p.sourceText ?? '',
+      sourceKind: p.sourceKind ?? 'novel',
+      dialogAudio: p.dialogAudio ?? 'video',
+      now
+    })
+
+    if (epId) {
+      const epEditor = snap.episodeEditor ?? p.editor
+      db.prepare('UPDATE episodes SET editor_json = ?, updated_at = ? WHERE id = ? AND project_id = ?')
+        .run(JSON.stringify(epEditor), now, epId, p.id)
+    }
 
     const charIds = snap.characters.map((c) => c.id)
     db.prepare(
       `DELETE FROM characters WHERE project_id = ? AND id NOT IN (${charIds.map(() => '?').join(',') || "''"})`
     ).run(p.id, ...charIds)
     const upChar = db.prepare(
-      `INSERT INTO characters (id, project_id, name, description, sort, tts_voice, tts_provider) VALUES (@id, @projectId, @name, @description, @sort, @ttsVoice, @ttsProvider)
-       ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, sort = excluded.sort, tts_voice = excluded.tts_voice, tts_provider = excluded.tts_provider`
+      `INSERT INTO characters (id, project_id, name, description, sort, tts_voice, tts_provider, voice_style, aliases_json)
+       VALUES (@id, @projectId, @name, @description, @sort, @ttsVoice, @ttsProvider, @voiceStyle, @aliasesJson)
+       ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, sort = excluded.sort,
+         tts_voice = excluded.tts_voice, tts_provider = excluded.tts_provider, voice_style = excluded.voice_style, aliases_json = excluded.aliases_json`
     )
-    for (const c of snap.characters) upChar.run({ ...c, projectId: p.id, ttsVoice: c.ttsVoice ?? null, ttsProvider: c.ttsProvider ?? null })
+    for (const c of snap.characters) {
+      upChar.run({
+        ...c,
+        projectId: p.id,
+        ttsVoice: c.ttsVoice ?? null,
+        ttsProvider: c.ttsProvider ?? null,
+        voiceStyle: c.voiceStyle ?? '',
+        aliasesJson: JSON.stringify(c.aliases ?? [])
+      })
+    }
 
     const clipIds = snap.clips.map((c) => c.id)
-    db.prepare(`DELETE FROM clips WHERE project_id = ? AND id NOT IN (${clipIds.map(() => '?').join(',') || "''"})`).run(
-      p.id,
-      ...clipIds
-    )
+    if (epId) {
+      db.prepare(`DELETE FROM clips WHERE project_id = ? AND episode_id = ? AND id NOT IN (${clipIds.map(() => '?').join(',') || "''"})`).run(
+        p.id,
+        epId,
+        ...clipIds
+      )
+    } else {
+      db.prepare(`DELETE FROM clips WHERE project_id = ? AND id NOT IN (${clipIds.map(() => '?').join(',') || "''"})`).run(
+        p.id,
+        ...clipIds
+      )
+    }
     const upClip = db.prepare(
-      `INSERT INTO clips (id, project_id, sort, title, story, visual_prompt, narration, duration_ms, character_ids, motion_type,
+      `INSERT INTO clips (id, project_id, episode_id, sort, title, story, visual_prompt, narration, duration_ms, character_ids, motion_type,
          camera_preset, motion_strength, video_prompt, transition, video_camera, video_strength, transition_ms, voice_gain_db,
-         media_in_ms, voice_in_ms, voice_out_ms, voice_start_ms, filter, speaker_id)
-       VALUES (@id, @projectId, @sort, @title, @story, @visualPrompt, @narration, @durationMs, @characterIds, @motionType,
+         media_in_ms, voice_in_ms, voice_out_ms, voice_start_ms, filter, speaker_id, emotion, costume_ids, location_id, prop_ids, framing, source_excerpt)
+       VALUES (@id, @projectId, @episodeId, @sort, @title, @story, @visualPrompt, @narration, @durationMs, @characterIds, @motionType,
          @cameraPreset, @motionStrength, @videoPrompt, @transition, @videoCamera, @videoStrength, @transitionMs, @voiceGainDb,
-         @mediaInMs, @voiceInMs, @voiceOutMs, @voiceStartMs, @filter, @speakerId)
-       ON CONFLICT(id) DO UPDATE SET sort = excluded.sort, title = excluded.title, story = excluded.story, visual_prompt = excluded.visual_prompt,
+         @mediaInMs, @voiceInMs, @voiceOutMs, @voiceStartMs, @filter, @speakerId, @emotion, @costumeIds, @locationId, @propIds, @framing, @sourceExcerpt)
+       ON CONFLICT(id) DO UPDATE SET episode_id = excluded.episode_id, sort = excluded.sort, title = excluded.title, story = excluded.story, visual_prompt = excluded.visual_prompt,
          narration = excluded.narration, duration_ms = excluded.duration_ms, character_ids = excluded.character_ids,
          motion_type = excluded.motion_type, camera_preset = excluded.camera_preset, motion_strength = excluded.motion_strength,
          video_prompt = excluded.video_prompt, transition = excluded.transition, video_camera = excluded.video_camera,
          video_strength = excluded.video_strength, transition_ms = excluded.transition_ms, voice_gain_db = excluded.voice_gain_db,
          media_in_ms = excluded.media_in_ms, voice_in_ms = excluded.voice_in_ms, voice_out_ms = excluded.voice_out_ms,
-         voice_start_ms = excluded.voice_start_ms, filter = excluded.filter, speaker_id = excluded.speaker_id`
+         voice_start_ms = excluded.voice_start_ms, filter = excluded.filter, speaker_id = excluded.speaker_id,
+         emotion = excluded.emotion, costume_ids = excluded.costume_ids, location_id = excluded.location_id, prop_ids = excluded.prop_ids,
+         framing = excluded.framing, source_excerpt = excluded.source_excerpt`
     )
     for (const c of snap.clips)
       upClip.run({
         ...c,
         projectId: p.id,
-        characterIds: JSON.stringify(c.characterIds),
+        episodeId: c.episodeId || epId,
+        characterIds: JSON.stringify(c.characterIds || []),
         videoCamera: c.videoCamera ?? 'static',
         videoStrength: c.videoStrength ?? 'halus',
         transitionMs: c.transitionMs ?? null,
@@ -286,7 +517,14 @@ export function saveSnapshot(snap: ProjectSnapshot): number {
         voiceInMs: Math.round(c.voiceInMs ?? 0),
         voiceOutMs: c.voiceOutMs == null ? null : Math.round(c.voiceOutMs),
         voiceStartMs: Math.round(c.voiceStartMs ?? 0),
-        filter: c.filter ?? 'normal', speakerId: c.speakerId ?? null
+        filter: c.filter ?? 'normal',
+        speakerId: c.speakerId ?? null,
+        emotion: c.emotion ?? '',
+        costumeIds: JSON.stringify(c.costumeIds || {}),
+        locationId: c.locationId ?? null,
+        propIds: JSON.stringify(c.propIds || []),
+        framing: c.framing ?? '',
+        sourceExcerpt: c.sourceExcerpt ?? ''
       })
   })()
   return now
@@ -300,33 +538,161 @@ export function removeProject(id: string): void {
 
 export function duplicateProject(id: string): ProjectSummary {
   const db = getDb()
-  const src = getBundle(id)
+  const p = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Row | undefined
+  if (!p) throw new Error('Proyek tidak ditemukan')
   const newId = randomUUID()
   const now = Date.now()
   const idMap = new Map<string, string>()
-  const mapId = (old: string | null): string | null => {
+  const mapId = (old: string | null | undefined): string | null => {
     if (!old) return null
     if (!idMap.has(old)) idMap.set(old, randomUUID())
     return idMap.get(old)!
   }
+
+  const allEpisodes = listEpisodes(id)
+  const allCharacters = charactersOf(id)
+  const allClips = (db.prepare('SELECT * FROM clips WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toClip)
+  const allAssets = (db.prepare('SELECT * FROM assets WHERE project_id = ? ORDER BY created_at').all(id) as Row[]).map(toAsset)
+  const allDerivatives = (db.prepare('SELECT * FROM character_derivatives WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toCharacterDerivative)
+  const allLocations = (db.prepare('SELECT * FROM locations WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toLocation)
+  const allProps = (db.prepare('SELECT * FROM props WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toProp)
+
+  const copyEditor = (editor: EditorSettings | null): EditorSettings | null => {
+    if (!editor) return null
+    return {
+      ...editor,
+      musicAssetId: mapId(editor.musicAssetId),
+      overlays: (editor.overlays || []).map((overlay) => overlay.kind === 'image'
+        ? { ...overlay, assetId: mapId(overlay.assetId)! }
+        : overlay),
+      sfx: editor.sfx?.map((sfx) => ({ ...sfx, assetId: mapId(sfx.assetId)! })),
+      clipFraming: editor.clipFraming
+        ? Object.fromEntries(Object.entries(editor.clipFraming).map(([clipId, framing]) => [mapId(clipId)!, framing]))
+        : undefined
+    }
+  }
+
   db.transaction(() => {
-    const p = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Row
+    const projectEditor = copyEditor({ ...DEFAULT_EDITOR, ...JSON.parse(p.editor_json || '{}') })
     db.prepare(
       `INSERT INTO projects (id, title, synopsis, story_plan_json, duration_sec, language, aspect_ratio, style_id, tts_provider, tts_voice,
-         image_model, video_model, video_resolution, status, step, cover_asset_id, editor_json, created_at, updated_at)
+         image_model, video_model, video_resolution, status, step, cover_asset_id, editor_json, source_text, source_kind, dialog_audio, created_at, updated_at)
        SELECT @newId, @title, synopsis, story_plan_json, duration_sec, language, aspect_ratio, style_id, tts_provider, tts_voice,
-         image_model, video_model, video_resolution, status, step, @cover, editor_json, @now, @now FROM projects WHERE id = @id`
-    ).run({ newId, id, title: `${p.title} (salinan)`, cover: mapId(p.cover_asset_id), now })
-    for (const a of src.assets) {
+         image_model, video_model, video_resolution, status, step, @cover, @editorJson, source_text, source_kind, dialog_audio, @now, @now
+       FROM projects WHERE id = @id`
+    ).run({
+      newId,
+      id,
+      title: `${p.title} (salinan)`,
+      cover: mapId(p.cover_asset_id),
+      editorJson: JSON.stringify(projectEditor),
+      now
+    })
+
+    for (const ep of allEpisodes) {
       db.prepare(
-        `INSERT INTO assets (id, project_id, clip_id, character_id, kind, provider, model, prompt, remote_id, remote_url, local_path,
+        `INSERT INTO episodes (id, project_id, episode_num, title, summary, hook, story_beats_json, cliffhanger, next_teaser,
+           source_text, source_kind, script_draft_json, status, duration_sec, sort, editor_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        mapId(ep.id),
+        newId,
+        ep.episodeNum,
+        ep.title,
+        ep.summary,
+        ep.hook,
+        JSON.stringify(ep.storyBeats || []),
+        ep.cliffhanger,
+        ep.nextTeaser,
+        ep.sourceText,
+        ep.sourceKind,
+        null,
+        ep.status,
+        ep.durationSec,
+        ep.sort,
+        ep.editor ? JSON.stringify(copyEditor(ep.editor)) : null,
+        now,
+        now
+      )
+    }
+
+    for (const c of allCharacters) {
+      db.prepare(
+        `INSERT INTO characters (id, project_id, name, description, sheet_asset_id, sort, tts_voice, tts_provider, voice_style, aliases_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        mapId(c.id),
+        newId,
+        c.name,
+        c.description,
+        mapId(c.sheetAssetId),
+        c.sort,
+        c.ttsVoice ?? null,
+        c.ttsProvider ?? null,
+        c.voiceStyle ?? '',
+        JSON.stringify(c.aliases || [])
+      )
+    }
+
+    for (const d of allDerivatives) {
+      db.prepare(
+        `INSERT INTO character_derivatives (id, project_id, character_id, name, prompt_change, sheet_asset_id, sort)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        mapId(d.id),
+        newId,
+        mapId(d.characterId),
+        d.name,
+        d.promptChange,
+        mapId(d.sheetAssetId),
+        d.sort
+      )
+    }
+
+    for (const l of allLocations) {
+      db.prepare(
+        `INSERT INTO locations (id, project_id, name, description, aliases_json, sheet_asset_id, sort)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        mapId(l.id),
+        newId,
+        l.name,
+        l.description,
+        JSON.stringify(l.aliases || []),
+        mapId(l.sheetAssetId),
+        l.sort
+      )
+    }
+
+    for (const pr of allProps) {
+      db.prepare(
+        `INSERT INTO props (id, project_id, name, description, aliases_json, sheet_asset_id, sort)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        mapId(pr.id),
+        newId,
+        pr.name,
+        pr.description,
+        JSON.stringify(pr.aliases || []),
+        mapId(pr.sheetAssetId),
+        pr.sort
+      )
+    }
+
+    for (const a of allAssets) {
+      db.prepare(
+        `INSERT INTO assets (id, project_id, clip_id, character_id, derivative_id, location_id, prop_id, episode_id, kind, provider, model, prompt, remote_id, remote_url, local_path,
            duration_ms, width, height, meta_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         mapId(a.id),
         newId,
         mapId(a.clipId),
         mapId(a.characterId),
+        mapId(a.derivativeId),
+        mapId(a.locationId),
+        mapId(a.propId),
+        mapId(a.episodeId),
         a.kind,
         a.provider,
         a.model,
@@ -341,27 +707,24 @@ export function duplicateProject(id: string): ProjectSummary {
         a.createdAt
       )
     }
-    for (const c of src.characters) {
-    db.prepare('INSERT INTO characters (id, project_id, name, description, sheet_asset_id, sort, tts_voice, tts_provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
-        mapId(c.id),
-        newId,
-        c.name,
-        c.description,
-        mapId(c.sheetAssetId),
-        c.sort,
-        c.ttsVoice ?? null,
-        c.ttsProvider ?? null
-      )
-    }
-    for (const c of src.clips) {
+
+    for (const c of allClips) {
+      const mappedCostumes: Record<string, string> = {}
+      for (const [charId, derivId] of Object.entries(c.costumeIds || {})) {
+        const mc = mapId(charId)
+        const md = mapId(derivId)
+        if (mc && md) mappedCostumes[mc] = md
+      }
       db.prepare(
-        `INSERT INTO clips (id, project_id, sort, title, story, visual_prompt, visual_source, narration, duration_ms, character_ids,
+        `INSERT INTO clips (id, project_id, episode_id, sort, title, story, visual_prompt, visual_source, narration, duration_ms, character_ids,
            motion_type, camera_preset, motion_strength, video_prompt, transition, image_asset_id, video_asset_id, audio_asset_id,
-           video_camera, video_strength, transition_ms, voice_gain_db, media_in_ms, voice_in_ms, voice_out_ms, voice_start_ms, filter, speaker_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           video_camera, video_strength, transition_ms, voice_gain_db, media_in_ms, voice_in_ms, voice_out_ms, voice_start_ms, filter, speaker_id,
+           emotion, costume_ids, location_id, prop_ids, framing, source_excerpt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         mapId(c.id),
         newId,
+        mapId(c.episodeId),
         c.sort,
         c.title,
         c.story,
@@ -387,26 +750,19 @@ export function duplicateProject(id: string): ProjectSummary {
         c.voiceOutMs,
         c.voiceStartMs,
         c.filter ?? 'normal',
-        mapId(c.speakerId)
+        mapId(c.speakerId),
+        c.emotion ?? '',
+        JSON.stringify(mappedCostumes),
+        mapId(c.locationId),
+        JSON.stringify((c.propIds || []).map((x) => mapId(x)).filter(Boolean)),
+        c.framing ?? '',
+        c.sourceExcerpt ?? ''
       )
     }
-    const editor = src.project.editor
-    const copiedEditor: EditorSettings = {
-      ...editor,
-      musicAssetId: mapId(editor.musicAssetId),
-      overlays: editor.overlays.map((overlay) => overlay.kind === 'image'
-        ? { ...overlay, assetId: mapId(overlay.assetId)! }
-        : overlay),
-      sfx: editor.sfx?.map((sfx) => ({ ...sfx, assetId: mapId(sfx.assetId)! })),
-      clipFraming: editor.clipFraming
-        ? Object.fromEntries(Object.entries(editor.clipFraming).map(([clipId, framing]) => [mapId(clipId)!, framing]))
-        : undefined
-    }
-    db.prepare('UPDATE projects SET editor_json = ? WHERE id = ?').run(JSON.stringify(copiedEditor), newId)
   })()
   const srcDir = join(projectsRoot(), id)
   if (existsSync(srcDir)) cpSync(srcDir, projectDir(newId), { recursive: true })
-  return listProjects().find((p) => p.id === newId)!
+  return listProjects().find((pr) => pr.id === newId)!
 }
 
 // ---------- story ----------
@@ -415,6 +771,7 @@ export type StoryClip = Omit<
   Clip,
   | 'id'
   | 'projectId'
+  | 'episodeId'
   | 'sort'
   | 'imageAssetId'
   | 'videoAssetId'
@@ -431,9 +788,21 @@ export type StoryClip = Omit<
   | 'voiceStartMs'
   | 'speakerId'
   | 'filter'
+  | 'emotion'
+  | 'costumeIds'
+  | 'locationId'
+  | 'propIds'
+  | 'framing'
+  | 'sourceExcerpt'
 > & {
   characterNames: string[]
   filter?: FilterId
+  emotion?: string
+  costumeIds?: Record<string, string>
+  locationId?: string | null
+  propIds?: string[]
+  framing?: string
+  sourceExcerpt?: string
 }
 
 /** A complete storyboard in one go (script and visuals); used by the development harness. */
@@ -441,33 +810,44 @@ export function replaceStory(
   projectId: string,
   title: string,
   characters: { name: string; description: string }[],
-  clips: StoryClip[]
+  clips: StoryClip[],
+  episodeId?: string
 ): void {
   const db = getDb()
+  const epId = episodeId || listEpisodes(projectId)[0]?.id
+  if (!epId) throw new Error('Episode tidak ditemukan')
   db.transaction(() => {
-    db.prepare('DELETE FROM clips WHERE project_id = ?').run(projectId)
-    db.prepare('DELETE FROM characters WHERE project_id = ?').run(projectId)
+    db.prepare('DELETE FROM clips WHERE project_id = ? AND episode_id = ?').run(projectId, epId)
+    const existingChars = charactersOf(projectId)
     const byName = new Map<string, string>()
-    characters.forEach((c, i) => {
-      const id = randomUUID()
-      byName.set(c.name.trim().toLowerCase(), id)
-      db.prepare('INSERT INTO characters (id, project_id, name, description, sort) VALUES (?, ?, ?, ?, ?)').run(
-        id,
-        projectId,
-        c.name,
-        c.description,
-        i
-      )
-    })
+    for (const c of existingChars) {
+      byName.set(c.name.trim().toLowerCase(), c.id)
+    }
+    let sort = existingChars.length
+    for (const c of characters) {
+      const key = c.name.trim().toLowerCase()
+      if (!byName.has(key)) {
+        const id = randomUUID()
+        byName.set(key, id)
+        db.prepare('INSERT INTO characters (id, project_id, name, description, sort) VALUES (?, ?, ?, ?, ?)').run(
+          id,
+          projectId,
+          c.name,
+          c.description,
+          sort++
+        )
+      }
+    }
     clips.forEach((c, i) => {
       const ids = c.characterNames.map((n) => byName.get(n.trim().toLowerCase())).filter((x): x is string => !!x)
       db.prepare(
-        `INSERT INTO clips (id, project_id, sort, title, story, visual_prompt, visual_source, narration, duration_ms, character_ids,
-           motion_type, camera_preset, motion_strength, video_prompt, transition)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO clips (id, project_id, episode_id, sort, title, story, visual_prompt, visual_source, narration, duration_ms, character_ids,
+           motion_type, camera_preset, motion_strength, video_prompt, transition, emotion, costume_ids, location_id, prop_ids, framing, source_excerpt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         randomUUID(),
         projectId,
+        epId,
         i,
         c.title,
         c.story,
@@ -480,9 +860,20 @@ export function replaceStory(
         c.cameraPreset,
         c.motionStrength,
         c.videoPrompt,
-        c.transition
+        c.transition,
+        c.emotion ?? '',
+        JSON.stringify(c.costumeIds ?? {}),
+        c.locationId ?? null,
+        JSON.stringify(c.propIds ?? []),
+        c.framing ?? '',
+        c.sourceExcerpt ?? ''
       )
     })
+    db.prepare("UPDATE episodes SET title = ?, status = 'storyboard', updated_at = ? WHERE id = ?").run(
+      title,
+      Date.now(),
+      epId
+    )
     db.prepare("UPDATE projects SET title = ?, status = 'storyboard', step = 3, updated_at = ? WHERE id = ?").run(
       title,
       Date.now(),
@@ -579,8 +970,10 @@ export function ensureSpeaker(projectId: string, name: string, gender: Gender): 
  * whose names come back, so their character sheets survive a rewrite. Speakers new to the project are
  * added with a voice that fits their gender.
  */
-export function replaceScript(projectId: string, title: string, scenes: ScriptScene[]): void {
+export function replaceScript(projectId: string, title: string, scenes: ScriptScene[], episodeId?: string): void {
   const db = getDb()
+  const epId = episodeId || listEpisodes(projectId)[0]?.id
+  if (!epId) throw new Error('Episode tidak ditemukan')
   db.transaction(() => {
     const existing = db.prepare('SELECT id, name FROM characters WHERE project_id = ?').all(projectId) as Row[]
     const byName = new Map<string, string>(existing.map((c) => [String(c.name).trim().toLowerCase(), c.id as string]))
@@ -595,16 +988,17 @@ export function replaceScript(projectId: string, title: string, scenes: ScriptSc
       byName.set(key, insertSpeaker(projectId, sp, gen, cast))
     }
 
-    db.prepare('DELETE FROM clips WHERE project_id = ?').run(projectId)
+    db.prepare('DELETE FROM clips WHERE project_id = ? AND episode_id = ?').run(projectId, epId)
     const insert = db.prepare(
-      `INSERT INTO clips (id, project_id, sort, title, story, narration, duration_ms, character_ids, speaker_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?)`
+      `INSERT INTO clips (id, project_id, episode_id, sort, title, story, narration, duration_ms, character_ids, speaker_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)`
     )
     scenes.forEach((c, i) => {
       const sp = (c.speaker || '').trim().toLowerCase()
       const speakerId = sp ? (byName.get(sp) ?? null) : null
-      insert.run(randomUUID(), projectId, i, c.title, c.story, c.narration, c.durationMs, speakerId)
+      insert.run(randomUUID(), projectId, epId, i, c.title, c.story, c.narration, c.durationMs, speakerId)
     })
+    db.prepare("UPDATE episodes SET title = ?, status = 'script', updated_at = ? WHERE id = ?").run(title, Date.now(), epId)
     db.prepare("UPDATE projects SET title = ?, status = 'script', step = 2, updated_at = ? WHERE id = ?").run(title, Date.now(), projectId)
   })()
 }
@@ -694,7 +1088,10 @@ export function charactersOf(projectId: string): Character[] {
   return (getDb().prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY sort').all(projectId) as Row[]).map(toCharacter)
 }
 
-export function clipsOf(projectId: string): Clip[] {
+export function clipsOf(projectId: string, episodeId?: string): Clip[] {
+  if (episodeId) {
+    return (getDb().prepare('SELECT * FROM clips WHERE project_id = ? AND episode_id = ? ORDER BY sort').all(projectId, episodeId) as Row[]).map(toClip)
+  }
   return (getDb().prepare('SELECT * FROM clips WHERE project_id = ? ORDER BY sort').all(projectId) as Row[]).map(toClip)
 }
 
@@ -711,7 +1108,13 @@ const CLIP_COLS: Partial<Record<keyof Clip, string>> = {
   voiceOutMs: 'voice_out_ms',
   voiceStartMs: 'voice_start_ms',
   filter: 'filter',
-  speakerId: 'speaker_id'
+  speakerId: 'speaker_id',
+  emotion: 'emotion',
+  costumeIds: 'costume_ids',
+  locationId: 'location_id',
+  propIds: 'prop_ids',
+  framing: 'framing',
+  sourceExcerpt: 'source_excerpt'
 }
 
 export function patchClip(id: string, patch: Partial<Clip>): void {
@@ -728,15 +1131,32 @@ export function insertClipAfter(afterId: string, c: Clip): void {
   const db = getDb()
   db.transaction(() => {
     const after = getClip(afterId)
-    db.prepare('UPDATE clips SET sort = sort + 1 WHERE project_id = ? AND sort > ?').run(after.projectId, after.sort)
+    db.prepare('UPDATE clips SET sort = sort + 1 WHERE project_id = ? AND episode_id = ? AND sort > ?')
+      .run(after.projectId, after.episodeId, after.sort)
     db.prepare(
-      `INSERT INTO clips (id, project_id, sort, title, story, visual_prompt, visual_source, narration, duration_ms, character_ids,
+      `INSERT INTO clips (id, project_id, episode_id, sort, title, story, visual_prompt, visual_source, narration, duration_ms, character_ids,
          motion_type, camera_preset, motion_strength, video_prompt, transition, image_asset_id, video_asset_id, audio_asset_id,
-         video_camera, video_strength, transition_ms, voice_gain_db, media_in_ms, voice_in_ms, voice_out_ms, voice_start_ms, filter, speaker_id)
-       VALUES (@id, @projectId, @sort, @title, @story, @visualPrompt, @visualSource, @narration, @durationMs, @characterIds,
+         video_camera, video_strength, transition_ms, voice_gain_db, media_in_ms, voice_in_ms, voice_out_ms, voice_start_ms, filter, speaker_id,
+         emotion, costume_ids, location_id, prop_ids, framing, source_excerpt)
+       VALUES (@id, @projectId, @episodeId, @sort, @title, @story, @visualPrompt, @visualSource, @narration, @durationMs, @characterIds,
          @motionType, @cameraPreset, @motionStrength, @videoPrompt, @transition, @imageAssetId, @videoAssetId, @audioAssetId,
-         @videoCamera, @videoStrength, @transitionMs, @voiceGainDb, @mediaInMs, @voiceInMs, @voiceOutMs, @voiceStartMs, @filter, @speakerId)`
-    ).run({ ...c, projectId: after.projectId, sort: after.sort + 1, characterIds: JSON.stringify(c.characterIds), filter: c.filter ?? 'normal', speakerId: c.speakerId ?? null })
+         @videoCamera, @videoStrength, @transitionMs, @voiceGainDb, @mediaInMs, @voiceInMs, @voiceOutMs, @voiceStartMs, @filter, @speakerId,
+         @emotion, @costumeIds, @locationId, @propIds, @framing, @sourceExcerpt)`
+    ).run({
+      ...c,
+      projectId: after.projectId,
+      episodeId: after.episodeId,
+      sort: after.sort + 1,
+      characterIds: JSON.stringify(c.characterIds || []),
+      filter: c.filter ?? 'normal',
+      speakerId: c.speakerId ?? null,
+      emotion: c.emotion ?? '',
+      costumeIds: JSON.stringify(c.costumeIds || {}),
+      locationId: c.locationId ?? null,
+      propIds: JSON.stringify(c.propIds || []),
+      framing: c.framing ?? '',
+      sourceExcerpt: c.sourceExcerpt ?? ''
+    })
   })()
 }
 
@@ -765,6 +1185,10 @@ export function insertAsset(a: {
   projectId: string
   clipId?: string | null
   characterId?: string | null
+  derivativeId?: string | null
+  locationId?: string | null
+  propId?: string | null
+  episodeId?: string | null
   kind: AssetKind
   provider?: string | null
   model?: string | null
@@ -780,15 +1204,19 @@ export function insertAsset(a: {
   const id = a.id ?? randomUUID()
   getDb()
     .prepare(
-      `INSERT INTO assets (id, project_id, clip_id, character_id, kind, provider, model, prompt, remote_id, remote_url, local_path,
+      `INSERT INTO assets (id, project_id, clip_id, character_id, derivative_id, location_id, prop_id, episode_id, kind, provider, model, prompt, remote_id, remote_url, local_path,
         duration_ms, width, height, meta_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
       a.projectId,
       a.clipId ?? null,
       a.characterId ?? null,
+      a.derivativeId ?? null,
+      a.locationId ?? null,
+      a.propId ?? null,
+      a.episodeId ?? null,
       a.kind,
       a.provider ?? null,
       a.model ?? null,
@@ -813,6 +1241,7 @@ export function updateAssetMeta(id: string, meta: AssetMeta): void {
 
 export function insertJob(j: {
   projectId: string
+  episodeId?: string | null
   clipId?: string | null
   characterId?: string | null
   kind: JobKind
@@ -821,12 +1250,21 @@ export function insertJob(j: {
 }): Job {
   const id = randomUUID()
   const now = Date.now()
+  let episodeId = j.episodeId ?? null
+  if (!episodeId && j.clipId) {
+    try {
+      const clip = getClip(j.clipId)
+      if (clip?.episodeId) episodeId = clip.episodeId
+    } catch {
+      // Clip might not exist yet in tests or non-standard flows
+    }
+  }
   getDb()
     .prepare(
-      `INSERT INTO jobs (id, project_id, clip_id, character_id, kind, provider, status, progress, payload_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)`
+      `INSERT INTO jobs (id, project_id, episode_id, clip_id, character_id, kind, provider, status, progress, payload_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)`
     )
-    .run(id, j.projectId, j.clipId ?? null, j.characterId ?? null, j.kind, j.provider, JSON.stringify(j.payload ?? {}), now, now)
+    .run(id, j.projectId, episodeId, j.clipId ?? null, j.characterId ?? null, j.kind, j.provider, JSON.stringify(j.payload ?? {}), now, now)
   return getJob(id)!
 }
 
@@ -863,9 +1301,16 @@ export function unfinishedJobs(): Row[] {
   return getDb().prepare("SELECT * FROM jobs WHERE status IN ('queued','running')").all() as Row[]
 }
 
-/** A queued or running project-wide job of this kind, such as a narration take. */
-export function activeProjectJob(projectId: string, kind: JobKind): Job | null {
-  const r = getDb()
+/** A queued or running job of this kind, such as a narration take. Scoped to episodeId when provided. */
+export function activeProjectJob(projectId: string, kind: JobKind, episodeId?: string | null): Job | null {
+  const db = getDb()
+  if (episodeId) {
+    const r = db
+      .prepare("SELECT * FROM jobs WHERE project_id = ? AND episode_id = ? AND kind = ? AND status IN ('queued','running') LIMIT 1")
+      .get(projectId, episodeId, kind) as Row | undefined
+    return r ? toJob(r) : null
+  }
+  const r = db
     .prepare("SELECT * FROM jobs WHERE project_id = ? AND kind = ? AND status IN ('queued','running') LIMIT 1")
     .get(projectId, kind) as Row | undefined
   return r ? toJob(r) : null

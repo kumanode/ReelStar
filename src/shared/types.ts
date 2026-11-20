@@ -1,4 +1,8 @@
 export type ProjectStatus = 'draft' | 'script' | 'storyboard' | 'editing' | 'exported'
+export type SourceKind = 'novel' | 'screenplay'
+export type DialogAudio = 'video' | 'tts'
+export type EpisodeStatus = 'draft' | 'planned' | 'script' | 'storyboard' | 'editing' | 'exported'
+export type ResultStatus = 'current' | 'stale' | 'missing' | 'blocked'
 export type AspectRatio = '16:9' | '9:16'
 export type VisualProvider = 'higgsfield' | 'flow2api'
 export type TtsProvider = 'gemini' | 'elevenlabs'
@@ -175,6 +179,9 @@ export interface Project {
   id: string
   title: string
   synopsis: string
+  sourceText: string
+  sourceKind: SourceKind
+  dialogAudio: DialogAudio
   storyPlan: StoryPlan | null
   durationSec: number
   language: string
@@ -193,6 +200,86 @@ export interface Project {
   editor: EditorSettings
   createdAt: number
   updatedAt: number
+}
+
+export interface Episode {
+  id: string
+  projectId: string
+  episodeNum: number
+  title: string
+  summary: string
+  hook: string
+  storyBeats: string[]
+  cliffhanger: string
+  nextTeaser: string
+  sourceText: string
+  sourceKind: SourceKind | null
+  status: EpisodeStatus
+  durationSec: number
+  sort: number
+  editor: EditorSettings | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface EpisodeScriptDraft {
+  shots: DraftShot[]
+  newAssets: NewAssetProposal[]
+  createdAt: number
+}
+
+export interface DraftShot {
+  title: string
+  sourceExcerpt: string
+  visualAction: string
+  characters: string[]
+  costumes: Record<string, string>
+  location: string | null
+  props: string[]
+  speaker: string | null
+  text: string
+  emotion: string
+  framing: string
+  durationSec: number
+}
+
+export interface NewAssetProposal {
+  kind: 'character' | 'derivative' | 'location' | 'prop'
+  name: string
+  description: string
+  action: 'create' | 'merge' | 'derivative' | 'ignore'
+  target?: string
+  reason: string
+}
+
+export interface CharacterDerivative {
+  id: string
+  projectId: string
+  characterId: string
+  name: string
+  promptChange: string
+  sheetAssetId: string | null
+  sort: number
+}
+
+export interface Location {
+  id: string
+  projectId: string
+  name: string
+  description: string
+  aliases: string[]
+  sheetAssetId: string | null
+  sort: number
+}
+
+export interface Prop {
+  id: string
+  projectId: string
+  name: string
+  description: string
+  aliases: string[]
+  sheetAssetId: string | null
+  sort: number
 }
 
 export interface StoryAct {
@@ -256,6 +343,8 @@ export interface Character {
   sort: number
   ttsVoice?: string | null
   ttsProvider?: TtsProvider | null
+  voiceStyle: string
+  aliases: string[]
 }
 
 /** A rewritten scene. speakerId null means the narrator voices it; newCharacter is a speaker the revision added. */
@@ -269,6 +358,7 @@ export interface SceneRevision {
 export interface Clip {
   id: string
   projectId: string
+  episodeId: string
   sort: number
   title: string
   /** What happens in the scene, in the script's language (the Naskah step). */
@@ -304,6 +394,12 @@ export interface Clip {
   imageAssetId: string | null
   videoAssetId: string | null
   audioAssetId: string | null
+  emotion: string
+  costumeIds: Record<string, string>
+  locationId: string | null
+  propIds: string[]
+  framing: string
+  sourceExcerpt: string
 }
 
 export type AssetKind = 'image' | 'video' | 'audio' | 'music' | 'sfx' | 'overlay' | 'export'
@@ -326,6 +422,10 @@ export interface Asset {
   projectId: string
   clipId: string | null
   characterId: string | null
+  derivativeId: string | null
+  locationId: string | null
+  propId: string | null
+  episodeId: string | null
   kind: AssetKind
   provider: string | null
   model: string | null
@@ -348,6 +448,7 @@ export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'canceled'
 export interface Job {
   id: string
   projectId: string
+  episodeId: string | null
   clipId: string | null
   characterId: string | null
   kind: JobKind
@@ -363,7 +464,12 @@ export interface Job {
 
 export interface ProjectBundle {
   project: Project
+  episode: Episode
+  episodes: Episode[]
   characters: Character[]
+  derivatives: CharacterDerivative[]
+  locations: Location[]
+  props: Prop[]
   clips: Clip[]
   assets: Asset[]
   jobs: Job[]
@@ -384,6 +490,8 @@ export interface ProjectSummary {
 /** What the renderer sends on save. Asset links are owned by the main process and never overwritten by a save. */
 export interface ProjectSnapshot {
   project: Omit<Project, 'createdAt' | 'updatedAt' | 'coverAssetId'>
+  episodeId: string
+  episodeEditor?: EditorSettings
   characters: Omit<Character, 'sheetAssetId'>[]
   clips: Omit<Clip, 'imageAssetId' | 'videoAssetId' | 'audioAssetId'>[]
 }
@@ -502,6 +610,7 @@ export interface ModelList {
 }
 
 export interface ExportOptions {
+  episodeId?: string
   fileName: string
   resolution: 720 | 1080 | 2160
   fps: 30 | 60

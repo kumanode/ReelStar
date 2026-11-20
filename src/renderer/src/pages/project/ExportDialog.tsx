@@ -38,7 +38,7 @@ function slug(s: string): string {
 }
 
 export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { project, clips, assets, jobs, flush } = useProject()
+  const { project, episode, episodes, clips, assets, jobs, flush } = useProject()
   const { toast } = useApp()
   const [opts, setOpts] = useState<ExportOptions | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
@@ -155,19 +155,23 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
     void window.api.exporter.nvencAvailable().then(setNvenc).catch(() => setNvenc(false))
     // A finished or failed export is not shown again; an export still running keeps its progress.
     setJobId((id) => (id && isRunning(useProject.getState().jobs[id]) ? id : null))
-    void window.api.exporter.defaultFolder().then((folder) =>
+    void window.api.exporter.defaultFolder().then((folder) => {
+      const defaultName = episodes && episodes.length > 1 && episode
+        ? `${slug(project.title)} - Ep ${episode.episodeNum}`
+        : slug(project.title)
       setOpts({
-        fileName: slug(project.title),
+        fileName: defaultName,
+        episodeId: episode?.id,
         resolution: 1080,
         fps: 30,
         encoder: 'cpu',
-        burnCaptions: project.editor.captionStyle !== 'none',
+        burnCaptions: (episode?.editor ?? project.editor).captionStyle !== 'none',
         writeSrt: false,
         normalizeAudio: true,
-        duckMusic: project.editor.duckMusic,
+        duckMusic: (episode?.editor ?? project.editor).duckMusic,
         folder
       })
-    )
+    })
   }, [open])
 
   if (!project || !opts) return null
@@ -190,7 +194,8 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const start = async (): Promise<void> => {
     try {
       await flush()
-      const j = await window.api.exporter.start(project.id, opts)
+      const exportOpts = { ...opts, episodeId: opts.episodeId ?? episode?.id }
+      const j = await window.api.exporter.start(project.id, exportOpts)
       useProject.getState().upsertJob(j)
       setJobId(j.id)
     } catch (e) {
@@ -220,7 +225,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
       open={open}
       onClose={onClose}
       title="Ekspor video & Kemasan"
-      subtitle={`${project.title} · ${mmss(totalMs)} · ${clips.length} klip · ${project.aspectRatio}`}
+      subtitle={`${project.title}${episodes && episodes.length > 1 && episode ? ` · Ep ${episode.episodeNum}` : ''} · ${mmss(totalMs)} · ${clips.length} klip · ${project.aspectRatio}`}
       width={680}
     >
       <div className="mb-3">

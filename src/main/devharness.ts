@@ -8,7 +8,7 @@ import { anchorPoint } from '@shared/overlays'
 import { startExport } from './exporter'
 import { assetAbsPath, binPath } from './paths'
 import { probeDurationMs } from './services/audio'
-import { createProject, getBundle, insertAsset, patchClip, replaceStory, saveSnapshot, touchProject } from './repo'
+import { createEpisode, createProject, getBundle, insertAsset, listEpisodes, patchClip, replaceStory, saveSnapshot, touchProject } from './repo'
 import { recordCheck, setSecret } from './secrets'
 import type { ApiProvider, ExportOptions } from '@shared/types'
 
@@ -46,7 +46,12 @@ async function addDemoSpeech(projectId: string): Promise<void> {
     patchClip(c.id, { audioAssetId: asset.id, durationMs: ms + 400 })
   }
   const fresh = getBundle(projectId)
-  saveSnapshot({ project: fresh.project, characters: fresh.characters, clips: fresh.clips.map((c, i) => ({ ...c, narration: lines[i % lines.length] })) })
+  saveSnapshot({
+    project: fresh.project,
+    episodeId: fresh.episode.id,
+    characters: fresh.characters,
+    clips: fresh.clips.map((c, i) => ({ ...c, narration: lines[i % lines.length] }))
+  })
 }
 
 /** A flat test logo and a two-line caption, to check overlay placement in the preview and in the export. */
@@ -81,6 +86,7 @@ function addDemoOverlays(projectId: string): void {
         ]
       }
     },
+    episodeId: b.episode.id,
     characters: b.characters,
     clips: b.clips
   })
@@ -159,10 +165,91 @@ function seedDemo(): string {
   const fresh = getBundle(p.id)
   saveSnapshot({
     project: { ...fresh.project, step: 4, status: 'editing', editor: { ...fresh.project.editor, musicAssetId: m.id } },
+    episodeId: fresh.episode.id,
     characters: fresh.characters,
     clips: fresh.clips
   })
   return p.id
+}
+
+/** Builds a project with 2 episodes, each with 3 clips, to test multi-episode isolation. */
+export function seedEpisodes(): { projectId: string; ep1Id: string; ep2Id: string } {
+  const p = createProject({ synopsis: 'Demo Multi-Episode Drama', durationSec: 60, styleId: 'stickman', language: 'id' })
+  const episodes = listEpisodes(p.id)
+  const ep1 = episodes[0]
+  const ep2 = createEpisode(p.id, { title: 'Episode 2: Pengkhianatan' })
+
+  replaceStory(
+    p.id,
+    'Episode 1: Awal Mula',
+    [{ name: 'Pendekar', description: 'hero with sword' }],
+    [
+      { title: 'Ep 1 - Adegan 1', story: 'Pertemuan di kedai', narration: 'Kisah dimulai di kedai tua.', visualPrompt: 'Kedai tua', durationMs: 4000, motionType: 'camera', cameraPreset: 'zoomin', motionStrength: 'sedang', videoPrompt: '', transition: 'fade', characterNames: ['Pendekar'] },
+      { title: 'Ep 1 - Adegan 2', story: 'Tantangan musuh', narration: 'Musuh datang menantang.', visualPrompt: 'Musuh di pintu', durationMs: 4000, motionType: 'camera', cameraPreset: 'panright', motionStrength: 'sedang', videoPrompt: '', transition: 'fade', characterNames: ['Pendekar'] },
+      { title: 'Ep 1 - Adegan 3', story: 'Pertarungan sengit', narration: 'Pedang beradu cepat.', visualPrompt: 'Pertarungan', durationMs: 4000, motionType: 'camera', cameraPreset: 'shake', motionStrength: 'sedang', videoPrompt: '', transition: 'fade', characterNames: ['Pendekar'] }
+    ],
+    ep1.id
+  )
+
+  replaceStory(
+    p.id,
+    'Episode 2: Pengkhianatan',
+    [{ name: 'Pendekar', description: 'hero with sword' }],
+    [
+      { title: 'Ep 2 - Adegan 1', story: 'Malam hening', narration: 'Malam itu terasa sunyi.', visualPrompt: 'Hutan malam', durationMs: 4000, motionType: 'camera', cameraPreset: 'kenburns', motionStrength: 'sedang', videoPrompt: '', transition: 'fade', characterNames: ['Pendekar'] },
+      { title: 'Ep 2 - Adegan 2', story: 'Jebakan rahasia', narration: 'Ternyata ada jebakan.', visualPrompt: 'Jebakan tali', durationMs: 4000, motionType: 'camera', cameraPreset: 'zoomin', motionStrength: 'sedang', videoPrompt: '', transition: 'fade', characterNames: ['Pendekar'] },
+      { title: 'Ep 2 - Adegan 3', story: 'Pelarian heroik', narration: 'Pendekar meloloskan diri.', visualPrompt: 'Melompati pagar', durationMs: 4000, motionType: 'camera', cameraPreset: 'panleft', motionStrength: 'sedang', videoPrompt: '', transition: 'fade', characterNames: ['Pendekar'] }
+    ],
+    ep2.id
+  )
+
+  return { projectId: p.id, ep1Id: ep1.id, ep2Id: ep2.id }
+}
+
+/** Verifies that editing, saving, or deleting clips in Episode 2 does not bleed into Episode 1. */
+export function checkIsolation(projectId: string): boolean {
+  const eps = listEpisodes(projectId)
+  if (eps.length < 2) throw new Error('checkIsolation butuh minimal 2 episode')
+  const [ep1, ep2] = eps
+
+  const b1 = getBundle(projectId, ep1.id)
+  const b2 = getBundle(projectId, ep2.id)
+
+  if (b1.clips.length !== 3 || b2.clips.length !== 3) {
+    throw new Error(`Jumlah klip tidak sesuai: Ep 1 punya ${b1.clips.length}, Ep 2 punya ${b2.clips.length}`)
+  }
+  if (!b1.clips.every((c) => c.episodeId === ep1.id)) {
+    throw new Error('Ada klip di bundle Episode 1 dengan episode_id yang salah')
+  }
+  if (!b2.clips.every((c) => c.episodeId === ep2.id)) {
+    throw new Error('Ada klip di bundle Episode 2 dengan episode_id yang salah')
+  }
+
+  // Mutate Episode 2: remove one clip and update another
+  const remainingEp2Clips = b2.clips.slice(0, 2).map((c, i) => ({ ...c, title: `Ep 2 Modif ${i + 1}` }))
+  saveSnapshot({
+    project: b2.project,
+    episodeId: ep2.id,
+    characters: b2.characters,
+    clips: remainingEp2Clips
+  })
+
+  // Verify Episode 1 is completely untouched
+  const b1After = getBundle(projectId, ep1.id)
+  if (b1After.clips.length !== 3) {
+    throw new Error(`Isolasi bocor! Klip Episode 1 berubah jadi ${b1After.clips.length} setelah simpan Episode 2`)
+  }
+  if (b1After.clips.some((c) => c.title.includes('Modif'))) {
+    throw new Error('Isolasi bocor! Perubahan klip Episode 2 tercampur ke Episode 1')
+  }
+
+  // Verify Episode 2 reflects its mutation
+  const b2After = getBundle(projectId, ep2.id)
+  if (b2After.clips.length !== 2) {
+    throw new Error(`Episode 2 gagal diperbarui: klip sekarang ${b2After.clips.length}`)
+  }
+
+  return true
 }
 
 /**
@@ -195,7 +282,7 @@ export function attachDevHarness(win: BrowserWindow): void {
   const planPath = process.env.STUDIO_CAPTURE_PLAN
   if (!planPath) return
   let plan: {
-    main?: 'seed' | 'export' | 'key' | 'overlays' | 'speech' | 'videos'
+    main?: 'seed' | 'seedEpisodes' | 'checkIsolation' | 'export' | 'key' | 'overlays' | 'speech' | 'videos'
     exportTo?: string
     encoder?: ExportOptions['encoder']
     /** For main "export": an existing project instead of the seeded demo. */
@@ -227,6 +314,8 @@ export function attachDevHarness(win: BrowserWindow): void {
     for (const step of plan) {
       try {
         if (step.main === 'seed') demoId = seedDemo()
+        if (step.main === 'seedEpisodes') demoId = seedEpisodes().projectId
+        if (step.main === 'checkIsolation' && (step.projectId ?? demoId)) checkIsolation((step.projectId ?? demoId)!)
         if (step.main === 'overlays' && demoId) addDemoOverlays(demoId)
         if (step.main === 'videos' && demoId) addDemoVideos(demoId)
         if (step.main === 'speech' && demoId) await addDemoSpeech(demoId)

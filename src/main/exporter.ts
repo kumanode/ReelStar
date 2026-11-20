@@ -34,7 +34,7 @@ import { emit } from './events'
 import { runJob, type TaskCtx } from './jobs'
 import { fontMeasure } from './fontMetrics'
 import { assetAbsPath, binPath, dataDir, fontsDir } from './paths'
-import { getBundle, insertJob, touchProject } from './repo'
+import { getBundle, insertJob, touchProject, updateEpisode } from './repo'
 
 function ffmpegPath(): string {
   if (!ffmpegStatic) throw new Error('FFmpeg tidak ditemukan di aplikasi')
@@ -687,11 +687,12 @@ async function renderSegment(
 
 async function renderProject(ctx: TaskCtx, projectId: string, opts: ExportOptions): Promise<string> {
   if (opts.encoder === 'nvenc' && !(await nvencAvailable())) throw new Error('Encoder NVIDIA NVENC tidak tersedia. Pilih encoder CPU atau perbarui driver NVIDIA.')
-  const bundle = getBundle(projectId)
+  const bundle = getBundle(projectId, opts.episodeId)
   if (!bundle.clips.length) throw new Error('Proyek belum punya klip')
   const size = outputSize(bundle.project.aspectRatio, opts.resolution)
   const tmp = join(dataDir(), 'tmp', `export-${ctx.jobId}`)
-  const cacheDir = join(dataDir(), 'tmp', 'export-cache', projectId)
+  const epSubdir = opts.episodeId || bundle.episode.id
+  const cacheDir = join(dataDir(), 'tmp', 'export-cache', projectId, epSubdir)
   mkdirSync(tmp, { recursive: true })
   mkdirSync(cacheDir, { recursive: true })
   try {
@@ -866,11 +867,12 @@ export function clearExportCache(projectId: string): void {
 }
 
 export function startExport(projectId: string, opts: ExportOptions): Job {
-  const job = insertJob({ projectId, kind: 'export', provider: 'ffmpeg', payload: { ...opts } })
+  const job = insertJob({ projectId, episodeId: opts.episodeId, kind: 'export', provider: 'ffmpeg', payload: { ...opts } })
   emit.job(job)
   return runJob(job, 'export', async (ctx) => {
     const out = await renderProject(ctx, projectId, opts)
     touchProject(projectId, { status: 'exported' })
+    if (opts.episodeId) updateEpisode(opts.episodeId, { status: 'exported' })
     return { message: out }
   })
 }

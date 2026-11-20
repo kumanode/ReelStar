@@ -123,7 +123,7 @@ export async function splitClip(clipId: string, atMs: number): Promise<ProjectBu
   patchClipText(clip.id, { narration: narrationA, visualSource: visualSourceOf(a), transition: 'cut' })
   patchClip(clip.id, { durationMs: at, ...voiceA })
   touchProject(clip.projectId)
-  return getBundle(clip.projectId)
+  return getBundle(clip.projectId, clip.episodeId)
 }
 
 /** Takes the voice off a clip (the audio stays in the clip's history and can be picked again). */

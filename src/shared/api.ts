@@ -7,6 +7,7 @@ import type {
   CharacterPatchEvent,
   ClipPatchEvent,
   CreditEstimate,
+  Episode,
   StoryProgressEvent,
   WhisperStatus,
   WordTiming,
@@ -39,11 +40,18 @@ export interface StudioApi {
   projects: {
     list(): Promise<ProjectSummary[]>
     create(input: NewProjectInput): Promise<ProjectBundle>
-    get(id: string): Promise<ProjectBundle>
+    get(id: string, episodeId?: string): Promise<ProjectBundle>
     save(snapshot: ProjectSnapshot): Promise<{ updatedAt: number }>
     remove(id: string): Promise<void>
     duplicate(id: string): Promise<ProjectSummary>
     setCover(projectId: string, clipId: string): Promise<{ coverAssetId: string }>
+  }
+  episodes: {
+    list(projectId: string): Promise<Episode[]>
+    create(projectId: string, input?: Partial<Episode>): Promise<Episode>
+    update(episodeId: string, patch: Partial<Episode>): Promise<Episode>
+    remove(episodeId: string): Promise<void>
+    reorder(projectId: string, episodeIds: string[]): Promise<Episode[]>
   }
   story: {
     /** Builds the complete editable chapter plan in one LLM request. */

@@ -6,6 +6,7 @@ import type {
   ApiProvider,
   AppSettings,
   AspectRatio,
+  Episode,
   ExportOptions,
   KeyTestResult,
   ModelSource,
@@ -38,6 +39,7 @@ import { assetAbsPath, sfxDir } from './paths'
 import { detachVoice, splitClip } from './editing'
 import { emit } from './events'
 import {
+  createEpisode,
   createProject,
   duplicateProject,
   getAsset,
@@ -45,12 +47,16 @@ import {
   getClip,
   getProject,
   insertAsset,
+  listEpisodes,
   listProjects,
   patchClip,
+  removeEpisode,
   removeProject,
+  reorderEpisodes,
   saveSnapshot,
   touchProject,
-  updateAssetMeta
+  updateAssetMeta,
+  updateEpisode
 } from './repo'
 import { BUILTIN_SFX } from '@shared/sfx'
 import type { Clip, StoryBrief, StoryStyleId } from '@shared/types'
@@ -92,7 +98,7 @@ function defaultExportFolder(): string {
 export function registerIpc(): void {
   handle('projects:list', () => listProjects())
   handle('projects:create', (input: NewProjectInput) => getBundle(createProject(input).id))
-  handle('projects:get', (id: string) => getBundle(id))
+  handle('projects:get', (id: string, episodeId?: string) => getBundle(id, episodeId))
   handle('projects:save', (snap: ProjectSnapshot) => ({ updatedAt: saveSnapshot(snap) }))
   handle('projects:remove', (id: string) => {
     const removed = removeProject(id)
@@ -107,15 +113,21 @@ export function registerIpc(): void {
     return { coverAssetId: clip.imageAssetId }
   })
 
+  handle('episodes:list', (projectId: string) => listEpisodes(projectId))
+  handle('episodes:create', (projectId: string, input?: Partial<Episode>) => createEpisode(projectId, input))
+  handle('episodes:update', (episodeId: string, patch: Partial<Episode>) => updateEpisode(episodeId, patch))
+  handle('episodes:remove', (episodeId: string) => removeEpisode(episodeId))
+  handle('episodes:reorder', (projectId: string, episodeIds: string[]) => reorderEpisodes(projectId, episodeIds))
+
   handle('story:brief', (projectId: string) => generateBrief(projectId))
   handle('story:hooks', (projectId: string, brief?: StoryBrief) => generateHooks(projectId, brief ?? undefined))
   handle('story:outline', (projectId: string, hook: string, brief?: StoryBrief) => generateOutline(projectId, String(hook ?? ''), brief ?? undefined))
   handle('story:chapterPlan', (projectId: string, style: StoryStyleId, customOpening?: string) => generateChapterPlan(projectId, style, String(customOpening ?? '')))
   handle('story:styleProfile', (projectId: string, name: string, examples: string) => createStyleProfile(projectId, String(name ?? ''), String(examples ?? '')))
-  handle('story:script', (projectId: string) => generateScript(projectId))
+  handle('story:script', (projectId: string, episodeId?: string) => generateScript(projectId, episodeId))
   handle('story:reviseScene', (projectId: string, clipId: string, instruction: string) => reviseScene(projectId, clipId, String(instruction ?? '')))
-  handle('story:musicPrompt', (projectId: string) => generateMusicPrompt(projectId))
-  handle('story:planSmartSfx', (projectId: string) => planSmartSfx(projectId))
+  handle('story:musicPrompt', (projectId: string, episodeId?: string) => generateMusicPrompt(projectId, episodeId))
+  handle('story:planSmartSfx', (projectId: string, episodeId?: string) => planSmartSfx(projectId, episodeId))
   handle('story:generateMusic', async (projectId: string, req: { prompt: string; durationMs: number }) => {
     getProject(projectId)
     const prompt = String(req?.prompt ?? '').trim()
@@ -138,11 +150,11 @@ export function registerIpc(): void {
     emit.asset(asset)
     return asset
   })
-  handle('story:youtubeMetadata', (projectId: string) => generateYoutubeMetadata(projectId))
-  handle('story:visuals', (projectId: string, mode: 'missing' | 'all') => generateVisuals(projectId, mode === 'all' ? 'all' : 'missing'))
+  handle('story:youtubeMetadata', (projectId: string, episodeId?: string) => generateYoutubeMetadata(projectId, episodeId))
+  handle('story:visuals', (projectId: string, mode: 'missing' | 'all', episodeId?: string) => generateVisuals(projectId, mode === 'all' ? 'all' : 'missing', episodeId))
 
   handle('generate:clipImage', (clipId: string) => generateClipImage(clipId))
-  handle('story:thumbnailConcept', (projectId: string, title: string) => generateThumbnailConcept(projectId, String(title ?? '')))
+  handle('story:thumbnailConcept', (projectId: string, title: string, episodeId?: string) => generateThumbnailConcept(projectId, String(title ?? ''), episodeId))
   handle('generate:thumbnail', (projectId: string, req: ThumbnailRequest) => {
     if (!req?.prompt?.trim()) throw new Error('Prompt thumbnail masih kosong')
     if (!req.title?.trim()) throw new Error('Pilih judul dulu sebelum membuat thumbnail')
@@ -158,13 +170,13 @@ export function registerIpc(): void {
   handle('generate:clipVideo', (clipId: string) => generateClipVideo(clipId))
   handle('generate:clipTts', (clipId: string) => generateClipTts(clipId))
   handle('generate:characterSheet', (characterId: string) => generateCharacterSheet(characterId))
-  handle('generate:missingImages', (projectId: string) => generateMissingImages(projectId))
-  handle('generate:missingVideos', (projectId: string) => generateMissingVideos(projectId))
+  handle('generate:missingImages', (projectId: string, episodeId?: string) => generateMissingImages(projectId, episodeId))
+  handle('generate:missingVideos', (projectId: string, episodeId?: string) => generateMissingVideos(projectId, episodeId))
   handle('generate:clipsVideo', (clipIds: string[]) => generateClipsVideo(clipIds))
   handle('generate:cancelProject', (projectId: string, kind?: string) => cancelProjectJobs(projectId, kind))
-  handle('generate:missingTts', (projectId: string) => generateMissingTts(projectId))
-  handle('generate:narration', (projectId: string, mode: 'missing' | 'all') => generateNarration(projectId, mode === 'all' ? 'all' : 'missing'))
-  handle('generate:syncCaptions', (projectId: string, mode?: 'stale' | 'all' | 'force') => syncCaptions(projectId, mode === 'force' ? 'force' : mode === 'all' ? 'all' : 'stale'))
+  handle('generate:missingTts', (projectId: string, episodeId?: string) => generateMissingTts(projectId, episodeId))
+  handle('generate:narration', (projectId: string, mode: 'missing' | 'all', episodeId?: string) => generateNarration(projectId, mode === 'all' ? 'all' : 'missing', episodeId))
+  handle('generate:syncCaptions', (projectId: string, mode?: 'stale' | 'all' | 'force', episodeId?: string) => syncCaptions(projectId, mode === 'force' ? 'force' : mode === 'all' ? 'all' : 'stale', episodeId))
 
   handle('whisper:status', () => whisperStatus())
   // The download runs in the background and reports through whisper events.

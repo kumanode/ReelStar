@@ -5,15 +5,15 @@ Rincian setiap tugas ada di [plan.md](plan.md); desain di
 
 ## Fase 1 — Fondasi episode (tanpa perubahan tampilan)
 
-- [ ] Tugas 1 — Migrasi database (episodes, kolom klip/karakter/aset/job, tabel varian/lokasi/prop, backfill Ep 1).
-- [ ] Tugas 2 — Tipe bersama (`Episode`, kolom baru, bundle dan snapshot per episode).
-- [ ] Tugas 3 — Repo: CRUD episode, `getBundle`/`clipsOf`/`saveSnapshot`/`replaceScript`/`duplicateProject` per episode.
-- [ ] Tugas 4 — Pemanggil di main process meneruskan `episodeId`; job menyimpan `episode_id`.
-- [ ] Tugas 5 — IPC `episodes:*` dan `projects:get` dengan `episodeId` (ipc, api, preload).
-- [ ] Tugas 6 — Store renderer per episode; UI lama membuka episode pertama/terakhir.
-- [ ] Tugas 7 — Ekspor per episode (nama file, cache, status `exported`).
-- [ ] Tugas 8 — Dev harness: `seedEpisodes`, `checkIsolation`, uji salinan database lama.
-- [ ] Checkpoint 1 — typecheck/build bersih, ekspor proyek lama identik, isolasi 2 episode terbukti, dokumen diperbarui.
+- [x] Tugas 1 — Migrasi database (episodes, kolom klip/karakter/aset/job, tabel varian/lokasi/prop, backfill Ep 1).
+- [x] Tugas 2 — Tipe bersama (`Episode`, kolom baru, bundle dan snapshot per episode).
+- [x] Tugas 3 — Repo: CRUD episode, `getBundle`/`clipsOf`/`saveSnapshot`/`replaceScript`/`duplicateProject` per episode.
+- [x] Tugas 4 — Pemanggil di main process meneruskan `episodeId`; job menyimpan `episode_id`.
+- [x] Tugas 5 — IPC `episodes:*` dan `projects:get` dengan `episodeId` (ipc, api, preload).
+- [x] Tugas 6 — Store renderer per episode; UI lama membuka episode pertama/terakhir.
+- [x] Tugas 7 — Ekspor per episode (nama file, cache, status `exported`).
+- [x] Tugas 8 — Dev harness: `seedEpisodes`, `checkIsolation`, uji salinan database lama.
+- [x] Checkpoint 1 — typecheck/build bersih, ekspor proyek lama identik, isolasi 2 episode terbukti, dokumen diperbarui.
 
 ## Fase 2 — Studio Hub & Lorebook
 

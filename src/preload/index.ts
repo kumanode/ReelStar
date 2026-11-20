@@ -24,6 +24,13 @@ const api: StudioApi = {
     duplicate: call('projects:duplicate'),
     setCover: call('projects:setCover')
   },
+  episodes: {
+    list: call('episodes:list'),
+    create: call('episodes:create'),
+    update: call('episodes:update'),
+    remove: call('episodes:remove'),
+    reorder: call('episodes:reorder')
+  },
   story: {
     chapterPlan: call('story:chapterPlan'),
     styleProfile: call('story:styleProfile'),
