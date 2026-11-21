@@ -49,7 +49,8 @@ import {
   saveScriptVersion,
   setPlanProgress,
   updateEpisode,
-  type SceneVisual
+  type SceneVisual,
+  fillEmptyFields
 } from './repo'
 import { generateJson } from './services/llm'
 import { emit } from './events'
@@ -1445,17 +1446,6 @@ export function cancelLorebookExtraction(projectId: string): void {
 
 const nameKey = (x: string): string => x.trim().toLowerCase()
 
-/** Fills the empty fields of `a` from `b`, recursing into nested profile objects. */
-function fillEmpty<T extends object>(a: T, b: T): T {
-  const out = { ...a } as Record<string, unknown>
-  for (const [k, v] of Object.entries(b)) {
-    const cur = out[k]
-    if (cur && typeof cur === 'object' && !Array.isArray(cur) && v && typeof v === 'object') out[k] = fillEmpty(cur as object, v as object)
-    else if (cur == null || cur === '') out[k] = v
-  }
-  return out as T
-}
-
 /**
  * Merges the candidates found in one source part into the running result. The same name or a shared alias is one
  * entry: aliases are joined and empty fields are filled from the newer find, so no duplicate reaches the review.
@@ -1471,7 +1461,7 @@ export function mergeLorebookCandidates(into: LorebookExtractionResult, add: Lor
         continue
       }
       const aliases = [...new Set([...(hit.aliases ?? []), item.name, ...(item.aliases ?? [])])].filter((a) => nameKey(a) !== nameKey(hit.name))
-      Object.assign(hit, fillEmpty(hit, item), { tempId: hit.tempId, name: hit.name, aliases })
+      Object.assign(hit, fillEmptyFields(hit, item), { tempId: hit.tempId, name: hit.name, aliases })
     }
   }
   mergeList(into.characters, add.characters)
@@ -1483,7 +1473,7 @@ export function mergeLorebookCandidates(into: LorebookExtractionResult, add: Lor
     // Variants follow their character's main name, so the review links them to one entry.
     const item = owner ? { ...d, characterName: owner.name } : d
     const same = into.derivatives.find((x) => nameKey(x.name) === nameKey(d.name) && ownerKeys.has(nameKey(x.characterName)))
-    if (same) Object.assign(same, fillEmpty(same, item), { tempId: same.tempId })
+    if (same) Object.assign(same, fillEmptyFields(same, item), { tempId: same.tempId })
     else into.derivatives.push(item)
   }
 }

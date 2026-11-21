@@ -353,14 +353,15 @@ karena mengubah bentuk `AppSettings` dan `ApiProvider` sekaligus.
 
 ## Checkpoint
 
-- [ ] Typecheck dan build bersih.
+- [x] Typecheck dan build bersih.
 - [ ] Dev harness dengan `STUDIO_USER_DATA` sementara: buka Pengaturan, ganti section, ganti penyedia, simpan
       kunci palsu, tes, hapus.
-- [ ] Salinan database lama: kunci dan pilihan provider terbaca setelah normalisasi; endpoint `custom` lama muncul
+- [x] Salinan database lama *(diuji dengan baris setting lama yang ditulis ulang di harness `checkSettings`, belum
+      dengan salinan `studio.db` asli)*: kunci dan pilihan provider terbaca setelah normalisasi; endpoint `custom` lama muncul
       sebagai penyedia custom dengan kunci yang sama.
-- [ ] Tambah penyedia custom LLM, jadikan aktif, restart aplikasi, dan kunci tetap ada.
-- [ ] Ganti model gambar aktif → gambar di dua proyek berbeda menjadi `stale`; kembalikan → `current` lagi.
-- [ ] Ganti penyedia TTS → tokoh dengan suara penyedia lama ditandai, narasi tetap bisa dibuat dengan suara bawaan.
+- [x] Tambah penyedia custom LLM, jadikan aktif, restart aplikasi, dan kunci tetap ada (`checkSettings` write → read).
+- [x] Ganti model gambar aktif → gambar di dua proyek berbeda menjadi `stale`; kembalikan → `current` lagi (`checkSettings`).
+- [x] *(Diperbaiki 2026-11-21: TTS memakai penyedia global lewat `withActiveTts`; diuji di `checkSettings`.)* Ganti penyedia TTS → tokoh dengan suara penyedia lama ditandai, narasi tetap bisa dibuat dengan suara bawaan.
 - [ ] Screenshot 1180×720 dan 1600×900, tema terang dan gelap, untuk: rail gambar & video, detail penyedia,
       formulir penyedia baru, Model aktif, ringkasan model di proyek, Umum, Whisper.
 - [ ] `docs/konvensi.md`, `docs/layanan-ai.md`, `docs/keputusan-teknis.md`, dan `AGENTS.md` diperbarui.

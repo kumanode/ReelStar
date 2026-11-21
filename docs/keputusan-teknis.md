@@ -309,3 +309,9 @@ Secara bawaan, generator gambar mengumpulkan hingga 4 lembar referensi otomatis 
   mengenai tar GNU dari Git yang tidak bisa menulis zip dan membaca `C:` sebagai host jarak jauh.
 - **Ekstraksi Lorebook:** membaca seluruh sumber per potongan (`planWindows`), menggabungkan kandidat berdasarkan
   nama dan alias, dan bisa dihentikan; hasil bagian yang sudah dibaca tetap bisa ditinjau.
+- **Penyedia TTS global:** narasi dan TTS per klip memakai penyedia dari Pengaturan › Model aktif lewat
+  `withActiveTts` (`shared/providers.ts`); `projects.tts_provider` hanya menandai penyedia milik suara narator.
+  Bila penyedia global berbeda, suara narator proyek dan suara tokoh dari penyedia lain dilewati dan suara bawaan
+  penyedia aktif dipakai (ElevenLabs tidak punya suara bawaan, jadi kreator diminta memilih suara).
+- **Preset ekspor:** hanya preset dengan rasio yang sama dengan proyek (plus Kustom) yang ditawarkan, karena
+  exporter selalu merender dalam rasio proyek; crop/pad ke rasio lain belum ada.

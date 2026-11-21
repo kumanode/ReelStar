@@ -214,7 +214,9 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const currentDurationSec = totalMs / 1000
   const activePreset = opts.presetId ? getExportPreset(opts.presetId) : undefined
   const presetWarning = activePreset ? validatePresetDuration(activePreset, currentDurationSec).warning : undefined
-  const aspectMismatch = !!(activePreset && activePreset.platform !== 'custom' && activePreset.aspectRatio !== project.aspectRatio)
+  // The exporter renders in the project's ratio; crop/pad to another ratio is not built yet (it would have to be
+  // shared with the preview, AGENTS.md no. 1). So only presets of the project's own ratio are offered.
+  const presets = EXPORT_PRESETS.filter((p) => p.platform === 'custom' || p.aspectRatio === project.aspectRatio)
   const set = (p: Partial<ExportOptions>): void => {
     setOpts({ ...opts, ...p })
     if (p.fps) {
@@ -526,20 +528,11 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
             </div>
           )}
 
-          {aspectMismatch && (
-            <div className="flex items-start gap-2.5 rounded-xl border border-sun bg-sun-soft px-3.5 py-2.5 text-xs text-sun-ink">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-              <span>
-                Format rasio proyek ({project.aspectRatio}) berbeda dengan rasio bawaan platform {activePreset?.name} ({activePreset?.aspectRatio}). Video akan disesuaikan dengan letterbox/pillarbox.
-              </span>
-            </div>
-          )}
-
           {/* Platform Preset Selector */}
           <div className="flex flex-col gap-2">
             <span className="text-sm font-semibold">Preset Platform</span>
-            <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-              {EXPORT_PRESETS.map((p) => {
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-2">
+              {presets.map((p) => {
                 const on = (opts.presetId ?? 'custom') === p.id
                 return (
                   <button
@@ -562,7 +555,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
                     )}
                   >
                     <span className="text-xs font-bold text-ink">{p.name}</span>
-                    <span className="text-[10px] text-muted">{p.aspectRatio}</span>
+                    <span className="text-[10px] text-muted">{project.aspectRatio}</span>
                     {p.badge && (
                       <span className="rounded bg-sand px-1 text-[9px] font-semibold text-accent-dark">
                         {p.badge}

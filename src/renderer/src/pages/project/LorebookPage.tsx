@@ -48,6 +48,7 @@ import { AutoTextarea } from '../../components/AutoTextarea'
 import { Select } from '../../components/Select'
 import { errorText } from '../../lib/format'
 import { useApp } from '../../store/app'
+import { useTtsProject } from '../../lib/useTtsProject'
 import { isRunning, jobFor, useProject } from '../../store/project'
 import { MergeAssetModal } from './MergeAssetModal'
 import { BatchEstimateSheetModal } from './BatchEstimateSheetModal'
@@ -259,14 +260,14 @@ export function LorebookPage() {
     return seriesLocks.filter((l) => l.label.toLowerCase().includes(q) || l.text.toLowerCase().includes(q))
   }, [seriesLocks, searchQuery])
 
-  // Voices list for TTS
+  // Voices come from the global TTS provider, the one narration and clip TTS actually use.
+  const ttsProject = useTtsProject(project)
   const [voices, setVoices] = useState<VoiceOption[]>([])
   useEffect(() => {
-    if (!project) return
-    window.api.settings.voices(project.ttsProvider).then(setVoices).catch(() => {})
-  }, [project?.ttsProvider])
+    if (!ttsProject) return
+    window.api.settings.voices(ttsProject.ttsProvider).then(setVoices).catch(() => {})
+  }, [ttsProject?.ttsProvider])
 
-  if (!project) return null
 
   // Ensure selected item exists or auto-select first item
   const selectedCharacter = characters.find((c) => c.id === selectedId)
@@ -364,6 +365,9 @@ export function LorebookPage() {
     }
     return map
   }, [clips])
+
+  // After every hook above: an earlier return would change the hook order once the project loads.
+  if (!project) return null
 
   // Creation handlers
   const handleAddCharacter = () => {
@@ -571,9 +575,10 @@ export function LorebookPage() {
 
   return (
     <div className="flex h-full flex-col bg-paper">
-      {/* Top Bar: Tabs, Search, Add Button */}
-      <div className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-surface px-6">
-        <div className="flex items-center gap-4">
+      {/* Top Bar: Tabs, Search, Add Button. It wraps instead of clipping: at 1180×720 with the sidebar open the
+          actions do not fit beside the tabs, and a clipped "Tambah" button cannot be reached at all. */}
+      <div className="flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-line bg-surface px-6 py-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
           <Segmented<LorebookTab>
             value={activeTab}
             onChange={(tab) => {
@@ -601,7 +606,7 @@ export function LorebookPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {activeTab !== 'lock' && activeTab !== 'continuity' && (
             <>
               <Button
@@ -1389,11 +1394,11 @@ export function LorebookPage() {
                   onChange={(v) =>
                     updateCharacter(selectedCharacter.id, {
                       ttsVoice: v || null,
-                      ttsProvider: v ? project.ttsProvider ?? null : null
+                      ttsProvider: v ? ttsProject?.ttsProvider ?? null : null
                     })
                   }
                   options={[
-                    { value: '', label: `Bawaan narator (${project.ttsVoice || 'Utama'})` },
+                    { value: '', label: `Bawaan narator (${ttsProject?.ttsVoice || 'Utama'})` },
                     ...voices.map((v) => {
                       const gen = geminiVoiceGender(v.id)
                       const genTag = gen === 'female' ? 'Perempuan' : gen === 'male' ? 'Laki-laki' : ''

@@ -6,7 +6,7 @@ import { spokenWords, stripVoiceTags } from '@shared/speech'
 import { getImageModel, getVideoModel, imageBody, maxRefs, promptLimit, resolutionOptions, videoBody, type HfModel } from '@shared/higgsfield'
 import { getStyle, NO_TEXT } from '@shared/styles'
 import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt } from '@shared/prompts'
-import { resolveActive } from '@shared/providers'
+import { resolveActive, withActiveTts } from '@shared/providers'
 import {
   computeClipTtsBasisHash,
   computeClipVideoBasisHash,
@@ -210,6 +210,29 @@ async function waitForSheets(characterIds: string[], signal: AbortSignal): Promi
   while (Date.now() - started < 15 * 60 * 1000) {
     const pending = characterIds.some((id) => activeJobFor({ characterId: id }, 'sheet'))
     if (!pending) return
+    await sleep(2000, signal)
+  }
+}
+
+/**
+ * When a shot continues from the previous shot's last frame and the previous shot's video is currently
+ * generating (e.g. during a batch), wait for that video to finish so we extract its real final frame
+ * instead of falling back to its static storyboard image.
+ */
+async function waitForPreviousClipVideo(clip: Clip, signal: AbortSignal, onWait?: () => void): Promise<void> {
+  if (!clip.continueFromPrevious) return
+  const episodeClips = clipsOf(clip.projectId, clip.episodeId).sort((a, b) => a.sort - b.sort)
+  const idx = episodeClips.findIndex((c) => c.id === clip.id)
+  if (idx <= 0) return
+  const prevId = episodeClips[idx - 1].id
+  const started = Date.now()
+  let notified = false
+  while (Date.now() - started < 15 * 60 * 1000) {
+    if (!activeJobFor({ clipId: prevId }, 'video')) return
+    if (!notified) {
+      notified = true
+      onWait?.()
+    }
     await sleep(2000, signal)
   }
 }
@@ -491,7 +514,7 @@ function prereqContext(projectId: string, episodeId?: string): GenerationPrerequ
     locations: locationsOf(projectId),
     props: propsOf(projectId),
     assets: assetsOf(projectId),
-    clips: clipsOf(projectId),
+    clips: clipsOf(projectId, episodeId),
     activeJobs: activeJobsOf(projectId),
     isFlow2Api: activeImage.provider.protocol === 'flow2api',
     flow2apiImageModel: activeImage.model,
@@ -513,7 +536,7 @@ export function generateClipImage(clipId: string): Job {
   const existing = activeJobFor({ clipId }, 'image')
   if (existing) return existing
   const clip = getClip(clipId)
-  const prereqs = checkClipImagePrerequisites(clip, getProject(clip.projectId), prereqContext(clip.projectId))
+  const prereqs = checkClipImagePrerequisites(clip, getProject(clip.projectId), prereqContext(clip.projectId, clip.episodeId))
   if (!prereqs.ok) {
     throw new Error(`Syarat generate gambar tidak terpenuhi:\n- ${prereqs.blockers.join('\n- ')}`)
   }
@@ -524,7 +547,7 @@ export function generateClipImage(clipId: string): Job {
     return runJob(job, 'flow2api', async (ctx) => {
       const fresh = getClip(clipId)
       const project = getProject(fresh.projectId)
-      const pctx = prereqContext(project.id)
+      const pctx = prereqContext(project.id, fresh.episodeId)
       const allChars = pctx.characters
       const allDerivs = pctx.derivatives
       const allLocs = pctx.locations
@@ -603,7 +626,7 @@ export function generateClipImage(clipId: string): Job {
     const fresh = getClip(clipId)
     const project = getProject(fresh.projectId)
     const model = getImageModel(activeImageModelId())
-    const pctx = prereqContext(project.id)
+    const pctx = prereqContext(project.id, fresh.episodeId)
     const allChars = pctx.characters
     const allDerivs = pctx.derivatives
     const allLocs = pctx.locations
@@ -1037,7 +1060,7 @@ export function generateClipVideo(clipId: string): Job {
   if (existing) return existing
   const clip = getClip(clipId)
 
-  const prereqs = checkClipVideoPrerequisites(clip, getProject(clip.projectId), prereqContext(clip.projectId))
+  const prereqs = checkClipVideoPrerequisites(clip, getProject(clip.projectId), prereqContext(clip.projectId, clip.episodeId))
   if (!prereqs.ok) {
     throw new Error(`Syarat generate video tidak terpenuhi:\n- ${prereqs.blockers.join('\n- ')}`)
   }
@@ -1046,6 +1069,7 @@ export function generateClipVideo(clipId: string): Job {
     const job = insertJob({ projectId: clip.projectId, clipId, kind: 'video', provider: 'flow2api' })
     emit.job(job)
     return runJob(job, 'flow2api', async (ctx) => {
+      await waitForPreviousClipVideo(getClip(clipId), ctx.signal, () => ctx.progress(0.02, 'Menunggu video shot sebelumnya selesai'))
       const fresh = getClip(clipId)
       const project = getProject(fresh.projectId)
       const allChars = charactersOf(project.id)
@@ -1107,6 +1131,7 @@ export function generateClipVideo(clipId: string): Job {
 
   const job = insertJob({ projectId: clip.projectId, clipId, kind: 'video', provider: 'higgsfield' })
   return startHiggsfield(job, async (ctx) => {
+    await waitForPreviousClipVideo(getClip(clipId), ctx.signal, () => ctx.progress(0.02, 'Menunggu video shot sebelumnya selesai'))
     const fresh = getClip(clipId)
     const project = getProject(fresh.projectId)
     const pctx = prereqContext(project.id, fresh.episodeId)
@@ -1144,12 +1169,12 @@ export function generateClipTts(clipId: string): Job {
   const existing = activeJobFor({ clipId }, 'tts')
   if (existing) return existing
   const clip = getClip(clipId)
-  const project = getProject(clip.projectId)
+  const project = withActiveTts(getProject(clip.projectId), getSettings())
   const job = insertJob({ projectId: clip.projectId, clipId, kind: 'tts', provider: project.ttsProvider })
   emit.job(job)
   return runJob(job, 'tts', async (ctx) => {
     const fresh = getClip(clipId)
-    const p = getProject(fresh.projectId)
+    const p = withActiveTts(getProject(fresh.projectId), getSettings())
     const text = fresh.narration.trim()
     if (!text) throw new Error('Naskah klip ini masih kosong')
     ctx.progress(0.2, 'Membuat suara')
@@ -1160,7 +1185,7 @@ export function generateClipTts(clipId: string): Job {
     const charVoice = char?.ttsProvider === p.ttsProvider ? char.ttsVoice : null
     const voice = charVoice || p.ttsVoice || (p.ttsProvider === 'gemini' ? 'Charon' : '')
     if (p.ttsProvider === 'elevenlabs') {
-      if (!voice) throw new Error('Pilih suara ElevenLabs dulu di langkah Ide cerita.')
+      if (!voice) throw new Error('Pilih suara ElevenLabs dulu di Lorebook atau Storyboard.')
       const out = await eleven.speak(text, voice, p.language, ctx.signal)
       rel = saveFile(p.id, 'audio', '.mp3', out.audio)
       words = out.words
@@ -1206,20 +1231,21 @@ export function generateClipTts(clipId: string): Job {
  */
 export function generateMissingImages(projectId: string, episodeId?: string, includeStale = false): Job[] {
   const project = getProject(projectId)
-  const ctx = prereqContext(projectId)
+  const ctx = prereqContext(projectId, episodeId)
   const items = clipsOf(projectId, episodeId).map((clip, i) => ({ clip, index: i + 1, title: clip.title || `Shot ${i + 1}`, status: getClipImageStatus(clip, project, ctx) }))
   const { targets, blocking } = planBatch(items, includeStale)
   if (blocking.length) throw new Error(blockedMessage('gambar', blocking))
   return targets.map((t) => generateClipImage(t.clip.id))
 }
 
-/** Generates AI video for the clips the creator picked; every one of them needs an image. */
+/** Generates AI video for the clips the creator picked; checks all video prerequisites (including continueFromPrevious). */
 export function generateClipsVideo(clipIds: string[]): Job[] {
   if (!clipIds.length) return []
   for (const id of clipIds) {
     const clip = getClip(id)
-    if (!clip.imageAssetId) {
-      throw new Error(`Klip "${clip.title || id}" belum memiliki gambar. Buat gambarnya dulu sebelum dijadikan video.`)
+    const prereqs = checkClipVideoPrerequisites(clip, getProject(clip.projectId), prereqContext(clip.projectId, clip.episodeId))
+    if (!prereqs.ok) {
+      throw new Error(`Klip "${clip.title || id}" tidak memenuhi syarat video:\n- ${prereqs.blockers.join('\n- ')}`)
     }
   }
   return clipIds.map((id) => generateClipVideo(id))
@@ -1230,7 +1256,7 @@ export function generateClipsVideo(clipIds: string[]): Job[] {
  */
 export function generateMissingVideos(projectId: string, episodeId?: string, includeStale = false): Job[] {
   const project = getProject(projectId)
-  const ctx = prereqContext(projectId)
+  const ctx = prereqContext(projectId, episodeId)
   const items = clipsOf(projectId, episodeId).map((clip, i) => ({ clip, index: i + 1, title: clip.title || `Shot ${i + 1}`, status: getClipVideoStatus(clip, project, ctx) }))
   const { targets, blocking } = planBatch(items, includeStale)
   if (blocking.length) throw new Error(blockedMessage('video', blocking))
@@ -1255,7 +1281,7 @@ export async function batchEstimate(
   includeStale = false
 ): Promise<BatchEstimateResult> {
   const project = getProject(projectId)
-  const ctx = prereqContext(projectId)
+  const ctx = prereqContext(projectId, episodeId)
   const settings = getSettings()
   const activeImage = resolveActive(settings, 'image')
   const activeVideo = resolveActive(settings, 'video')
@@ -1498,8 +1524,14 @@ const noResult = (status: ClipStatusResult['status'], assetId: string | null): b
 
 export function seriesProgress(projectId: string): SeriesProgressSummary {
   const project = getProject(projectId)
-  const ctx = prereqContext(projectId)
+  const baseCtx = prereqContext(projectId)
   const episodes = listEpisodes(projectId)
+  const episodeById = new Map(episodes.map((e) => [e.id, e]))
+  const ctxForClip = (c: Clip): GenerationPrerequisitesContext => {
+    const ep = c.episodeId ? episodeById.get(c.episodeId) : undefined
+    if (!ep?.lockWords?.length) return baseCtx
+    return { ...baseCtx, lockWords: [...(project.seriesLock || []), ...ep.lockWords] }
+  }
   const { all: sheets } = sheetBatchItems(projectId, false)
   const clips = clipsOf(projectId)
 
@@ -1513,8 +1545,9 @@ export function seriesProgress(projectId: string): SeriesProgressSummary {
     missingSheets: sheets.filter((i) => i.status.status === 'missing' || (i.status.status === 'blocked' && !i.status.hasResult)).length,
     totalClips: clips.length,
     // A blocked clip with no result yet still counts as "not made": the Storyboard shows it without a picture.
-    missingClipImages: clips.filter((c) => noResult(getClipImageStatus(c, project, ctx).status, c.imageAssetId)).length,
-    missingClipVideos: clips.filter((c) => noResult(getClipVideoStatus(c, project, ctx).status, c.videoAssetId)).length
+    missingClipImages: clips.filter((c) => noResult(getClipImageStatus(c, project, ctxForClip(c)).status, c.imageAssetId)).length,
+    missingClipVideos: clips.filter((c) => noResult(getClipVideoStatus(c, project, ctxForClip(c)).status, c.videoAssetId)).length,
+    missingClipAudio: clips.filter((c) => c.narration.trim() && !isVideoDialogue(project, c) && !c.audioAssetId).length
   }
 }
 

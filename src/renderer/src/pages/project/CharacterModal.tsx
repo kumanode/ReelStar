@@ -7,6 +7,7 @@ import { Button, Field, Modal, Spinner, confirmDialog, cx, inputCls } from '../.
 import { errorText } from '../../lib/format'
 import { useApp } from '../../store/app'
 import { isRunning, jobFor, useProject } from '../../store/project'
+import { useTtsProject } from '../../lib/useTtsProject'
 
 /**
  * Edits a character, or with `characterId` "new" collects a new one that is only added once it is saved,
@@ -30,7 +31,8 @@ const LOOK_HINT =
   'Tulis ciri tubuh dulu, lalu "Default outfit:" untuk baju bawaan di lembar karakter. Baju bisa diganti per adegan lewat baris Wardrobe di prompt visual. Contoh: human man, 40s, short black hair, warm brown skin. Default outfit: light-blue colony medical scrubs, stethoscope.'
 
 function NewCharacter({ onClose, onCreated }: { onClose: () => void; onCreated?: (id: string) => void }) {
-  const { project, addCharacter } = useProject()
+  const { project: rawProject, addCharacter } = useProject()
+  const project = useTtsProject(rawProject)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [ttsVoice, setTtsVoice] = useState('')
@@ -113,7 +115,9 @@ function NewCharacter({ onClose, onCreated }: { onClose: () => void; onCreated?:
 }
 
 function EditCharacter({ characterId, onClose }: { characterId: string | null; onClose: () => void }) {
-  const { project, characters, assets, jobs, updateCharacter, removeCharacter, flush, clips } = useProject()
+  const { project: rawProject, characters, assets, jobs, updateCharacter, removeCharacter, flush, clips } = useProject()
+  // Voices belong to the global TTS provider; the project's own tts_provider is no longer what speaks.
+  const project = useTtsProject(rawProject)
   const { toast } = useApp()
   const [voices, setVoices] = useState<VoiceOption[]>([])
   const c = characters.find((x) => x.id === characterId)
@@ -212,7 +216,7 @@ function EditCharacter({ characterId, onClose }: { characterId: string | null; o
           />
         </Field>
         {c.ttsVoice && c.ttsProvider && c.ttsProvider !== project?.ttsProvider && (
-          <p className="mt-2 text-xs text-sun-ink">Suara ini dibuat untuk {c.ttsProvider}. Proyek memakai {project?.ttsProvider}, jadi narator akan dipakai sampai kamu memilih suara yang cocok.</p>
+          <p className="mt-2 text-xs text-sun-ink">Suara ini dibuat untuk {c.ttsProvider}. Penyedia suara aktif sekarang {project?.ttsProvider}, jadi narator akan dipakai sampai kamu memilih suara yang cocok.</p>
         )}
       </div>
       <div className="flex items-center gap-2.5">

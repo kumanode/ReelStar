@@ -25,7 +25,7 @@ import {
   Volume2,
   X
 } from 'lucide-react'
-import { FLOW2API_IMAGE_MODELS, FLOW2API_VIDEO_MODELS, getFlow2ApiModel } from '@shared/flow2api-catalog'
+import { FLOW2API_VIDEO_MODELS, getFlow2ApiModel } from '@shared/flow2api-catalog'
 import { effectiveResolution, fitDuration, getImageModel, getVideoModel } from '@shared/higgsfield'
 import { CAMERA_PRESETS, MOTION_STRENGTHS, cameraAt, cameraCss } from '@shared/motion'
 import { needsVisual } from '@shared/script'
@@ -46,6 +46,7 @@ import { useApp } from '../../store/app'
 import { isRunning, jobFor, useProject } from '../../store/project'
 import { CharacterModal } from './CharacterModal'
 import { BatchEstimateModal } from './BatchEstimateModal'
+import { useTtsProject } from '../../lib/useTtsProject'
 
 function useAudio(): { play: (url: string) => void; stop: () => void; playing: string | null } {
   const ref = useRef<HTMLAudioElement | null>(null)
@@ -131,14 +132,24 @@ function videoModelSummary(modelId: string | null | undefined, resolution: strin
   return `${hf.name} · video ${fit} detik${effRes ? ` · ${effRes}` : ''}`
 }
 
-function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: number; total: number; prereqCtx: GenerationPrerequisitesContext }) {
-  const { project, episode, clips, characters, assets, jobs, updateClip, updateProject, removeClip, moveClip, addClip, select, flush } = useProject()
+type ClipPanelProps = { clip: Clip; index: number; total: number; prereqCtx: GenerationPrerequisitesContext }
+
+// The body calls many hooks that need the project; returning early before them would change the hook order when
+// the project loads (React's rules of hooks), so the null check lives in this wrapper instead.
+function ClipPanel(props: ClipPanelProps) {
+  const project = useProject((s) => s.project)
+  if (!project) return null
+  return <ClipPanelBody {...props} project={project} />
+}
+
+function ClipPanelBody({ clip, index, total, prereqCtx, project }: ClipPanelProps & { project: Project }) {
+  const { episode, clips, characters, assets, jobs, updateClip, updateProject, removeClip, moveClip, addClip, select, flush } = useProject()
   const { toast } = useApp()
   const audio = useAudio()
   const [editPrompt, setEditPrompt] = useState(false)
   const [cancelingVideo, setCancelingVideo] = useState(false)
   const [savingThumb, setSavingThumb] = useState(false)
-  if (!project) return null
+  const ttsProject = useTtsProject(project)
 
   const imgStatus = useMemo(() => getClipImageStatus(clip, project, prereqCtx), [clip, project, prereqCtx])
   const vidStatus = useMemo(() => getClipVideoStatus(clip, project, prereqCtx), [clip, project, prereqCtx])
@@ -172,7 +183,7 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
     )
   }, [clip, characters, prereqCtx])
 
-  const isFlow2Video = FLOW2API_VIDEO_MODELS.some((model) => model.id === project.videoModel)
+  const isFlow2Video = Boolean(prereqCtx.isFlow2Api)
   const image = clip.imageAssetId ? assets[clip.imageAssetId] : null
   const video = clip.videoAssetId ? assets[clip.videoAssetId] : null
   const voice = clip.audioAssetId ? assets[clip.audioAssetId] : null
@@ -186,8 +197,8 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
   const start = clips.slice(0, index).reduce((n, c) => n + c.durationMs, 0)
   const narrationChanged = !!voice && (voice.prompt ?? '').trim() !== clip.narration.trim()
   const voiceName =
-    project.ttsProvider === 'gemini'
-      ? `${geminiVoiceName(project.ttsVoice)} · ${geminiVoiceTone(project.ttsVoice) ?? 'Gemini'}`
+    ttsProject?.ttsProvider === 'gemini'
+      ? `${geminiVoiceName(ttsProject.ttsVoice)} · ${geminiVoiceTone(ttsProject.ttsVoice) ?? 'Gemini'}`
       : 'ElevenLabs'
 
   const isCover = project.coverAssetId === clip.imageAssetId
@@ -1055,7 +1066,7 @@ export function StoryboardStep() {
   // Multi-shot batch selection state
   const [selectedBatchIds, setSelectedBatchIds] = useState<Set<string>>(() => new Set())
 
-  const toggleBatchSelect = (clipId: string, e: React.MouseEvent) => {
+  const toggleBatchSelect = (clipId: string, e: React.SyntheticEvent) => {
     e.stopPropagation()
     setSelectedBatchIds((prev) => {
       const next = new Set(prev)
@@ -1133,14 +1144,16 @@ export function StoryboardStep() {
     toast('info', `${ids.length} shot berhasil dihapus.`)
   }
 
-  const isFlow2Image = FLOW2API_IMAGE_MODELS.some((m) => m.id === project?.imageModel)
-  const isFlow2Video = FLOW2API_VIDEO_MODELS.some((m) => m.id === project?.videoModel)
-
   // The provider comes from the app settings, exactly as the main process decides it, so badges match generation.
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null)
   useEffect(() => {
     void window.api.settings.get().then(setAppSettings).catch(() => setAppSettings(null))
   }, [])
+
+  const activeImage = resolveActive(appSettings, 'image')
+  const activeVideo = resolveActive(appSettings, 'video')
+  const isFlow2Image = activeImage.provider.protocol === 'flow2api'
+  const isFlow2Video = activeVideo.provider.protocol === 'flow2api'
 
   const prereqCtx = useMemo<GenerationPrerequisitesContext>(
     () => ({
@@ -1149,18 +1162,19 @@ export function StoryboardStep() {
       locations,
       props,
       assets,
+      clips,
       activeJobs: Object.values(jobs),
-      isFlow2Api: resolveActive(appSettings, 'image').provider.protocol === 'flow2api',
-      flow2apiImageModel: resolveActive(appSettings, 'image').model,
-      flow2apiVideoModel: resolveActive(appSettings, 'video').model,
-      activeImageModel: resolveActive(appSettings, 'image').model,
-      activeVideoModel: resolveActive(appSettings, 'video').model,
+      isFlow2Api: isFlow2Image,
+      flow2apiImageModel: activeImage.model,
+      flow2apiVideoModel: activeVideo.model,
+      activeImageModel: activeImage.model,
+      activeVideoModel: activeVideo.model,
       lockWords: [
         ...(project?.seriesLock || []),
         ...(episode?.lockWords || [])
       ]
     }),
-    [characters, derivatives, locations, props, assets, jobs, appSettings, project?.seriesLock, episode?.lockWords]
+    [characters, derivatives, locations, props, assets, clips, jobs, isFlow2Image, activeImage.model, activeVideo.model, project?.seriesLock, episode?.lockWords]
   )
 
   // A failed narration take is reported once, when it happens.
@@ -1195,10 +1209,10 @@ export function StoryboardStep() {
   useEffect(() => {
     if (project && !isFlow2Image)
       void window.api.generate
-        .estimate('image', getImageModel(project.imageModel).id, project.aspectRatio)
+        .estimate('image', getImageModel(activeImage.model || project.imageModel).id, project.aspectRatio)
         .then((e) => setCredits(e?.credits ?? null))
     else setCredits(null)
-  }, [project?.id, project?.imageModel, project?.aspectRatio, isFlow2Image])
+  }, [project?.id, project?.imageModel, project?.aspectRatio, isFlow2Image, activeImage.model])
 
   const stats = useMemo(() => {
     const imgs = clips.filter((c) => c.imageAssetId).length
@@ -1213,10 +1227,10 @@ export function StoryboardStep() {
   // an image is priced, because the picker can also remake clips that already have a video.
   const videoLengths = useMemo(() => {
     if (!project || isFlow2Video) return ''
-    const model = getVideoModel(project.videoModel)
+    const model = getVideoModel(activeVideo.model || project.videoModel)
     const lengths = clips.filter((c) => c.imageAssetId).map((c) => fitDuration(model, c.durationMs / 1000) ?? 5)
     return [...new Set(lengths)].sort((a, b) => a - b).join(',')
-  }, [clips, project?.videoModel, isFlow2Video])
+  }, [clips, project?.videoModel, isFlow2Video, activeVideo.model])
 
   useEffect(() => {
     if (!project || !videoLengths) {
@@ -1224,7 +1238,7 @@ export function StoryboardStep() {
       return
     }
     const unique = videoLengths.split(',').map(Number)
-    const model = getVideoModel(project.videoModel).id
+    const model = getVideoModel(activeVideo.model || project.videoModel).id
     let live = true
     void Promise.all(unique.map((s) => window.api.generate.estimate('video', model, project.aspectRatio, s, project.videoResolution))).then((list) => {
       if (!live) return
@@ -1233,14 +1247,15 @@ export function StoryboardStep() {
     return () => {
       live = false
     }
-  }, [videoLengths, project?.videoModel, project?.aspectRatio, project?.videoResolution])
+  }, [videoLengths, project?.videoModel, project?.aspectRatio, project?.videoResolution, activeVideo.model])
 
   const videoCredits = useMemo(() => {
     if (!project || !creditMap) return null
-    const model = getVideoModel(project.videoModel)
+    const model = getVideoModel(activeVideo.model || project.videoModel)
     return stats.needVideo.reduce((n, c) => n + (creditMap.get(fitDuration(model, c.durationMs / 1000) ?? 5) ?? 0), 0)
-  }, [creditMap, stats.needVideo, project?.videoModel])
+  }, [creditMap, stats.needVideo, project?.videoModel, activeVideo.model])
 
+  const narration = useNarration()
   if (!project) return null
   const selIndex = Math.max(0, clips.findIndex((c) => c.id === selectedClipId))
   const sel = clips[selIndex]
@@ -1254,7 +1269,6 @@ export function StoryboardStep() {
     }
   }
 
-  const narration = useNarration()
   // Videos are made last: the voice must be final so each video matches its clip length. Clips are picked in
   // the video dialog, so only some of them need a picture.
   const readyForVideo =
@@ -1501,10 +1515,21 @@ export function StoryboardStep() {
                     />
                     <div className="absolute inset-x-0 top-0 flex items-center justify-between p-2 pointer-events-none gap-1">
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <button
-                          type="button"
+                        {/* A span, not a button: the whole card is already a button, and a button inside a button is
+                            invalid HTML (React warns, and browsers may move the inner one out). */}
+                        <span
+                          role="checkbox"
+                          tabIndex={0}
+                          aria-checked={isBatchSelected}
+                          aria-label={isBatchSelected ? 'Batalkan pilihan shot' : 'Pilih shot ini'}
                           title={isBatchSelected ? 'Batalkan pilihan shot' : 'Pilih shot ini'}
                           onClick={(e) => toggleBatchSelect(c.id, e)}
+                          onKeyDown={(e) => {
+                            if (e.key === ' ' || e.key === 'Enter') {
+                              e.preventDefault()
+                              toggleBatchSelect(c.id, e)
+                            }
+                          }}
                           className={cx(
                             'pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded border transition-colors',
                             isBatchSelected
@@ -1513,7 +1538,7 @@ export function StoryboardStep() {
                           )}
                         >
                           <Check className="size-3 stroke-[3]" />
-                        </button>
+                        </span>
                         <span className="rounded-md bg-ink px-[7px] py-0.5 font-mono text-xs text-paper shrink-0">{clipNumber(i)}</span>
                         {c.motionType === 'video' && c.videoAssetId ? (
                           <span className="rounded-md bg-accent px-1.5 py-0.5 text-[11px] font-semibold text-white shadow-sm shrink-0">Video AI</span>

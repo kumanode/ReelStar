@@ -212,8 +212,15 @@ export function EpisodeHub() {
     if (!project) return
     await flush()
 
-    // 1. Check if any episodes are missing script drafts
-    const missingDraft = episodes.find((e) => e.status === 'draft')
+    if (episodes.length === 0) {
+      toast('info', 'Belum ada episode. Rencanakan episode dari sumber cerita terlebih dahulu.')
+      return
+    }
+
+    // 1. Check if any episodes need a script draft (matches needsScriptDraft in story.ts)
+    const missingDraft = episodes.find(
+      (e) => !e.scriptDraft && (e.status === 'planned' || (e.status === 'draft' && e.summary.trim().length > 0))
+    )
     if (missingDraft) {
       toast('info', `Episode ${missingDraft.episodeNum} belum memiliki draf naskah. Menyusun naskah otomatis...`)
       void handlePlanAllScripts()
@@ -221,7 +228,7 @@ export function EpisodeHub() {
     }
 
     // 2. Check if any episode has an unconfirmed draft
-    const unconfirmedEp = episodes.find((e) => e.scriptDraft && e.status === 'planned')
+    const unconfirmedEp = episodes.find((e) => e.scriptDraft && (e.status === 'planned' || e.status === 'draft'))
     if (unconfirmedEp) {
       toast('info', `Tinjau dan konfirmasi naskah Episode ${unconfirmedEp.episodeNum} sebelum lanjut ke tahap visual.`)
       await switchEpisode(unconfirmedEp.id)
@@ -232,6 +239,11 @@ export function EpisodeHub() {
 
     // 3. Check progress
     const prog = await window.api.projects.progress(project.id)
+    if (prog.totalClips === 0) {
+      toast('info', 'Belum ada shot yang dikonfirmasi. Buka salah satu episode untuk menyusun dan mengonfirmasi naskah.')
+      return
+    }
+
     if (prog.missingSheets > 0) {
       toast('info', `Ada ${prog.missingSheets} lembar referensi Lorebook yang belum dibuat. Menampilkan perkiraan biaya...`)
       setBatchSheetOpen(true)
@@ -252,7 +264,18 @@ export function EpisodeHub() {
       return
     }
 
-    toast('success', 'Semua naskah, lembar referensi, gambar, dan video telah lengkap! Episode siap dirangkai di editor.')
+    if ((prog.missingClipAudio ?? 0) > 0) {
+      toast('info', `Ada ${prog.missingClipAudio} adegan yang belum memiliki suara narasi/TTS. Buka Storyboard untuk membuat suaranya.`)
+      const targetEp = episodes.find((e) => e.status !== 'exported') ?? episodes[0]
+      if (targetEp) {
+        await switchEpisode(targetEp.id)
+        setActiveView('episode')
+        useProject.getState().setActiveTab('storyboard')
+      }
+      return
+    }
+
+    toast('success', 'Semua naskah, lembar referensi, gambar, video, dan suara telah lengkap! Episode siap dirangkai di editor.')
   }
 
   const handleDeleteAllEpisodes = async () => {

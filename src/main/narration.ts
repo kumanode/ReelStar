@@ -6,6 +6,7 @@ import ffmpegStatic from 'ffmpeg-static'
 import { WHISPER_TIMING, captionNeedsSync, estimateWordTimings } from '@shared/captions'
 import { estimateNarrationMs } from '@shared/script'
 import { spokenWords, stripVoiceTags } from '@shared/speech'
+import { withActiveTts } from '@shared/providers'
 import { isVideoDialogue } from '@shared/validation'
 import type { Character, Clip, Job, Project, WordTiming } from '@shared/types'
 import { emit } from './events'
@@ -263,16 +264,16 @@ function store(p: Project, s: Segment, voice: string, takeId: string, bytes: Buf
 export function generateNarration(projectId: string, mode: 'missing' | 'all', episodeId?: string): Job {
   const running = activeProjectJob(projectId, 'narration', episodeId)
   if (running) return running
-  const project = getProject(projectId)
+  const project = withActiveTts(getProject(projectId), getSettings())
   const isVideoDialog = (c: Clip) => isVideoDialogue(project, c)
   const targets = clipsOf(projectId, episodeId).filter((c) => c.narration.trim() && !isVideoDialog(c) && (mode === 'all' || !c.audioAssetId))
   if (!targets.length) throw new Error('Tidak ada naskah narasi yang perlu disuarakan.')
   const job = insertJob({ projectId, episodeId, kind: 'narration', provider: project.ttsProvider, payload: { mode, clipIds: targets.map((c) => c.id) } })
   emit.job(job)
   return runJob(job, 'tts', async (ctx) => {
-    const p = getProject(projectId)
+    const p = withActiveTts(getProject(projectId), getSettings())
     const voice = p.ttsVoice || (p.ttsProvider === 'gemini' ? 'Charon' : '')
-    if (p.ttsProvider === 'elevenlabs' && !voice) throw new Error('Pilih suara ElevenLabs dulu di langkah Ide cerita.')
+    if (p.ttsProvider === 'elevenlabs' && !voice) throw new Error('Pilih suara ElevenLabs dulu di Lorebook atau Storyboard.')
     const clips = targets.map((c) => getClip(c.id)).filter((c) => c.narration.trim() && !isVideoDialog(c))
     const chars = charactersOf(projectId)
     const groups = parts(clips, p.ttsProvider, chars, voice)

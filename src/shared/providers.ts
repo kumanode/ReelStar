@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  Project,
   ModelPurpose,
   ProviderDef,
   ProviderRole
@@ -151,4 +152,17 @@ export function resolveActive(
   const model = modelFromSettings && modelFromSettings.trim() ? modelFromSettings.trim() : defaultModel
 
   return { provider, model }
+}
+
+/**
+ * The project as text-to-speech sees it: the TTS provider is the global one from Pengaturan › Model aktif
+ * (projects.tts_provider is no longer read to choose it). The narrator voice stays creative data of the project,
+ * but a voice id only means something to the provider it was picked for, so when the global provider differs
+ * the voice is dropped and the provider's default narrator is used.
+ */
+export function withActiveTts<P extends Pick<Project, 'ttsProvider' | 'ttsVoice'>>(project: P, settings?: Partial<AppSettings> | null): P {
+  if (!settings) return project
+  const active = resolveActive(settings, 'tts').provider.id as Project['ttsProvider']
+  if (active === project.ttsProvider) return project
+  return { ...project, ttsProvider: active, ttsVoice: '' }
 }

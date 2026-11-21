@@ -6,7 +6,8 @@ import { app, type BrowserWindow } from 'electron'
 import ffmpegStatic from 'ffmpeg-static'
 import { estimateWordTimings } from '@shared/captions'
 import { anchorPoint } from '@shared/overlays'
-import { NO_MUSIC, NO_MUSIC_DIALOG, modelSupportsNativeAudio } from '@shared/higgsfield'
+import { HF_IMAGE_MODELS, NO_MUSIC, NO_MUSIC_DIALOG, modelSupportsNativeAudio } from '@shared/higgsfield'
+import { FLOW2API_IMAGE_MODELS } from '@shared/flow2api-catalog'
 import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt, hasReferenceOverride } from '@shared/prompts'
 import { computeCharacterSheetBasisHash, computeClipImageBasisHash, computeClipVideoBasisHash, computeDerivativeSheetBasisHash } from '@shared/hash'
 import {
@@ -30,7 +31,7 @@ import {
 } from '@shared/validation'
 import { EXPORT_PRESETS, getExportPreset, validatePresetDuration } from '@shared/exportPresets'
 import { checkLockCompliance } from '@shared/lock'
-import { resolveActive } from '@shared/providers'
+import { resolveActive, withActiveTts } from '@shared/providers'
 import { exportDeliveryPackage } from './package'
 import { startExport } from './exporter'
 import { assetAbsPath, binPath, dataDir } from './paths'
@@ -42,6 +43,7 @@ import {
   createContinuityItem,
   createEpisode,
   createProject,
+  fillEmptyFields,
   getBundle,
   getClip,
   getPlanProgress,
@@ -59,14 +61,16 @@ import {
   setLocationSheet,
   setPropSheet,
   touchProject,
+  updateAssetMeta,
   updateContinuityItem,
   updateDerivative
 } from './repo'
 import { getSettings, setSettings } from './settings'
 import { mergeLorebookCandidates, needsScriptDraft, planEpisodes, splitEpisodeTarget, writePrompts } from './story'
 import { batchEstimate, batchEstimateSheets, derivativeWaveBlocker, extractVideoDialogueAudio, generateMissingImages, seriesProgress, setActiveAsset } from './generation'
-import { recordCheck, setSecret } from './secrets'
-import type { ApiProvider, Asset, Character, Clip, DraftShot, EpisodeScriptDraft, ExportOptions } from '@shared/types'
+import { getSecret, keyStatuses, recordCheck, setSecret } from './secrets'
+import { getDb } from './db'
+import type { ApiProvider, Asset, Character, Clip, DraftShot, EpisodeScriptDraft, ExportOptions, Project } from '@shared/types'
 
 /**
  * Real speech for the demo clips (Windows' built-in English voice) with estimated caption timings, so
@@ -1444,9 +1448,141 @@ export async function checkPhase8(projectId: string): Promise<boolean> {
   const into = { characters: [cand('Rani', ['Rani Pratama'])], derivatives: [], locations: [], props: [] }
   mergeLorebookCandidates(into, { characters: [cand('Rani Pratama'), cand('Bima')], derivatives: [], locations: [], props: [] })
   if (into.characters.length !== 2) throw new Error(`Kandidat ganda tidak digabung: ${into.characters.length} tokoh`)
+  // e) Accepting a candidate for an existing entry fills its empty profile but keeps what the creator wrote.
+  const filled = fillEmptyFields({ visual: { age: '', hair: 'hitam' } } as Record<string, unknown>, { visual: { age: '25', hair: 'pirang' }, narrative: { role: 'utama' } })
+  if (JSON.stringify(filled) !== JSON.stringify({ visual: { age: '25', hair: 'hitam' }, narrative: { role: 'utama' } })) {
+    throw new Error(`Profil kandidat tidak terisi dengan benar: ${JSON.stringify(filled)}`)
+  }
 
   console.log('[checkPhase8] Semua pengujian backend Fase 8 BERHASIL!')
   return true
+}
+
+/**
+ * Settings checkpoint (tasks/setting.md). "write" runs every check that fits one session and stores a custom LLM
+ * provider with a key; "read", in a second run on the same data folder, proves both survived the restart.
+ */
+function checkSettings(phase: 'write' | 'read'): void {
+  const fail = (m: string): never => {
+    throw new Error(`[checkSettings] ${m}`)
+  }
+  if (phase === 'read') {
+    const s = getSettings()
+    if (!s.customProviders.some((p) => p.id === 'harness-llm')) fail('Penyedia custom hilang setelah restart')
+    if (resolveActive(s, 'llm').provider.id !== 'harness-llm') fail('Penyedia custom aktif tidak bertahan setelah restart')
+    if (getSecret('harness-llm') !== 'harness-custom-key') fail('Kunci penyedia custom tidak terbaca setelah restart')
+    if (!keyStatuses().find((k) => k.provider === 'harness-llm')?.configured) fail('Status kunci penyedia custom tidak "configured"')
+    console.log('[checkSettings] read: penyedia custom, model aktif, dan kunci bertahan setelah restart')
+    return
+  }
+
+  // 1. Legacy settings rows (before the provider catalog) are normalized; the old "custom" endpoint keeps its key.
+  const db = getDb()
+  const saved = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[]
+  const put = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+  try {
+    db.prepare('DELETE FROM settings').run()
+    const legacy: Record<string, unknown> = {
+      llmProvider: 'custom',
+      llmModels: { gemini: 'gemini-x', custom: 'llama-legacy' },
+      customBaseUrl: 'http://localhost:11434/v1',
+      defaultTtsProvider: 'elevenlabs',
+      elevenModel: 'eleven_legacy',
+      defaultVisualProvider: 'flow2api',
+      flow2apiImageModel: 'legacy-image',
+      flow2apiVideoModel: 'legacy-video'
+    }
+    for (const [k, v] of Object.entries(legacy)) put.run(k, JSON.stringify(v))
+    setSecret('custom', 'legacy-custom-key')
+    const s = getSettings()
+    const llm = resolveActive(s, 'llm')
+    if (llm.provider.id !== 'custom' || llm.model !== 'llama-legacy') fail(`LLM lama tidak terbaca: ${llm.provider.id}/${llm.model}`)
+    if (llm.provider.baseUrl !== 'http://localhost:11434/v1') fail('Alamat endpoint custom lama tidak terbawa')
+    const tts = resolveActive(s, 'tts')
+    if (tts.provider.id !== 'elevenlabs' || tts.model !== 'eleven_legacy') fail(`TTS lama tidak terbaca: ${tts.provider.id}/${tts.model}`)
+    const img = resolveActive(s, 'image')
+    if (img.provider.id !== 'flow2api' || img.model !== 'legacy-image') fail(`Model gambar lama tidak terbaca: ${img.provider.id}/${img.model}`)
+    if (getSecret('custom') !== 'legacy-custom-key' || !keyStatuses().find((k) => k.provider === 'custom')?.configured) {
+      fail('Kunci endpoint custom lama tidak terbaca sebagai penyedia custom')
+    }
+    console.log('[checkSettings] normalisasi setting lama OK')
+  } finally {
+    db.prepare('DELETE FROM settings').run()
+    for (const r of saved) put.run(r.key, r.value)
+  }
+
+  // 2. Changing the active image model makes images in two projects stale; changing it back makes them current.
+  const ctxOf = (pid: string) => {
+    const b = getBundle(pid)
+    const s = getSettings()
+    const img = resolveActive(s, 'image')
+    const vid = resolveActive(s, 'video')
+    const ctx = {
+      characters: b.characters,
+      derivatives: b.derivatives,
+      locations: b.locations,
+      props: b.props,
+      assets: b.assets,
+      isFlow2Api: img.provider.protocol === 'flow2api',
+      flow2apiImageModel: img.model,
+      flow2apiVideoModel: vid.model,
+      activeImageModel: img.model,
+      activeVideoModel: vid.model
+    }
+    return { b, ctx }
+  }
+  const statusesOf = (pid: string): string[] => {
+    const { b, ctx } = ctxOf(pid)
+    return b.clips.filter((c) => c.imageAssetId).map((c) => getClipImageStatus(c, b.project, ctx).status)
+  }
+  const projects = [seedDemo(), seedDemo()]
+  for (const pid of projects) {
+    // Seeded images carry no basis hash; record the current one so the check starts from "current".
+    const { b, ctx } = ctxOf(pid)
+    for (const c of b.clips) {
+      const a = c.imageAssetId ? b.assets.find((x) => x.id === c.imageAssetId) : null
+      if (a) updateAssetMeta(a.id, { ...a.meta, basisHash: getClipImageStatus(c, b.project, ctx).basisHash })
+    }
+  }
+  const before = getSettings()
+  const visual = resolveActive(before, 'image')
+  const withImageModel = (model: string) => ({
+    providers: { ...before.providers, visual: { ...before.providers.visual, models: { [visual.provider.id]: { image: model } } } }
+  })
+  if (!projects.every((pid) => statusesOf(pid).length > 0 && statusesOf(pid).every((x) => x === 'current'))) fail('Gambar awal seharusnya "current"')
+  // Another real model: an unknown id would block generation, and blocked is a different status from stale.
+  const otherModel =
+    visual.provider.protocol === 'flow2api'
+      ? FLOW2API_IMAGE_MODELS.find((m) => m.id !== visual.model)!.id
+      : HF_IMAGE_MODELS.find((m) => m.id !== visual.model)!.id
+  setSettings(withImageModel(otherModel))
+  if (!projects.every((pid) => statusesOf(pid).every((x) => x === 'stale'))) fail('Ganti model gambar aktif tidak membuat gambar di dua proyek "stale"')
+  setSettings(withImageModel(visual.model))
+  if (!projects.every((pid) => statusesOf(pid).every((x) => x === 'current'))) fail('Mengembalikan model gambar tidak membuat gambar "current" lagi')
+  console.log('[checkSettings] model gambar aktif → stale di 2 proyek, kembali → current OK')
+
+  // 3. The global TTS provider decides who speaks; a narrator voice picked for another provider is not sent to it.
+  const ttsBefore = getSettings()
+  const voiced: { ttsProvider: Project['ttsProvider']; ttsVoice: string } = { ttsProvider: 'gemini', ttsVoice: 'Kore' }
+  const withTts = (id: string) => ({ ...ttsBefore, providers: { ...ttsBefore.providers, tts: { ...ttsBefore.providers.tts, activeId: id } } })
+  const onEleven = withActiveTts(voiced, withTts('elevenlabs'))
+  if (onEleven.ttsProvider !== 'elevenlabs' || onEleven.ttsVoice !== '') fail(`Penyedia TTS global tidak dipakai: ${JSON.stringify(onEleven)}`)
+  const onGemini = withActiveTts(voiced, withTts('gemini'))
+  if (onGemini.ttsProvider !== 'gemini' || onGemini.ttsVoice !== 'Kore') fail('Suara narator hilang padahal penyedianya sama')
+  console.log('[checkSettings] penyedia TTS global dipakai; suara milik penyedia lain dilewati')
+
+  // 4. A custom LLM provider with a key, made active, for the "read" run after the restart.
+  const now = getSettings()
+  setSettings({
+    customProviders: [
+      ...now.customProviders.filter((p) => p.id !== 'harness-llm'),
+      { id: 'harness-llm', name: 'Harness LLM', roles: ['llm'], kind: 'custom', protocol: 'openai-chat', note: '', baseUrl: 'http://localhost:9/v1' }
+    ],
+    providers: { ...now.providers, llm: { activeId: 'harness-llm', models: { 'harness-llm': { llm: 'harness-model' } } } }
+  })
+  setSecret('harness-llm', 'harness-custom-key')
+  if (resolveActive(getSettings(), 'llm').provider.id !== 'harness-llm') fail('Penyedia custom tidak bisa dijadikan aktif')
+  console.log('[checkSettings] write: penyedia custom disimpan dan dijadikan aktif')
 }
 
 /**
@@ -1479,7 +1615,9 @@ export function attachDevHarness(win: BrowserWindow): void {
   const planPath = process.env.STUDIO_CAPTURE_PLAN
   if (!planPath) return
   let plan: {
-    main?: 'seed' | 'seedEpisodes' | 'checkIsolation' | 'checkPhase3' | 'checkPhase4' | 'checkPhase6' | 'checkPhase7' | 'checkPhase8' | 'export' | 'key' | 'overlays' | 'speech' | 'videos'
+    main?: 'seed' | 'seedEpisodes' | 'checkIsolation' | 'checkPhase3' | 'checkPhase4' | 'checkPhase6' | 'checkPhase7' | 'checkPhase8' | 'checkSettings' | 'export' | 'key' | 'overlays' | 'speech' | 'videos'
+    /** For main "checkSettings": "write" before a restart, "read" in the next run with the same STUDIO_USER_DATA. */
+    phase?: 'write' | 'read'
     openProject?: boolean
     exportTo?: string
     encoder?: ExportOptions['encoder']
@@ -1520,6 +1658,7 @@ export function attachDevHarness(win: BrowserWindow): void {
         if (step.main === 'checkPhase6' && (step.projectId ?? demoId)) await checkPhase6((step.projectId ?? demoId)!)
         if (step.main === 'checkPhase7' && (step.projectId ?? demoId)) await checkPhase7((step.projectId ?? demoId)!)
         if (step.main === 'checkPhase8' && (step.projectId ?? demoId)) await checkPhase8((step.projectId ?? demoId)!)
+        if (step.main === 'checkSettings') checkSettings(step.phase ?? 'write')
         if (step.openProject && demoId) {
           await win.webContents.executeJavaScript(`(() => { window.useApp?.getState().go({ name: 'project', id: ${JSON.stringify(demoId)} }); })()`)
         }

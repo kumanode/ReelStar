@@ -941,6 +941,7 @@ export interface SeriesProgressSummary {
   totalClips: number
   missingClipImages: number
   missingClipVideos: number
+  missingClipAudio?: number
 }
 
 export interface PlanBatchScriptsResult {

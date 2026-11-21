@@ -1976,6 +1976,24 @@ export function setPropSheet(id: string, assetId: string | null): void {
   getDb().prepare('UPDATE props SET sheet_asset_id = ? WHERE id = ?').run(assetId, id)
 }
 
+/**
+ * Fills the empty fields of `a` from `b`, recursing into nested objects. Profiles read from the database are {} or
+ * hold empty strings, so "a ?? b" would keep an empty profile and drop everything the extraction found; filled
+ * values the creator wrote are never replaced.
+ */
+export function fillEmptyFields<T extends object>(a: T, b: T): T {
+  const out = { ...a } as Record<string, unknown>
+  for (const [k, v] of Object.entries(b)) {
+    const cur = out[k]
+    if (cur && typeof cur === 'object' && !Array.isArray(cur) && v && typeof v === 'object' && !Array.isArray(v)) {
+      out[k] = fillEmptyFields(cur as object, v as object)
+    } else if (cur == null || (typeof cur === 'string' && !cur.trim()) || (Array.isArray(cur) && !cur.length)) {
+      out[k] = v
+    }
+  }
+  return out as T
+}
+
 export function acceptLorebookCandidates(input: AcceptLorebookCandidatesInput): {
   createdCharacters: Character[]
   createdDerivatives: CharacterDerivative[]
@@ -2015,7 +2033,7 @@ export function acceptLorebookCandidates(input: AcceptLorebookCandidatesInput): 
         const updated = updateCharacter(found.id, {
           aliases: newAliases,
           description: found.description || cand.description,
-          profile: found.profile || cand.profile,
+          profile: fillEmptyFields(found.profile ?? {}, cand.profile ?? {}),
           voiceStyle: found.voiceStyle || cand.voiceStyle
         })
         charMapByName.set(cand.name.trim().toLowerCase(), updated.id)
@@ -2042,7 +2060,7 @@ export function acceptLorebookCandidates(input: AcceptLorebookCandidatesInput): 
         updateLocation(found.id, {
           aliases: newAliases,
           description: found.description || cand.description,
-          profile: found.profile || cand.profile
+          profile: fillEmptyFields(found.profile ?? {}, cand.profile ?? {})
         })
       } else {
         const created = createLocation({
@@ -2065,7 +2083,7 @@ export function acceptLorebookCandidates(input: AcceptLorebookCandidatesInput): 
         updateProp(found.id, {
           aliases: newAliases,
           description: found.description || cand.description,
-          profile: found.profile || cand.profile
+          profile: fillEmptyFields(found.profile ?? {}, cand.profile ?? {})
         })
       } else {
         const created = createProp({

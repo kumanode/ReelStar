@@ -155,8 +155,8 @@ function videoDurations(project: ProjectModels, ctx: Pick<GenerationPrerequisite
  */
 export function videoSecondsFor(
   project: ProjectModels & Pick<Project, 'dialogAudio'>,
-  clip: Pick<Clip, 'durationMs' | 'speakerId' | 'narration'>,
-  ctx: Pick<GenerationPrerequisitesContext, 'isFlow2Api' | 'flow2apiVideoModel'>
+  clip: Pick<Clip, 'durationMs' | 'speakerId' | 'narration'> & { shotDetail?: Pick<ShotDetail, 'dialogueType'> | null },
+  ctx: Pick<GenerationPrerequisitesContext, 'isFlow2Api' | 'flow2apiVideoModel' | 'activeVideoModel'>
 ): { seconds: number; longest: number; speechMs: number; fits: boolean } {
   const speechMs = isVideoDialogue(project, clip) ? estimateNarrationMs(clip.narration) : 0
   const want = Math.max(1, Math.ceil(Math.max(clip.durationMs, speechMs) / 1000))
@@ -236,7 +236,9 @@ export function checkClipVideoPrerequisites(clip: Clip, project: Project, ctx: G
 
   if (clip.continueFromPrevious) {
     if (ctx.clips && ctx.clips.length > 0) {
-      const sorted = [...ctx.clips].sort((a, b) => a.sort - b.sort)
+      // Scope to the clip's own episode so clips from other episodes (which also start at sort 0) never interleave.
+      const sameEpisode = clip.episodeId ? ctx.clips.filter((c) => c.episodeId === clip.episodeId) : ctx.clips
+      const sorted = [...sameEpisode].sort((a, b) => a.sort - b.sort)
       const idx = sorted.findIndex((c) => c.id === clip.id)
       if (idx <= 0) {
         blockers.push('Shot pertama tidak bisa menyambung dari shot sebelumnya.')
@@ -254,9 +256,10 @@ export function checkClipVideoPrerequisites(clip: Clip, project: Project, ctx: G
     blockers.push('Klip belum punya gambar storyboard. Buat gambarnya dulu.')
   }
 
-  if (clip.speakerId && project.dialogAudio === 'video') {
+  // Only on-screen dialogue uses the video model's native audio; O.S./V.O./narration always go through TTS.
+  if (clip.speakerId && project.dialogAudio === 'video' && (clip.shotDetail?.dialogueType ?? 'dialogue') === 'dialogue') {
     const isFlow = !!ctx.isFlow2Api
-    const vModelId = isFlow ? (effectiveVideoModelId(project.videoModel, ctx) ?? project.videoModel) : project.videoModel
+    const vModelId = effectiveVideoModelId(project.videoModel, ctx) ?? project.videoModel
     if (!modelSupportsNativeAudio(vModelId, isFlow)) {
       blockers.push('Model video terpilih tidak mendukung dialog bersuara. Ganti model video yang mendukung suara (misal Veo 3.1) atau alihkan mode dialog ke TTS.')
     }
@@ -333,7 +336,8 @@ export function getClipImageStatus(clip: Clip, project: Project, ctx: Generation
 export function getClipVideoStatus(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): ClipStatusResult {
   let prevAssetId: string | null = null
   if (clip.continueFromPrevious && ctx.clips) {
-    const sorted = [...ctx.clips].sort((a, b) => a.sort - b.sort)
+    const sameEpisode = clip.episodeId ? ctx.clips.filter((c) => c.episodeId === clip.episodeId) : ctx.clips
+    const sorted = [...sameEpisode].sort((a, b) => a.sort - b.sort)
     const idx = sorted.findIndex((c) => c.id === clip.id)
     if (idx > 0) {
       const prev = sorted[idx - 1]
