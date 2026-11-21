@@ -25,6 +25,7 @@ export function StudioSidebar() {
   const {
     activeView,
     setActiveView,
+    setActiveTab,
     sidebarCollapsed,
     toggleSidebar,
     episodes,
@@ -33,6 +34,12 @@ export function StudioSidebar() {
     createEpisode
   } = useProject()
 
+  const handleOpenEpisode = async (epId: string) => {
+    await switchEpisode(epId)
+    setActiveTab('plan')
+    setActiveView('episode')
+  }
+
   const handleAddEpisode = async () => {
     const nextNum = episodes.length + 1
     const newEp = await createEpisode({
@@ -40,6 +47,7 @@ export function StudioSidebar() {
       episodeNum: nextNum
     })
     await switchEpisode(newEp.id)
+    setActiveTab('plan')
     setActiveView('episode')
   }
 
@@ -135,10 +143,7 @@ export function StudioSidebar() {
               <button
                 key={ep.id}
                 type="button"
-                onClick={() => {
-                  void switchEpisode(ep.id)
-                  setActiveView('episode')
-                }}
+                onClick={() => void handleOpenEpisode(ep.id)}
                 title={`Ep ${ep.episodeNum}: ${ep.title} (${STATUS_LABEL[ep.status]})`}
                 className={cx(
                   'relative flex size-8 items-center justify-center rounded-lg font-mono text-xs font-bold transition-colors',
@@ -155,10 +160,7 @@ export function StudioSidebar() {
             <button
               key={ep.id}
               type="button"
-              onClick={() => {
-                void switchEpisode(ep.id)
-                setActiveView('episode')
-              }}
+              onClick={() => void handleOpenEpisode(ep.id)}
               className={cx(
                 'group flex h-8 w-full items-center justify-between rounded-lg px-2 text-xs transition-colors',
                 isActive ? 'bg-sun-soft text-ink font-semibold' : 'text-ink-2 hover:bg-sand hover:text-ink'

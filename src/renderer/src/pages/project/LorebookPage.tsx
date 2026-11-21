@@ -87,6 +87,8 @@ export function LorebookPage() {
     switchEpisode,
     setActiveView,
     setActiveTab: setProjectActiveTab,
+    pendingLorebookExtract,
+    consumeLorebookExtract,
     flush,
     refreshLorebook
   } = useProject()
@@ -182,9 +184,12 @@ export function LorebookPage() {
 
   const handleExtractLorebook = async () => {
     if (!project) return
-    const hasStory = !!project.sourceText?.trim() || !!project.synopsis?.trim()
+    const hasStory =
+      !!project.sourceText?.trim() ||
+      !!project.synopsis?.trim() ||
+      episodes.some((e) => e.summary.trim() || e.hook?.trim() || e.sourceText?.trim() || e.scriptDraft?.shots?.length)
     if (!hasStory) {
-      toast('info', 'Teks cerita atau premis di Episode Hub masih kosong. Isi dulu sebelum ekstraksi.')
+      toast('info', 'Teks cerita atau ringkasan episode masih kosong. Isi dulu di Episode Hub sebelum ekstraksi.')
       return
     }
     setExtracting(true)
@@ -204,6 +209,13 @@ export function LorebookPage() {
       setExtracting(false)
     }
   }
+
+  // Triggered when the creator clicks "Lanjut ke Lorebook" from Episode Hub so AI immediately extracts entities.
+  useEffect(() => {
+    if (!pendingLorebookExtract || !project || extracting) return
+    consumeLorebookExtract()
+    void handleExtractLorebook()
+  }, [pendingLorebookExtract, project?.id])
 
   const handleAcceptCandidates = async (input: AcceptLorebookCandidatesInput) => {
     try {

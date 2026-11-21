@@ -45,9 +45,12 @@ interface ProjectState {
   activeView: 'hub' | 'lorebook' | 'episode'
   activeTab: 'plan' | 'storyboard' | 'editor'
   sidebarCollapsed: boolean
+  pendingLorebookExtract: boolean
 
   setActiveView(view: 'hub' | 'lorebook' | 'episode'): void
   setActiveTab(tab: 'plan' | 'storyboard' | 'editor'): void
+  openLorebookAndExtract(): void
+  consumeLorebookExtract(): void
   setSidebarCollapsed(collapsed: boolean): void
   toggleSidebar(): void
 
@@ -241,8 +244,9 @@ export const useProject = create<ProjectState>((set, get) => {
     canRedo: false,
 
     activeView: 'episode',
-    activeTab: 'storyboard',
+    activeTab: 'plan',
     sidebarCollapsed: false,
+    pendingLorebookExtract: false,
 
     setActiveView: (view) => {
       set({ activeView: view })
@@ -255,6 +259,12 @@ export const useProject = create<ProjectState>((set, get) => {
       const p = get().project
       if (p) localStorage.setItem(`last_tab:${p.id}`, tab)
     },
+    openLorebookAndExtract: () => {
+      set({ activeView: 'lorebook', pendingLorebookExtract: true })
+      const p = get().project
+      if (p) localStorage.setItem(`last_view:${p.id}`, 'lorebook')
+    },
+    consumeLorebookExtract: () => set({ pendingLorebookExtract: false }),
     setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
     toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
 
@@ -436,7 +446,7 @@ export const useProject = create<ProjectState>((set, get) => {
       }
 
       const defaultTab: 'plan' | 'storyboard' | 'editor' =
-        lastTab || (b.episode?.status === 'editing' || b.episode?.status === 'exported' ? 'editor' : 'storyboard')
+        lastTab || (b.episode?.status === 'editing' || b.episode?.status === 'exported' ? 'editor' : 'plan')
 
       const shouldCollapseSidebar = defaultTab === 'editor'
 
@@ -488,8 +498,9 @@ export const useProject = create<ProjectState>((set, get) => {
         canUndo: false,
         canRedo: false,
         activeView: 'episode',
-        activeTab: 'storyboard',
-        sidebarCollapsed: false
+        activeTab: 'plan',
+        sidebarCollapsed: false,
+        pendingLorebookExtract: false
       })
     },
     select: (clipId) => set({ selectedClipId: clipId }),

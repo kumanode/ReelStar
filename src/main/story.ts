@@ -197,13 +197,28 @@ export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
     clearEpisodesForReplan(projectId)
   } else {
     const progress = getPlanProgress(projectId)
+    const existingEps = listEpisodes(projectId)
     if (progress) {
       if (hashText(sourceText.slice(0, progress.coveredChars)) !== progress.coveredHash) {
         throw new Error('Bagian sumber yang sudah direncanakan telah berubah. Pakai "Rencanakan ulang" supaya episode sesuai teks terbaru.')
       }
       from = progress.coveredChars
-    } else if (listEpisodes(projectId).some((e) => e.status !== 'draft')) {
+    } else if (existingEps.some((e) => e.status !== 'draft')) {
       throw new Error('Belum ada catatan sampai mana sumber direncanakan. Pakai "Rencanakan ulang" untuk memulai dari awal.')
+    } else if (
+      existingEps.length > 0 &&
+      existingEps.every(
+        (e) =>
+          e.status === 'draft' &&
+          !e.summary.trim() &&
+          !(e.hook ?? '').trim() &&
+          !(e.cliffhanger ?? '').trim() &&
+          !e.scriptDraft &&
+          clipsOf(projectId, e.id).length === 0
+      )
+    ) {
+      // Fresh projects start with a blank Episode 1 draft; clear it so generated episodes fill from Episode 1.
+      clearEpisodesForReplan(projectId)
     }
     if (from >= sourceText.length) {
       throw new Error('Semua teks sumber sudah dipecah jadi episode. Tambahkan lanjutan cerita di bawah teks sumber, lalu lanjutkan lagi.')
@@ -1372,16 +1387,45 @@ const LOREBOOK_EXTRACTION_SCHEMA = {
 export async function extractLorebookFromStory(projectId: string): Promise<LorebookExtractionResult> {
   const p = getProject(projectId)
   const episodes = listEpisodes(projectId)
-  const source = p.sourceText.trim() || p.synopsis.trim()
-  if (!source) throw new Error('Tidak ada teks cerita atau sinopsis untuk diekstrak ke Lorebook.')
+  const epSummaries = episodes
+    .map((e) => {
+      const parts = [
+        `Ep ${e.episodeNum} (${e.title}):`,
+        e.hook ? `Hook: ${e.hook}` : '',
+        e.summary ? `Summary: ${e.summary}` : '',
+        e.storyBeats?.length ? `Beats: ${e.storyBeats.join('; ')}` : '',
+        e.cliffhanger ? `Cliffhanger: ${e.cliffhanger}` : '',
+        e.sourceText?.trim() ? `Excerpt: ${e.sourceText.trim()}` : '',
+        e.scriptDraft?.shots?.length
+          ? `Draft shots: ${e.scriptDraft.shots
+              .map((s) =>
+                [
+                  s.location ? `[Loc: ${s.location}]` : '',
+                  s.characters?.length ? `[Chars: ${s.characters.join(', ')}]` : '',
+                  s.props?.length ? `[Props: ${s.props.join(', ')}]` : '',
+                  s.speaker ? `${s.speaker}: "${s.text}"` : s.text
+                ]
+                  .filter(Boolean)
+                  .join(' ')
+              )
+              .join(' | ')}`
+          : ''
+      ].filter(Boolean)
+      return parts.length > 1 ? parts.join('\n') : ''
+    })
+    .filter(Boolean)
+    .join('\n\n')
+
+  const source = p.sourceText.trim() || p.synopsis.trim() || epSummaries
+  if (!source) throw new Error('Tidak ada teks cerita, sinopsis, atau ringkasan episode untuk diekstrak ke Lorebook.')
 
   emit.storyProgress({ projectId, message: 'Menganalisis cerita untuk mengekstrak Lorebook & profil karakter...' })
 
-  const epSummaries = episodes.map((e) => `Ep ${e.episodeNum} (${e.title}): ${e.summary}. Beats: ${(e.storyBeats || []).join('; ')}`).join('\n')
   const system = [
     p.promptTemplates?.lorebook_extract ||
       'You are an expert story analyst and visual director specializing in worldbuilding bibles for vertical drama series.',
-    'Extract all recurring characters (with visual profiles and narrative bibles), their prominent costume variants with anchor keyphrases, recurring locations, and dramatic props.',
+    'Extract ALL characters mentioned or implied in the story, synopsis, or episode plans (protagonists, antagonists, supporting characters — even if mentioned only briefly), their notable costume variants with anchor keyphrases, key locations/settings, and important props.',
+    'If the text is a short synopsis or episode outline, still extract every person, place, and key object present and infer concrete, cohesive Indonesian visual details for each.',
     'Anchor keyphrases for costume variants must be concise, distinctive phrases (e.g. "gaun merah sutra belahan paha", "jas wol hitam bergaris emas") that prevent AI image/video models from drifting from key wardrobe details.',
     p.seriesGuidelines ? `Creator guidelines for this series:\n${p.seriesGuidelines}` : ''
   ].filter(Boolean).join('\n\n')
@@ -1479,43 +1523,44 @@ export function mergeLorebookCandidates(into: LorebookExtractionResult, add: Lor
 }
 
 function parseLorebookCandidates(res: any): LorebookExtractionResult {
-  const rawChars = Array.isArray(res.characters) ? res.characters : []
-  const rawDerivs = Array.isArray(res.derivatives) ? res.derivatives : []
-  const rawLocs = Array.isArray(res.locations) ? res.locations : []
-  const rawProps = Array.isArray(res.props) ? res.props : []
+  const root = res?.lorebook && typeof res.lorebook === 'object' ? res.lorebook : res
+  const rawChars = Array.isArray(root?.characters) ? root.characters : []
+  const rawDerivs = Array.isArray(root?.derivatives) ? root.derivatives : []
+  const rawLocs = Array.isArray(root?.locations) ? root.locations : []
+  const rawProps = Array.isArray(root?.props) ? root.props : []
 
   const characters: CandidateCharacter[] = rawChars.map((c: any) => ({
     tempId: randomUUID(),
     name: str(c.name),
     description: str(c.description),
-    voiceStyle: str(c.voiceStyle) || undefined,
+    voiceStyle: str(c.voiceStyle ?? c.voice_style) || undefined,
     aliases: Array.isArray(c.aliases) ? c.aliases.map(str).filter(Boolean) : [],
     profile: {
       visual: {
         age: str(c.visual?.age),
         gender: str(c.visual?.gender),
-        bodyType: str(c.visual?.bodyType),
-        facialFeatures: str(c.visual?.facialFeatures),
+        bodyType: str(c.visual?.bodyType ?? c.visual?.body_type),
+        facialFeatures: str(c.visual?.facialFeatures ?? c.visual?.facial_features),
         hair: str(c.visual?.hair),
-        distinctiveFeatures: str(c.visual?.distinctiveFeatures),
-        defaultOutfit: str(c.visual?.defaultOutfit)
+        distinctiveFeatures: str(c.visual?.distinctiveFeatures ?? c.visual?.distinctive_features),
+        defaultOutfit: str(c.visual?.defaultOutfit ?? c.visual?.default_outfit)
       },
       narrative: {
         role: str(c.narrative?.role),
         desire: str(c.narrative?.desire),
         secret: str(c.narrative?.secret),
         arc: str(c.narrative?.arc),
-        speechPattern: str(c.narrative?.speechPattern)
+        speechPattern: str(c.narrative?.speechPattern ?? c.narrative?.speech_pattern)
       }
     }
   })).filter((c: CandidateCharacter) => Boolean(c.name))
 
   const derivatives: CandidateDerivative[] = rawDerivs.map((d: any) => ({
     tempId: randomUUID(),
-    characterName: str(d.characterName),
+    characterName: str(d.characterName ?? d.character_name),
     name: str(d.name),
-    promptChange: str(d.promptChange),
-    costumeKeyphrase: str(d.costumeKeyphrase)
+    promptChange: str(d.promptChange ?? d.prompt_change),
+    costumeKeyphrase: str(d.costumeKeyphrase ?? d.costume_keyphrase)
   })).filter((d: CandidateDerivative) => Boolean(d.name && d.characterName))
 
   const locations: CandidateLocation[] = rawLocs.map((l: any) => ({
