@@ -20,8 +20,13 @@ import {
   clipImageBasis,
   getClipImageStatus,
   getClipVideoStatus,
+  getCharacterSheetStatus,
+  getDerivativeSheetStatus,
+  getLocationSheetStatus,
+  getPropSheetStatus,
   isVideoDialogue,
   planBatch,
+  planBatchSheets,
   referenceLimit,
   videoSecondsFor,
   type ClipStatusResult,
@@ -32,6 +37,8 @@ import type {
   Asset,
   BatchEstimateItem,
   BatchEstimateResult,
+  BatchEstimateSheetItem,
+  BatchEstimateSheetResult,
   Character,
   CharacterDerivative,
   Clip,
@@ -1225,6 +1232,180 @@ export async function batchEstimate(
     missingCount: items.filter((i) => i.status.status === 'missing').length,
     staleCount: items.filter((i) => i.status.status === 'stale').length
   }
+}
+
+export async function batchEstimateSheets(
+  projectId: string,
+  includeStale = false
+): Promise<BatchEstimateSheetResult> {
+  const project = getProject(projectId)
+  const ctx = prereqContext(projectId)
+  const settings = getSettings()
+  const modelName = ctx.isFlow2Api
+    ? getFlow2ApiModel(project.imageModel && !project.imageModel.includes('/') ? project.imageModel : settings.flow2apiImageModel, 'image').name
+    : getImageModel(project.imageModel).name
+
+  const characters = charactersOf(projectId)
+  const derivatives = derivativesOf(projectId)
+  const locations = locationsOf(projectId)
+  const props = propsOf(projectId)
+  const assets = assetsOf(projectId)
+
+  const charItems = characters.map((c) => ({
+    id: c.id,
+    name: c.name,
+    kind: 'character' as const,
+    status: getCharacterSheetStatus(c, project, assets)
+  }))
+
+  const charTargets = charItems.filter((i) => i.status.status === 'missing' || (includeStale && i.status.status === 'stale'))
+  const charWillBeGeneratedIds = new Set(charTargets.map((c) => c.id))
+
+  const derivItems = derivatives.map((d) => {
+    const parent = characters.find((c) => c.id === d.characterId)
+    const baseWillBeGenerated = !!parent && (charWillBeGeneratedIds.has(parent.id) || !parent.sheetAssetId)
+    return {
+      id: d.id,
+      name: `${parent ? parent.name + ' - ' : ''}${d.name}`,
+      kind: 'derivative' as const,
+      status: getDerivativeSheetStatus(d, parent, project, assets, baseWillBeGenerated)
+    }
+  })
+
+  const locItems = locations.map((l) => ({
+    id: l.id,
+    name: l.name,
+    kind: 'location' as const,
+    status: getLocationSheetStatus(l, project, assets)
+  }))
+
+  const propItems = props.map((p) => ({
+    id: p.id,
+    name: p.name,
+    kind: 'prop' as const,
+    status: getPropSheetStatus(p, project, assets)
+  }))
+
+  const allItems = [...charItems, ...derivItems, ...locItems, ...propItems]
+  const { targets, blocking } = planBatchSheets(allItems, includeStale)
+
+  let pricePerSheet: number | null = null
+  if (!ctx.isFlow2Api) {
+    const est = await estimateCredits('image', project.imageModel || '', '16:9', 0, null).catch(() => null)
+    pricePerSheet = est?.credits ?? null
+  }
+
+  const shown = allItems.filter((it) => targets.includes(it) || blocking.includes(it))
+  const itemsOut: BatchEstimateSheetItem[] = shown.map((it) => ({
+    id: it.id,
+    name: it.name,
+    kind: it.kind,
+    model: modelName,
+    status: it.status.status,
+    blockers: it.status.blockers,
+    estimatedCredits: targets.includes(it) ? pricePerSheet : null
+  }))
+
+  const totalCredits = pricePerSheet != null ? Math.round(targets.length * pricePerSheet * 10) / 10 : null
+
+  return {
+    canRun: blocking.length === 0 && targets.length > 0,
+    totalItems: targets.length,
+    totalCredits,
+    items: itemsOut,
+    blockedCount: blocking.length,
+    missingCount: allItems.filter((i) => i.status.status === 'missing').length,
+    staleCount: allItems.filter((i) => i.status.status === 'stale').length
+  }
+}
+
+export function generateMissingSheets(projectId: string, includeStale = false): Job[] {
+  const project = getProject(projectId)
+  const characters = charactersOf(projectId)
+  const derivatives = derivativesOf(projectId)
+  const locations = locationsOf(projectId)
+  const props = propsOf(projectId)
+  const assets = assetsOf(projectId)
+
+  const charItems = characters.map((c) => ({
+    id: c.id,
+    name: c.name,
+    kind: 'character' as const,
+    status: getCharacterSheetStatus(c, project, assets)
+  }))
+  const charTargets = charItems.filter((i) => i.status.status === 'missing' || (includeStale && i.status.status === 'stale'))
+  const charWillBeGeneratedIds = new Set(charTargets.map((c) => c.id))
+
+  const derivItems = derivatives.map((d) => {
+    const parent = characters.find((c) => c.id === d.characterId)
+    const baseWillBeGenerated = !!parent && (charWillBeGeneratedIds.has(parent.id) || !parent.sheetAssetId)
+    return {
+      id: d.id,
+      name: `${parent ? parent.name + ' - ' : ''}${d.name}`,
+      kind: 'derivative' as const,
+      status: getDerivativeSheetStatus(d, parent, project, assets, baseWillBeGenerated)
+    }
+  })
+
+  const locItems = locations.map((l) => ({
+    id: l.id,
+    name: l.name,
+    kind: 'location' as const,
+    status: getLocationSheetStatus(l, project, assets)
+  }))
+
+  const propItems = props.map((p) => ({
+    id: p.id,
+    name: p.name,
+    kind: 'prop' as const,
+    status: getPropSheetStatus(p, project, assets)
+  }))
+
+  const allItems = [...charItems, ...derivItems, ...locItems, ...propItems]
+  const { targets, blocking } = planBatchSheets(allItems, includeStale)
+
+  if (blocking.length) {
+    const reasons = blocking.map((b) => `${b.name}: ${b.status.blockers.join(', ')}`).join('\n')
+    throw new Error(`Ada ${blocking.length} lembar Lorebook yang terblokir:\n${reasons}`)
+  }
+
+  const wave1Targets = targets.filter((t) => t.kind !== 'derivative')
+  const wave2Targets = targets.filter((t) => t.kind === 'derivative')
+
+  const wave1Jobs: Job[] = []
+  for (const t of wave1Targets) {
+    if (t.kind === 'character') wave1Jobs.push(generateCharacterSheet(t.id))
+    else if (t.kind === 'location') wave1Jobs.push(generateLocationSheet(t.id))
+    else if (t.kind === 'prop') wave1Jobs.push(generatePropSheet(t.id))
+  }
+
+  if (wave2Targets.length > 0) {
+    void (async () => {
+      while (true) {
+        const unfinished = wave1Jobs.filter((j) => {
+          const current = getJob(j.id)
+          return current && (current.status === 'queued' || current.status === 'running')
+        })
+        if (unfinished.length === 0) break
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      for (const d of wave2Targets) {
+        try {
+          const deriv = getDerivative(d.id)
+          if (deriv) {
+            const char = getCharacter(deriv.characterId)
+            if (char?.sheetAssetId) {
+              generateDerivativeSheet(d.id)
+            }
+          }
+        } catch (err) {
+          console.error('[batch-sheet] wave 2 error:', err)
+        }
+      }
+    })()
+  }
+
+  return wave1Jobs
 }
 
 /** After a restart, keep polling Higgsfield requests that were already submitted; fail the rest. */

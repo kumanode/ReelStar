@@ -50,6 +50,7 @@ interface ProjectState {
   createEpisode(input?: Partial<Episode>): Promise<Episode>
   updateEpisode(id: string, patch: Partial<Episode>): Promise<void>
   removeEpisode(id: string): Promise<void>
+  removeAllEpisodes(): Promise<void>
   reorderEpisodes(episodeIds: string[]): Promise<void>
   refreshEpisodes(): Promise<void>
 
@@ -276,6 +277,24 @@ export const useProject = create<ProjectState>((set, get) => {
           set({ episode: null, clips: [], activeView: 'hub' })
         }
       }
+    },
+    removeAllEpisodes: async () => {
+      const p = get().project
+      if (!p) return
+      await window.api.episodes.removeAll(p.id)
+      try {
+        localStorage.removeItem(`last_episode:${p.id}`)
+      } catch {
+        // ignore storage errors
+      }
+      const b = await window.api.projects.get(p.id)
+      set({
+        episodes: [],
+        episode: null,
+        clips: [],
+        assets: Object.fromEntries(b.assets.map((a) => [a.id, a])),
+        activeView: 'hub'
+      })
     },
     reorderEpisodes: async (episodeIds) => {
       const p = get().project

@@ -30,7 +30,7 @@ import type {
 import { isDefaultCostume, isNarratorName, visualSourceOf } from '@shared/script'
 import { detectGender, FEMALE_GEMINI_VOICES, MALE_GEMINI_VOICES, geminiVoiceGender } from '@shared/models'
 import { getDb } from './db'
-import { assetUrl, projectDir, projectsRoot } from './paths'
+import { assetAbsPath, assetUrl, projectDir, projectsRoot } from './paths'
 import { getSettings } from './settings'
 
 export const DEFAULT_EDITOR: EditorSettings = {
@@ -79,6 +79,7 @@ const toProject = (r: Row): Project => ({
   dialogAudio: r.dialog_audio ?? 'video',
   storyPlan: r.story_plan_json ? JSON.parse(r.story_plan_json) : null,
   durationSec: r.duration_sec,
+  targetEpisodeCount: r.target_episode_count ?? null,
   language: r.language,
   aspectRatio: r.aspect_ratio,
   styleId: r.style_id,
@@ -310,6 +311,35 @@ export function removeEpisode(id: string): void {
   getDb().prepare('DELETE FROM episodes WHERE id = ?').run(id)
 }
 
+export function removeAllEpisodes(projectId: string): void {
+  const db = getDb()
+  const assetsToDelete = db
+    .prepare(
+      `SELECT local_path FROM assets WHERE project_id = ? AND (episode_id IS NOT NULL OR clip_id IS NOT NULL)`
+    )
+    .all(projectId) as { local_path: string }[]
+
+  for (const a of assetsToDelete) {
+    if (a.local_path) {
+      try {
+        const fullPath = assetAbsPath(projectId, a.local_path)
+        if (existsSync(fullPath)) rmSync(fullPath, { force: true })
+      } catch {
+        // ignore disk removal errors
+      }
+    }
+  }
+
+  db.transaction(() => {
+    db.prepare('DELETE FROM assets WHERE project_id = ? AND (episode_id IS NOT NULL OR clip_id IS NOT NULL)').run(projectId)
+    db.prepare('DELETE FROM jobs WHERE project_id = ? AND (episode_id IS NOT NULL OR clip_id IS NOT NULL)').run(projectId)
+    db.prepare('DELETE FROM episodes WHERE project_id = ?').run(projectId)
+    db.prepare('DELETE FROM settings WHERE key = ?').run(`plan_progress:${projectId}`)
+    db.prepare('DELETE FROM settings WHERE key = ?').run(`last_episode:${projectId}`)
+    touchProject(projectId)
+  })()
+}
+
 export function reorderEpisodes(projectId: string, episodeIds: string[]): Episode[] {
   const db = getDb()
   db.transaction(() => {
@@ -467,24 +497,23 @@ export function getBundle(id: string, episodeId?: string): ProjectBundle {
     const lastId = getStoredSetting(`last_episode:${id}`)
     if (lastId) activeEpisode = episodes.find((e) => e.id === lastId)
   }
-  if (!activeEpisode) {
+  if (!activeEpisode && episodes.length > 0) {
     activeEpisode = episodes[0]
   }
-  if (!activeEpisode) {
-    activeEpisode = createEpisode(id, { title: 'Episode 1' })
+  if (activeEpisode) {
+    setStoredSetting(`last_episode:${id}`, activeEpisode.id)
   }
-  setStoredSetting(`last_episode:${id}`, activeEpisode.id)
 
   return {
     // Preview and export both read project.editor, so it carries the active episode's timeline settings.
     project: { ...project, editor: editorOf(project, activeEpisode) },
-    episode: activeEpisode,
+    episode: activeEpisode ?? null,
     episodes,
     characters: charactersOf(id),
     derivatives: (db.prepare('SELECT * FROM character_derivatives WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toCharacterDerivative),
     locations: (db.prepare('SELECT * FROM locations WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toLocation),
     props: (db.prepare('SELECT * FROM props WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toProp),
-    clips: clipsOf(id, activeEpisode.id),
+    clips: activeEpisode ? clipsOf(id, activeEpisode.id) : [],
     assets: (db.prepare('SELECT * FROM assets WHERE project_id = ? ORDER BY created_at').all(id) as Row[]).map(toAsset),
     jobs: (
       db
@@ -518,13 +547,14 @@ export function saveSnapshot(snap: ProjectSnapshot): number {
   const epId = snap.episodeId
   db.transaction(() => {
     db.prepare(
-      `UPDATE projects SET title = @title, synopsis = @synopsis, story_plan_json = @storyPlan, duration_sec = @durationSec, language = @language,
+      `UPDATE projects SET title = @title, synopsis = @synopsis, story_plan_json = @storyPlan, duration_sec = @durationSec, target_episode_count = @targetEpisodeCount, language = @language,
         aspect_ratio = @aspectRatio, style_id = @styleId, tts_provider = @ttsProvider, tts_voice = @ttsVoice,
         image_model = @imageModel, video_model = @videoModel, video_resolution = @videoResolution, status = @status, step = @step, editor_json = @editor,
         source_text = @sourceText, source_kind = @sourceKind, dialog_audio = @dialogAudio, updated_at = @now
        WHERE id = @id`
     ).run({
       ...p,
+      targetEpisodeCount: p.targetEpisodeCount ?? null,
       storyPlan: p.storyPlan ? JSON.stringify(p.storyPlan) : null,
       editor: JSON.stringify(p.editor),
       sourceText: p.sourceText ?? '',
@@ -662,9 +692,9 @@ export function duplicateProject(id: string): ProjectSummary {
   db.transaction(() => {
     const projectEditor = copyEditor({ ...DEFAULT_EDITOR, ...JSON.parse(p.editor_json || '{}') })
     db.prepare(
-      `INSERT INTO projects (id, title, synopsis, story_plan_json, duration_sec, language, aspect_ratio, style_id, tts_provider, tts_voice,
+      `INSERT INTO projects (id, title, synopsis, story_plan_json, duration_sec, target_episode_count, language, aspect_ratio, style_id, tts_provider, tts_voice,
          image_model, video_model, video_resolution, status, step, cover_asset_id, editor_json, source_text, source_kind, dialog_audio, created_at, updated_at)
-       SELECT @newId, @title, synopsis, story_plan_json, duration_sec, language, aspect_ratio, style_id, tts_provider, tts_voice,
+       SELECT @newId, @title, synopsis, story_plan_json, duration_sec, target_episode_count, language, aspect_ratio, style_id, tts_provider, tts_voice,
          image_model, video_model, video_resolution, status, step, @cover, @editorJson, source_text, source_kind, dialog_audio, @now, @now
        FROM projects WHERE id = @id`
     ).run({

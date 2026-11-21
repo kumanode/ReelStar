@@ -22,13 +22,15 @@ const api: StudioApi = {
     save: call('projects:save'),
     remove: call('projects:remove'),
     duplicate: call('projects:duplicate'),
-    setCover: call('projects:setCover')
+    setCover: call('projects:setCover'),
+    progress: call('projects:progress')
   },
   episodes: {
     list: call('episodes:list'),
     create: call('episodes:create'),
     update: call('episodes:update'),
     remove: call('episodes:remove'),
+    removeAll: call('episodes:removeAll'),
     reorder: call('episodes:reorder')
   },
   lorebook: {
@@ -64,6 +66,8 @@ const api: StudioApi = {
   story: {
     planEpisodes: call('story:planEpisodes'),
     planEpisodeScript: call('story:planEpisodeScript'),
+    planAllScripts: call('story:planAllScripts'),
+    cancelBatchScripts: call('story:cancelBatchScripts'),
     confirmEpisodeScript: call('story:confirmEpisodeScript'),
     writePrompts: call('story:writePrompts'),
     visuals: call('story:visuals'),
@@ -88,7 +92,9 @@ const api: StudioApi = {
     cancel: call('generate:cancel'),
     cancelProject: call('generate:cancelProject'),
     estimate: call('generate:estimate'),
-    batchEstimate: call('generate:batchEstimate')
+    batchEstimate: call('generate:batchEstimate'),
+    batchEstimateSheets: call('generate:batchEstimateSheets'),
+    missingSheets: call('generate:missingSheets')
   },
   clips: {
     split: call('clips:split'),

@@ -42,6 +42,7 @@ dalam transaksi, lalu `user_version` dinaikkan.
 | 10 | `clips.speaker_id`, `characters.tts_provider` |
 | 11 | `projects.story_plan_json` untuk hook dan kerangka cerita yang ditinjau |
 | 12 | Studio multi-episode: `episodes` + backfill Episode 1; kolom drama `clips` (`episode_id`, `emotion`, `costume_ids`, `location_id`, `prop_ids`, `framing`, `source_excerpt`); tabel `character_derivatives`, `locations`, `props`; kolom aset & job `episode_id` |
+| 13 | `projects.target_episode_count` untuk target jumlah episode serial |
 
 **Aturan:** tambahkan migrasi baru di akhir. Jangan mengubah migrasi yang sudah ada, karena pengguna lama sudah
 menjalankannya.
@@ -55,6 +56,7 @@ menjalankannya.
 | `dialogAudio` | mode suara serial: `video` (suara bawaan video Veo/Sora) atau `tts` (suara narasi/karakter dipotong) |
 | `storyPlan` | plan cerita JSON sebelum naskah dibuat: gaya narasi, judul, pertanyaan, pembuka, bab (ringkasan, detail kunci, `beats`, sasaran adegan), penutup, hal yang dihindari, sifat isi, serta fakta untuk dicek. Field baru bersifat opsional agar plan lama (`hook` + `brief` + babak) tetap terbaca; dinormalisasi saat naskah dibuat. |
 | `durationSec`, `language`, `aspectRatio` | target durasi, bahasa naskah/suara, `16:9` atau `9:16` |
+| `targetEpisodeCount` | target jumlah episode yang direncanakan (default 3 saat serial dibuat, null jika belum disetel) |
 | `styleId` | gaya visual (`src/shared/styles.ts`, 24 gaya) |
 | `ttsProvider`, `ttsVoice` | `gemini` atau `elevenlabs` + ID suara |
 | `imageModel`, `videoModel`, `videoResolution` | model Higgsfield per proyek (null = bawaan aplikasi) |

@@ -70,9 +70,9 @@ Rincian setiap tugas ada di [plan.md](plan.md); desain di
 Rincian dan kriteria penerimaan: [Fase 6 di plan.md](plan.md#fase-6--penyempurnaan-alur-serial).
 Urutan pengerjaan yang disarankan: 35 → 32 → 31 → 34 → 33.
 
-- [ ] Tugas 31 — Target jumlah episode, durasi per episode, estimasi total, dan batas serial 1 jam.
-- [ ] Tugas 32 — Tombol lanjut ke Lorebook/naskah dan ringkasan progres serial.
-- [ ] Tugas 33 — Generate batch lembar Lorebook dengan estimasi biaya dan pemeriksaan prasyarat.
-- [ ] Tugas 34 — Buat draf naskah semua episode yang belum punya draf; jangan otomatis konfirmasi/menimpa.
-- [ ] Tugas 35 — Hapus semua episode dengan konfirmasi; pertahankan sumber cerita dan Lorebook.
-- [ ] Checkpoint 6 — typecheck/build dan verifikasi alur/batch massal lewat dev harness.
+- [x] Tugas 31 — Target jumlah episode, durasi per episode, estimasi total, dan batas serial 1 jam.
+- [x] Tugas 32 — Tombol lanjut ke Lorebook/naskah dan ringkasan progres serial.
+- [x] Tugas 33 — Generate batch lembar Lorebook dengan estimasi biaya dan pemeriksaan prasyarat.
+- [x] Tugas 34 — Buat draf naskah semua episode yang belum punya draf; jangan otomatis konfirmasi/menimpa.
+- [x] Tugas 35 — Hapus semua episode dengan konfirmasi; pertahankan sumber cerita dan Lorebook.
+- [x] Checkpoint 6 — typecheck/build dan verifikasi alur/batch massal lewat dev harness.

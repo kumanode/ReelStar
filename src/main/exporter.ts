@@ -691,7 +691,7 @@ async function renderProject(ctx: TaskCtx, projectId: string, opts: ExportOption
   if (!bundle.clips.length) throw new Error('Proyek belum punya klip')
   const size = outputSize(bundle.project.aspectRatio, opts.resolution)
   const tmp = join(dataDir(), 'tmp', `export-${ctx.jobId}`)
-  const epSubdir = opts.episodeId || bundle.episode.id
+  const epSubdir = opts.episodeId || bundle.episode?.id || 'main'
   const cacheDir = join(dataDir(), 'tmp', 'export-cache', projectId, epSubdir)
   mkdirSync(tmp, { recursive: true })
   mkdirSync(cacheDir, { recursive: true })

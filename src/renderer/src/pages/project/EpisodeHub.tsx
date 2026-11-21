@@ -11,9 +11,11 @@ import {
   Trash2,
   Clock,
   Layers,
-  Loader2
+  Loader2,
+  AlertTriangle
 } from 'lucide-react'
-import type { Episode, EpisodeStatus, SourceKind } from '@shared/types'
+import type { Episode, EpisodeStatus, SeriesProgressSummary, SourceKind } from '@shared/types'
+import { EPISODE_DURATION_OPTIONS, MAX_SERIES_DURATION_SEC } from '@shared/validation'
 import { Badge, Button, IconButton, Menu, Segmented, confirmDialog, cx } from '../../components/ui'
 import { Select } from '../../components/Select'
 import { AutoTextarea } from '../../components/AutoTextarea'
@@ -30,6 +32,19 @@ const STATUS_BADGE: Record<EpisodeStatus, { tone: 'draft' | 'info' | 'warn' | 'o
   exported: { tone: 'ok', label: 'Terekspor' }
 }
 
+const TARGET_EPISODE_OPTIONS = Array.from({ length: 20 }, (_, i) => ({
+  value: i + 1,
+  label: `${i + 1} episode`
+}))
+
+function formatDuration(sec: number): string {
+  const m = Math.floor(sec / 60)
+  const s = sec % 60
+  if (m === 0) return `${s} detik`
+  if (s === 0) return `${m} menit`
+  return `${m} m ${s} d`
+}
+
 export function EpisodeHub() {
   const {
     project,
@@ -38,6 +53,7 @@ export function EpisodeHub() {
     createEpisode,
     updateEpisode,
     removeEpisode,
+    removeAllEpisodes,
     reorderEpisodes,
     switchEpisode,
     setActiveView,
@@ -49,21 +65,46 @@ export function EpisodeHub() {
   const [showSource, setShowSource] = useState(Boolean(project?.sourceText))
   const [isPlanning, setIsPlanning] = useState(false)
   const [planMessage, setPlanMessage] = useState<string | null>(null)
+  const [isBatchDrafting, setIsBatchDrafting] = useState(false)
+  const [progress, setProgress] = useState<SeriesProgressSummary | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    return window.api.on.storyProgress((progress) => {
-      if (progress.projectId === project?.id) {
-        setPlanMessage(progress.message)
+    return window.api.on.storyProgress((progressEvent) => {
+      if (progressEvent.projectId === project?.id) {
+        setPlanMessage(progressEvent.message)
       }
     })
   }, [project?.id])
 
+  useEffect(() => {
+    if (!project?.id) return
+    let alive = true
+    window.api.projects
+      .progress(project.id)
+      .then((p) => {
+        if (alive) setProgress(p)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [project?.id, episodes.length, project?.updatedAt, isPlanning, isBatchDrafting])
+
   if (!project) return null
+
+  const targetEpCount = project.targetEpisodeCount ?? 3
+  const targetDurationSec = project.durationSec ?? 60
+  const totalEstimatedSec = targetEpCount * targetDurationSec
+  const isOverOneHour = totalEstimatedSec > MAX_SERIES_DURATION_SEC
 
   const handlePlanEpisodes = async (continuation = false) => {
     if (!project.sourceText?.trim()) {
       toast('info', 'Masukkan atau unggah teks sumber cerita terlebih dahulu.')
+      return
+    }
+    if (isOverOneHour) {
+      toast('error', 'Total durasi melebihi batas 1 jam. Sesuaikan target episode atau durasi sebelum melanjutkan.')
       return
     }
     if (!continuation && episodes.some((e) => e.status !== 'draft' || e.summary.trim())) {
@@ -79,27 +120,75 @@ export function EpisodeHub() {
     setIsPlanning(true)
     setPlanMessage('Menganalisis teks sumber...')
     try {
-      // The planner reads the saved source and may replace the open episode, so pending edits go first.
       await flush()
       await window.api.story.planEpisodes({
         projectId: project.id,
         sourceText: project.sourceText,
         sourceKind: project.sourceKind ?? 'novel',
-        targetDurationSec: project.durationSec ?? 60,
+        targetDurationSec,
+        targetEpisodeCount: targetEpCount,
         mode: continuation ? 'continue' : 'replace'
       })
       toast('success', continuation ? 'Perencanaan episode dilanjutkan.' : 'Serial selesai dipecah jadi episode.')
     } catch (err) {
       toast('error', `Gagal merencanakan episode: ${errorText(err)}`)
     } finally {
-      // Reload even after a failure: earlier parts of the source may already be saved as episodes.
       try {
         load(await window.api.projects.get(project.id), { keepHistory: false })
-      } catch {
-        // The hub keeps its current list; the toast above already told the creator what happened.
-      }
+      } catch {}
       setIsPlanning(false)
       setPlanMessage(null)
+    }
+  }
+
+  const handlePlanAllScripts = async () => {
+    setIsBatchDrafting(true)
+    try {
+      await flush()
+      const res = await window.api.story.planAllScripts(project.id)
+      if (res.plannedEpisodeIds.length > 0) {
+        toast(
+          'success',
+          `Berhasil menyusun draf naskah untuk ${res.plannedEpisodeIds.length} episode.` +
+            (res.failedEpisodes.length ? ` (${res.failedEpisodes.length} gagal)` : '')
+        )
+      } else if (res.failedEpisodes.length > 0) {
+        toast('error', `Gagal menyusun naskah: ${res.failedEpisodes[0].error}`)
+      } else {
+        toast('info', 'Semua episode sudah memiliki draf naskah atau klip.')
+      }
+    } catch (err) {
+      toast('error', `Gagal menyusun naskah batch: ${errorText(err)}`)
+    } finally {
+      try {
+        load(await window.api.projects.get(project.id), { keepHistory: false })
+      } catch {}
+      setIsBatchDrafting(false)
+    }
+  }
+
+  const handleCancelBatchDrafting = async () => {
+    try {
+      await window.api.story.cancelBatchScripts(project.id)
+      toast('info', 'Penyusunan naskah dihentikan.')
+    } catch (err) {
+      toast('error', errorText(err))
+    }
+  }
+
+  const handleDeleteAllEpisodes = async () => {
+    const ok = await confirmDialog({
+      title: 'Hapus semua episode?',
+      body: 'Seluruh episode dan klip di dalamnya akan dihapus permanen. Teks sumber cerita dan aset di Lorebook akan tetap dipertahankan.',
+      confirm: 'Hapus semua episode',
+      danger: true
+    })
+    if (!ok) return
+    try {
+      await removeAllEpisodes()
+      toast('info', 'Semua episode telah dihapus.')
+    } catch (err) {
+      toast('error', `Gagal menghapus semua episode: ${errorText(err)}`)
     }
   }
 
@@ -135,7 +224,6 @@ export function EpisodeHub() {
       title: `Episode baru`,
       episodeNum: nextNum
     })
-    // Reorder episodes array with new episode inserted at atIndex
     const currentIds = episodes.map((e) => e.id)
     currentIds.splice(atIndex, 0, newEp.id)
     await reorderEpisodes(currentIds)
@@ -183,7 +271,17 @@ export function EpisodeHub() {
               Kelola struktur episode, naskah sumber, dan alur cerita serial drama kamu.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {episodes.length > 0 && (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<ArrowRight className="size-3.5" />}
+                onClick={() => setActiveView('lorebook')}
+              >
+                Lanjut ke Lorebook
+              </Button>
+            )}
             <Button
               variant="secondary"
               size="sm"
@@ -245,58 +343,137 @@ export function EpisodeHub() {
                 className="w-full rounded-xl border border-line-2 bg-paper p-3 text-sm text-ink outline-none transition-colors focus:border-ink"
               />
 
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-2 text-xs text-muted">
-                <div className="flex items-center gap-4">
-                  <span>{(project.sourceText ?? '').length.toLocaleString()} karakter</span>
-                  <div className="flex items-center gap-2">
-                    <Clock className="size-3.5 text-ink-2" />
-                    <span>Target durasi:</span>
-                    <div className="w-40">
-                      <Select
-                        label="Target durasi episode"
-                        value={project.durationSec ?? 60}
-                        options={[
-                          { value: 45, label: '45 detik' },
-                          { value: 60, label: '60 detik (default)' },
-                          { value: 75, label: '75 detik' },
-                          { value: 90, label: '90 detik' },
-                          { value: 120, label: '120 detik' }
-                        ]}
-                        onChange={(v) => updateProject({ durationSec: Number(v) })}
-                        size="sm"
-                      />
+              <div className="flex flex-col gap-3 pt-2 text-xs text-muted">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex flex-wrap items-center gap-4">
+                    <span>{(project.sourceText ?? '').length.toLocaleString()} karakter</span>
+
+                    <div className="flex items-center gap-2">
+                      <Layers className="size-3.5 text-ink-2" />
+                      <span>Target episode:</span>
+                      <div className="w-32">
+                        <Select
+                          label="Target jumlah episode"
+                          value={targetEpCount}
+                          options={TARGET_EPISODE_OPTIONS}
+                          onChange={(v) => updateProject({ targetEpisodeCount: Number(v) })}
+                          size="sm"
+                        />
+                      </div>
                     </div>
+
+                    <div className="flex items-center gap-2">
+                      <Clock className="size-3.5 text-ink-2" />
+                      <span>Durasi per episode:</span>
+                      <div className="w-44">
+                        <Select
+                          label="Target durasi episode"
+                          value={targetDurationSec}
+                          options={EPISODE_DURATION_OPTIONS}
+                          onChange={(v) => updateProject({ durationSec: Number(v) })}
+                          size="sm"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 font-medium text-ink-2">
+                      <span>Total estimasi:</span>
+                      <span className={cx('font-mono font-bold', isOverOneHour ? 'text-bad' : 'text-accent-dark')}>
+                        {formatDuration(totalEstimatedSec)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {isPlanning && (
+                      <div className="flex items-center gap-2 rounded-xl bg-accent-soft px-3 py-1.5 text-xs font-medium text-accent-dark">
+                        <Loader2 className="size-3.5 animate-spin" />
+                        <span>{planMessage || 'Sedang merencanakan episode...'}</span>
+                      </div>
+                    )}
+                    {episodes.length > 0 && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<Sparkles className="size-3.5" />}
+                        disabled={isPlanning || !project.sourceText?.trim() || isOverOneHour}
+                        onClick={() => void handlePlanEpisodes(true)}
+                      >
+                        Lanjutkan perencanaan
+                      </Button>
+                    )}
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      icon={isPlanning ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                      disabled={isPlanning || !project.sourceText?.trim() || isOverOneHour}
+                      onClick={() => void handlePlanEpisodes(false)}
+                    >
+                      {episodes.length > 0 ? 'Rencanakan ulang' : 'Pecah jadi episode'}
+                    </Button>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  {isPlanning && (
-                    <div className="flex items-center gap-2 rounded-xl bg-accent-soft px-3 py-1.5 text-xs font-medium text-accent-dark">
-                      <Loader2 className="size-3.5 animate-spin" />
-                      <span>{planMessage || 'Sedang merencanakan episode...'}</span>
-                    </div>
-                  )}
-                  {episodes.length > 0 && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      icon={<Sparkles className="size-3.5" />}
-                      disabled={isPlanning || !project.sourceText?.trim()}
-                      onClick={() => void handlePlanEpisodes(true)}
-                    >
-                      Lanjutkan perencanaan
-                    </Button>
-                  )}
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    icon={isPlanning ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
-                    disabled={isPlanning || !project.sourceText?.trim()}
-                    onClick={() => void handlePlanEpisodes(false)}
-                  >
-                    {episodes.length > 0 ? 'Rencanakan ulang' : 'Pecah jadi episode'}
-                  </Button>
-                </div>
+                {isOverOneHour && (
+                  <div className="flex items-center gap-2 rounded-xl border border-bad/30 bg-bad-soft/60 px-3 py-2 text-xs text-bad-ink">
+                    <AlertTriangle className="size-4 shrink-0 text-bad" />
+                    <span>
+                      Total durasi serial maksimal 1 jam (60 menit). Kurangi target jumlah episode atau pilih durasi per episode yang lebih pendek agar perencanaan dapat dijalankan.
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Series Progress Summary Card */}
+        {episodes.length > 0 && progress && (
+          <div className="flex flex-col gap-2 rounded-2xl border border-line bg-surface p-4">
+            <div className="flex items-center justify-between">
+              <span className="font-display text-xs font-bold uppercase tracking-wider text-muted">
+                Ringkasan Progres Serial
+              </span>
+              <span className="text-xs text-muted">
+                Total {episodes.length} episode · Estimasi durasi {formatDuration(episodes.reduce((acc, ep) => acc + (ep.durationSec || targetDurationSec), 0))}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 pt-1">
+              <div className="flex flex-col rounded-xl border border-line-2/70 bg-paper p-2.5">
+                <span className="text-[11px] text-muted">Rencana Episode</span>
+                <span className="font-display text-base font-bold text-ink">
+                  {progress.plannedEpisodes} / {progress.totalEpisodes}
+                </span>
+              </div>
+              <div className="flex flex-col rounded-xl border border-line-2/70 bg-paper p-2.5">
+                <span className="text-[11px] text-muted">Draf Naskah</span>
+                <span className="font-display text-base font-bold text-ink">
+                  {progress.draftScriptEpisodes} episode
+                </span>
+              </div>
+              <div className="flex flex-col rounded-xl border border-line-2/70 bg-paper p-2.5">
+                <span className="text-[11px] text-muted">Dikonfirmasi</span>
+                <span className="font-display text-base font-bold text-ok-ink">
+                  {progress.confirmedEpisodes} episode
+                </span>
+              </div>
+              <div className="flex flex-col rounded-xl border border-line-2/70 bg-paper p-2.5">
+                <span className="text-[11px] text-muted">Aset Tanpa Lembar</span>
+                <span className={cx('font-display text-base font-bold', progress.missingSheets > 0 ? 'text-sun-ink' : 'text-ok-ink')}>
+                  {progress.missingSheets} / {progress.totalAssets}
+                </span>
+              </div>
+              <div className="flex flex-col rounded-xl border border-line-2/70 bg-paper p-2.5">
+                <span className="text-[11px] text-muted">Belum Bergambar</span>
+                <span className={cx('font-display text-base font-bold', progress.missingClipImages > 0 ? 'text-sun-ink' : 'text-ok-ink')}>
+                  {progress.missingClipImages} / {progress.totalClips}
+                </span>
+              </div>
+              <div className="flex flex-col rounded-xl border border-line-2/70 bg-paper p-2.5">
+                <span className="text-[11px] text-muted">Belum Bervideo</span>
+                <span className={cx('font-display text-base font-bold', progress.missingClipVideos > 0 ? 'text-sun-ink' : 'text-ok-ink')}>
+                  {progress.missingClipVideos} / {progress.totalClips}
+                </span>
               </div>
             </div>
           </div>
@@ -345,20 +522,56 @@ export function EpisodeHub() {
         {/* Episode Cards Grid */}
         {episodes.length > 0 && (
           <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-2">
                 <Layers className="size-4 text-ink-2" />
                 <h2 className="font-display text-base font-bold text-ink">Daftar Episode ({episodes.length})</h2>
               </div>
-              {!showSource && (
-                <button
-                  type="button"
-                  onClick={() => setShowSource(true)}
-                  className="text-xs font-semibold text-accent hover:underline"
+              <div className="flex flex-wrap items-center gap-2">
+                {!showSource && (
+                  <button
+                    type="button"
+                    onClick={() => setShowSource(true)}
+                    className="text-xs font-semibold text-accent hover:underline mr-1"
+                  >
+                    Tampilkan sumber cerita
+                  </button>
+                )}
+
+                {isBatchDrafting && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void handleCancelBatchDrafting()}
+                    className="text-bad hover:bg-bad-soft"
+                  >
+                    Berhenti
+                  </Button>
+                )}
+
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={isBatchDrafting ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+                  disabled={isBatchDrafting || isPlanning}
+                  onClick={() => void handlePlanAllScripts()}
+                  title="Buat draf naskah shot untuk episode yang belum memiliki draf"
                 >
-                  Tampilkan sumber cerita
-                </button>
-              )}
+                  {isBatchDrafting ? 'Menyusun naskah…' : 'Buat semua naskah'}
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<Trash2 className="size-3.5 text-bad" />}
+                  disabled={isBatchDrafting || isPlanning}
+                  onClick={() => void handleDeleteAllEpisodes()}
+                  className="text-bad hover:bg-bad-soft"
+                  title="Hapus seluruh episode dan adegan, tetap pertahankan Lorebook dan teks sumber"
+                >
+                  Hapus semua episode
+                </Button>
+              </div>
             </div>
 
             <div className={cx('grid gap-4', episodes.length === 1 ? 'grid-cols-1 max-w-3xl' : 'grid-cols-1 md:grid-cols-2')}>

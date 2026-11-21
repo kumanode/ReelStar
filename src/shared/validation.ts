@@ -1,9 +1,32 @@
 import { FLOW2API_VIDEO_MODELS, getFlow2ApiModel } from './flow2api-catalog'
 import { getImageModel, getVideoModel, maxRefs, modelSupportsNativeAudio } from './higgsfield'
 import { collectReferenceSheets } from './prompts'
-import { computeClipImageBasisHash, computeClipVideoBasisHash, computeClipTtsBasisHash } from './hash'
+import {
+  computeClipImageBasisHash,
+  computeClipVideoBasisHash,
+  computeClipTtsBasisHash,
+  computeCharacterSheetBasisHash,
+  computeDerivativeSheetBasisHash,
+  computeLocationSheetBasisHash,
+  computePropSheetBasisHash
+} from './hash'
 import { estimateNarrationMs } from './script'
-import type { Asset, Character, CharacterDerivative, Clip, Job, Location, Project, Prop } from './types'
+import type { Asset, Character, CharacterDerivative, Clip, Job, Location, Project, Prop, SheetGenerationStatus } from './types'
+
+export const MIN_EPISODE_DURATION_SEC = 30
+export const MAX_EPISODE_DURATION_SEC = 180
+export const MAX_SERIES_DURATION_SEC = 3600 // 1 jam
+export const DEFAULT_TARGET_EPISODE_COUNT = 3
+
+export const EPISODE_DURATION_OPTIONS = [
+  { value: 45, label: '45 detik' },
+  { value: 60, label: '60 detik (default)' },
+  { value: 75, label: '75 detik' },
+  { value: 90, label: '90 detik' },
+  { value: 120, label: '120 detik (2 menit)' },
+  { value: 150, label: '150 detik (2,5 menit)' },
+  { value: 180, label: '180 detik (3 menit)' }
+]
 
 export type ClipGenerationStatus = 'current' | 'stale' | 'missing' | 'blocked'
 
@@ -272,4 +295,130 @@ export function dialogVoiceNote(
   }
   if (!voice) return { tone: 'info', text: 'Klip dialog video: suara dan gerak bibir dibuat langsung oleh AI video saat generate video.' }
   return null
+}
+
+export interface SheetStatusResult {
+  status: SheetGenerationStatus
+  blockers: string[]
+  basisHash: string
+  hasResult: boolean
+}
+
+export function getCharacterSheetStatus(
+  character: Character,
+  project: Pick<Project, 'styleId' | 'imageModel'>,
+  assets: Asset[] | Record<string, Asset>
+): SheetStatusResult {
+  const blockers: string[] = []
+  if (!character.name.trim()) blockers.push('Nama karakter masih kosong.')
+  const basisHash = computeCharacterSheetBasisHash({
+    name: character.name,
+    description: character.description,
+    styleId: project.styleId,
+    imageModel: project.imageModel
+  })
+  const asset = findAsset(assets, character.sheetAssetId)
+  if (asset) {
+    if (asset.meta?.uploaded) return { status: 'current', blockers: [], basisHash, hasResult: true }
+    const stored = (asset.meta as Record<string, unknown> | undefined)?.basisHash
+    if (typeof stored !== 'string' || stored === basisHash) return { status: 'current', blockers: [], basisHash, hasResult: true }
+    return blockers.length === 0
+      ? { status: 'stale', blockers: [], basisHash, hasResult: true }
+      : { status: 'blocked', blockers, basisHash, hasResult: true }
+  }
+  return blockers.length === 0
+    ? { status: 'missing', blockers: [], basisHash, hasResult: false }
+    : { status: 'blocked', blockers, basisHash, hasResult: false }
+}
+
+export function getDerivativeSheetStatus(
+  derivative: CharacterDerivative,
+  character: Character | undefined,
+  project: Pick<Project, 'imageModel'>,
+  assets: Asset[] | Record<string, Asset>,
+  baseSheetWillBeGenerated = false
+): SheetStatusResult {
+  const blockers: string[] = []
+  if (!character) {
+    blockers.push('Karakter induk tidak ditemukan.')
+  } else if (!character.sheetAssetId && !baseSheetWillBeGenerated) {
+    blockers.push(`Karakter "${character.name}" belum punya lembar referensi dasar.`)
+  }
+  const basisHash = computeDerivativeSheetBasisHash({
+    baseSheetAssetId: character?.sheetAssetId ?? null,
+    promptChange: derivative.promptChange,
+    imageModel: project.imageModel
+  })
+  const asset = findAsset(assets, derivative.sheetAssetId)
+  if (asset) {
+    if (asset.meta?.uploaded) return { status: 'current', blockers: [], basisHash, hasResult: true }
+    const stored = (asset.meta as Record<string, unknown> | undefined)?.basisHash
+    if (typeof stored !== 'string' || stored === basisHash) return { status: 'current', blockers: [], basisHash, hasResult: true }
+    return blockers.length === 0
+      ? { status: 'stale', blockers: [], basisHash, hasResult: true }
+      : { status: 'blocked', blockers, basisHash, hasResult: true }
+  }
+  return blockers.length === 0
+    ? { status: 'missing', blockers: [], basisHash, hasResult: false }
+    : { status: 'blocked', blockers, basisHash, hasResult: false }
+}
+
+export function getLocationSheetStatus(
+  location: Location,
+  project: Pick<Project, 'styleId' | 'imageModel'>,
+  assets: Asset[] | Record<string, Asset>
+): SheetStatusResult {
+  const blockers: string[] = []
+  if (!location.name.trim()) blockers.push('Nama lokasi masih kosong.')
+  const basisHash = computeLocationSheetBasisHash({
+    name: location.name,
+    description: location.description,
+    styleId: project.styleId,
+    imageModel: project.imageModel
+  })
+  const asset = findAsset(assets, location.sheetAssetId)
+  if (asset) {
+    if (asset.meta?.uploaded) return { status: 'current', blockers: [], basisHash, hasResult: true }
+    const stored = (asset.meta as Record<string, unknown> | undefined)?.basisHash
+    if (typeof stored !== 'string' || stored === basisHash) return { status: 'current', blockers: [], basisHash, hasResult: true }
+    return blockers.length === 0
+      ? { status: 'stale', blockers: [], basisHash, hasResult: true }
+      : { status: 'blocked', blockers, basisHash, hasResult: true }
+  }
+  return blockers.length === 0
+    ? { status: 'missing', blockers: [], basisHash, hasResult: false }
+    : { status: 'blocked', blockers, basisHash, hasResult: false }
+}
+
+export function getPropSheetStatus(
+  prop: Prop,
+  project: Pick<Project, 'styleId' | 'imageModel'>,
+  assets: Asset[] | Record<string, Asset>
+): SheetStatusResult {
+  const blockers: string[] = []
+  if (!prop.name.trim()) blockers.push('Nama prop masih kosong.')
+  const basisHash = computePropSheetBasisHash({
+    name: prop.name,
+    description: prop.description,
+    styleId: project.styleId,
+    imageModel: project.imageModel
+  })
+  const asset = findAsset(assets, prop.sheetAssetId)
+  if (asset) {
+    if (asset.meta?.uploaded) return { status: 'current', blockers: [], basisHash, hasResult: true }
+    const stored = (asset.meta as Record<string, unknown> | undefined)?.basisHash
+    if (typeof stored !== 'string' || stored === basisHash) return { status: 'current', blockers: [], basisHash, hasResult: true }
+    return blockers.length === 0
+      ? { status: 'stale', blockers: [], basisHash, hasResult: true }
+      : { status: 'blocked', blockers, basisHash, hasResult: true }
+  }
+  return blockers.length === 0
+    ? { status: 'missing', blockers: [], basisHash, hasResult: false }
+    : { status: 'blocked', blockers, basisHash, hasResult: false }
+}
+
+export function planBatchSheets<T extends { status: SheetStatusResult }>(items: T[], includeStale: boolean): { targets: T[]; blocking: T[] } {
+  const targets = items.filter((i) => i.status.status === 'missing' || (includeStale && i.status.status === 'stale'))
+  const blocking = items.filter((i) => i.status.status === 'blocked' && (!i.status.hasResult || includeStale))
+  return { targets, blocking }
 }

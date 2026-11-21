@@ -309,7 +309,7 @@ secara massal tanpa kehilangan kendali atas draf atau biaya generate.
   - Proyek baru selalu dibuat dengan "Episode 1". Periksa store, editor, ekspor, dan devharness tetap aman saat
     proyek tanpa episode sama sekali (store `removeEpisode` sudah menangani daftar kosong; bagian lain belum).
 
-- **Checkpoint 6** — typecheck/build bersih; dev harness memakai `STUDIO_USER_DATA` sementara; verifikasi target
+- **Checkpoint 6** *(Selesai 2026-11-21)* — typecheck/build bersih; dev harness memakai `STUDIO_USER_DATA` sementara; verifikasi target
   durasi, navigasi, batch Lorebook, pembuatan draf massal, dan penghapusan massal termasuk batal, kegagalan, serta
   episode yang sudah memiliki hasil.
 

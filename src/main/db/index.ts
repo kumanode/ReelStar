@@ -238,6 +238,9 @@ const MIGRATIONS: string[] = [
   ALTER TABLE assets ADD COLUMN prop_id TEXT;
   ALTER TABLE assets ADD COLUMN episode_id TEXT;
   ALTER TABLE jobs ADD COLUMN episode_id TEXT;
+  `,
+  `
+  ALTER TABLE projects ADD COLUMN target_episode_count INTEGER;
   `
 ]
 

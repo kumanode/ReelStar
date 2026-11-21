@@ -11,10 +11,16 @@ import {
   GitMerge,
   Trash2,
   X,
-  Shirt
+  Shirt,
+  ArrowRight
 } from 'lucide-react'
 import type { Character, Location, Prop, VoiceOption } from '@shared/types'
-import { computeDerivativeSheetBasisHash } from '@shared/hash'
+import {
+  getCharacterSheetStatus,
+  getDerivativeSheetStatus,
+  getLocationSheetStatus,
+  getPropSheetStatus
+} from '@shared/validation'
 import { geminiVoiceGender } from '@shared/models'
 import { Badge, Button, Field, IconButton, Menu, Segmented, Spinner, confirmDialog, cx, inputCls } from '../../components/ui'
 import { AutoTextarea } from '../../components/AutoTextarea'
@@ -23,6 +29,7 @@ import { errorText } from '../../lib/format'
 import { useApp } from '../../store/app'
 import { isRunning, jobFor, useProject } from '../../store/project'
 import { MergeAssetModal } from './MergeAssetModal'
+import { BatchEstimateSheetModal } from './BatchEstimateSheetModal'
 
 type LorebookTab = 'character' | 'location' | 'prop'
 
@@ -51,6 +58,7 @@ export function LorebookPage() {
     removeProp,
     switchEpisode,
     setActiveView,
+    setActiveTab: setProjectActiveTab,
     flush
   } = useProject()
   const { toast } = useApp()
@@ -58,6 +66,7 @@ export function LorebookPage() {
   const [activeTab, setActiveTab] = useState<LorebookTab>('character')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [batchModalOpen, setBatchModalOpen] = useState(false)
 
   // Merge modal state
   const [mergeState, setMergeState] = useState<{
@@ -394,18 +403,46 @@ export function LorebookPage() {
           </div>
         </div>
 
-        <Button
-          variant="primary"
-          size="sm"
-          icon={<Plus className="size-3.5" />}
-          onClick={() => {
-            if (activeTab === 'character') handleAddCharacter()
-            else if (activeTab === 'location') handleAddLocation()
-            else handleAddProp()
-          }}
-        >
-          {activeTab === 'character' ? 'Tambah Karakter' : activeTab === 'location' ? 'Tambah Lokasi' : 'Tambah Prop'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Sparkles className="size-3.5" />}
+            onClick={() => setBatchModalOpen(true)}
+          >
+            Buat semua lembar
+          </Button>
+
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<ArrowRight className="size-3.5" />}
+            onClick={() => {
+              if (episodes.length > 0) {
+                void switchEpisode(episodes[0].id)
+                setActiveView('episode')
+                setProjectActiveTab('plan')
+              } else {
+                setActiveView('hub')
+              }
+            }}
+          >
+            Lanjut ke Naskah
+          </Button>
+
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<Plus className="size-3.5" />}
+            onClick={() => {
+              if (activeTab === 'character') handleAddCharacter()
+              else if (activeTab === 'location') handleAddLocation()
+              else handleAddProp()
+            }}
+          >
+            {activeTab === 'character' ? 'Tambah Karakter' : activeTab === 'location' ? 'Tambah Lokasi' : 'Tambah Prop'}
+          </Button>
+        </div>
       </div>
 
       {/* Main Content Area: Split View (Grid on Left, Details on Right) */}
@@ -442,6 +479,11 @@ export function LorebookPage() {
                         </div>
                       )}
                       <div className="absolute top-2 right-2 flex items-center gap-1">
+                        {project && getCharacterSheetStatus(char, project, assets).status === 'stale' && (
+                          <Badge tone="warn" className="text-[10px]">
+                            Basi
+                          </Badge>
+                        )}
                         <Menu
                           trigger={(open) => (
                             <button
@@ -534,6 +576,11 @@ export function LorebookPage() {
                         </div>
                       )}
                       <div className="absolute top-2 right-2 flex items-center gap-1">
+                        {project && getLocationSheetStatus(loc, project, assets).status === 'stale' && (
+                          <Badge tone="warn" className="text-[10px]">
+                            Basi
+                          </Badge>
+                        )}
                         <Menu
                           trigger={(open) => (
                             <button
@@ -614,6 +661,11 @@ export function LorebookPage() {
                         </div>
                       )}
                       <div className="absolute top-2 right-2 flex items-center gap-1">
+                        {project && getPropSheetStatus(pr, project, assets).status === 'stale' && (
+                          <Badge tone="warn" className="text-[10px]">
+                            Basi
+                          </Badge>
+                        )}
                         <Menu
                           trigger={(open) => (
                             <button
@@ -852,24 +904,13 @@ export function LorebookPage() {
                     .filter((d) => d.characterId === selectedCharacter.id)
                     .map((variant) => {
                       const variantSheet = variant.sheetAssetId ? assets[variant.sheetAssetId] : null
-                      const baseSheet = selectedCharacter.sheetAssetId
-                        ? assets[selectedCharacter.sheetAssetId]
-                        : null
-                      // Stale (§6.G): a generated variant sheet records the base sheet and prompt_change it was made from,
-                      // so editing the costume change or remaking the base sheet both mark it. Uploaded sheets never go
-                      // stale; sheets from before basis hashes fall back to "base sheet is newer".
-                      const storedBasis = variantSheet?.meta?.basisHash
                       const isStale =
-                        !!variantSheet &&
-                        !variantSheet.meta?.uploaded &&
-                        (typeof storedBasis === 'string'
-                          ? storedBasis !==
-                            computeDerivativeSheetBasisHash({
-                              baseSheetAssetId: selectedCharacter.sheetAssetId,
-                              promptChange: variant.promptChange,
-                              imageModel: project?.imageModel ?? null
-                            })
-                          : !!baseSheet && baseSheet.createdAt > variantSheet.createdAt)
+                        getDerivativeSheetStatus(
+                          variant,
+                          selectedCharacter,
+                          { imageModel: project?.imageModel },
+                          assets
+                        ).status === 'stale'
 
                       return (
                         <div
@@ -1282,6 +1323,14 @@ export function LorebookPage() {
         kind={mergeState.kind}
         sourceId={mergeState.sourceId}
         sourceName={mergeState.sourceName}
+      />
+
+      {/* Batch Sheet Modal */}
+      <BatchEstimateSheetModal
+        open={batchModalOpen}
+        onClose={() => setBatchModalOpen(false)}
+        projectId={project?.id || ''}
+        onStarted={() => {}}
       />
     </div>
   )

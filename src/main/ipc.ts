@@ -27,6 +27,7 @@ import type {
 import { clearExportCache, nvencAvailable, startExport } from './exporter'
 import {
   batchEstimate,
+  batchEstimateSheets,
   estimateCredits,
   forgetEstimates,
   generateCharacterSheet,
@@ -40,6 +41,7 @@ import {
   generateClipsVideo,
   generateMissingImages,
   generateMissingVideos,
+  generateMissingSheets,
   generateMissingTts,
   setActiveAsset
 } from './generation'
@@ -50,6 +52,9 @@ import { assetAbsPath, sfxDir } from './paths'
 import { detachVoice, splitClip } from './editing'
 import { emit } from './events'
 import {
+  assetsOf,
+  charactersOf,
+  clipsOf,
   createCharacter,
   createDerivative,
   createEpisode,
@@ -77,6 +82,7 @@ import {
   removeCharacter,
   removeDerivative,
   removeEpisode,
+  removeAllEpisodes,
   removeLocation,
   removeProject,
   removeProp,
@@ -112,9 +118,19 @@ import {
   generateYoutubeMetadata,
   planEpisodes,
   planEpisodeScript,
+  planAllMissingEpisodeScripts,
+  cancelBatchScripts,
   planSmartSfx,
   writePrompts
 } from './story'
+import {
+  getCharacterSheetStatus,
+  getDerivativeSheetStatus,
+  getLocationSheetStatus,
+  getPropSheetStatus,
+  getClipImageStatus,
+  getClipVideoStatus
+} from '@shared/validation'
 
 
 type Handler = (...args: any[]) => unknown
@@ -158,11 +174,86 @@ export function registerIpc(): void {
     touchProject(projectId, { coverAssetId: clip.imageAssetId })
     return { coverAssetId: clip.imageAssetId }
   })
+  handle('projects:progress', (projectId: string) => {
+    const project = getProject(projectId)
+    const episodes = listEpisodes(projectId)
+    const characters = charactersOf(projectId)
+    const derivatives = derivativesOf(projectId)
+    const locations = locationsOf(projectId)
+    const props = propsOf(projectId)
+    const assets = assetsOf(projectId)
+    const allClips = clipsOf(projectId)
+
+    let plannedEpisodes = 0
+    let draftScriptEpisodes = 0
+    let confirmedEpisodes = 0
+    for (const ep of episodes) {
+      if (ep.status === 'draft' || ep.status === 'planned') {
+        plannedEpisodes++
+        if (ep.scriptDraft) draftScriptEpisodes++
+      } else {
+        confirmedEpisodes++
+      }
+    }
+
+    const totalAssets = characters.length + derivatives.length + locations.length + props.length
+    let missingSheets = 0
+    for (const c of characters) {
+      if (getCharacterSheetStatus(c, project, assets).status === 'missing') missingSheets++
+    }
+    for (const d of derivatives) {
+      const parent = characters.find((c: Character) => c.id === d.characterId)
+      if (getDerivativeSheetStatus(d, parent, project, assets).status === 'missing') missingSheets++
+    }
+    for (const l of locations) {
+      if (getLocationSheetStatus(l, project, assets).status === 'missing') missingSheets++
+    }
+    for (const p of props) {
+      if (getPropSheetStatus(p, project, assets).status === 'missing') missingSheets++
+    }
+
+    const settings = getSettings()
+    const ctx = {
+      characters,
+      derivatives,
+      locations,
+      props,
+      assets,
+      isFlow2Api: settings.defaultVisualProvider === 'flow2api',
+      flow2apiImageModel: settings.flow2apiImageModel,
+      flow2apiVideoModel: settings.flow2apiVideoModel
+    }
+
+    let missingClipImages = 0
+    let missingClipVideos = 0
+    for (const clip of allClips) {
+      const imgStat = getClipImageStatus(clip, project, ctx)
+      if (imgStat.status === 'missing') missingClipImages++
+      const vidStat = getClipVideoStatus(clip, project, ctx)
+      if (vidStat.status === 'missing') missingClipVideos++
+    }
+
+    return {
+      totalEpisodes: episodes.length,
+      plannedEpisodes,
+      draftScriptEpisodes,
+      confirmedEpisodes,
+      totalAssets,
+      missingSheets,
+      totalClips: allClips.length,
+      missingClipImages,
+      missingClipVideos
+    }
+  })
 
   handle('episodes:list', (projectId: string) => listEpisodes(projectId))
   handle('episodes:create', (projectId: string, input?: Partial<Episode>) => createEpisode(projectId, input))
   handle('episodes:update', (episodeId: string, patch: Partial<Episode>) => updateEpisode(episodeId, patch))
   handle('episodes:remove', (episodeId: string) => removeEpisode(episodeId))
+  handle('episodes:removeAll', async (projectId: string) => {
+    await cancelProjectJobs(projectId)
+    removeAllEpisodes(projectId)
+  })
   handle('episodes:reorder', (projectId: string, episodeIds: string[]) => reorderEpisodes(projectId, episodeIds))
 
   // Lorebook: Characters, Derivatives, Locations, Props, Usage, Merge
@@ -332,6 +423,8 @@ export function registerIpc(): void {
 
   handle('story:planEpisodes', (input: PlanEpisodesInput) => planEpisodes(input))
   handle('story:planEpisodeScript', (projectId: string, episodeId: string) => planEpisodeScript(projectId, episodeId))
+  handle('story:planAllScripts', (projectId: string) => planAllMissingEpisodeScripts(projectId))
+  handle('story:cancelBatchScripts', (projectId: string) => cancelBatchScripts(projectId))
   handle('story:confirmEpisodeScript', (projectId: string, episodeId: string, draft: EpisodeScriptDraft) => confirmEpisodeScript(projectId, episodeId, draft))
   handle('story:writePrompts', (projectId: string, episodeId: string, clipIds?: string[]) => writePrompts(projectId, episodeId, clipIds))
 
@@ -388,6 +481,12 @@ export function registerIpc(): void {
   handle('generate:clipsVideo', (clipIds: string[]) => generateClipsVideo(clipIds))
   handle('generate:batchEstimate', (projectId: string, episodeId: string | undefined, kind: 'image' | 'video', includeStale?: boolean) =>
     batchEstimate(projectId, episodeId, kind, includeStale)
+  )
+  handle('generate:batchEstimateSheets', (projectId: string, includeStale?: boolean) =>
+    batchEstimateSheets(projectId, includeStale)
+  )
+  handle('generate:missingSheets', (projectId: string, includeStale?: boolean) =>
+    generateMissingSheets(projectId, includeStale)
   )
   handle('generate:cancelProject', (projectId: string, kind?: string) => cancelProjectJobs(projectId, kind))
   handle('generate:missingTts', (projectId: string, episodeId?: string) => generateMissingTts(projectId, episodeId))

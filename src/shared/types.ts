@@ -184,6 +184,7 @@ export interface Project {
   dialogAudio: DialogAudio
   storyPlan: StoryPlan | null
   durationSec: number
+  targetEpisodeCount?: number | null
   language: string
   aspectRatio: AspectRatio
   styleId: string
@@ -259,6 +260,7 @@ export interface PlanEpisodesInput {
   sourceText?: string
   sourceKind?: SourceKind
   targetDurationSec?: number
+  targetEpisodeCount?: number
   /** replace: start over from the top of the source; continue: plan the part not yet covered. */
   mode?: 'replace' | 'continue'
 }
@@ -491,7 +493,7 @@ export interface Job {
 
 export interface ProjectBundle {
   project: Project
-  episode: Episode
+  episode: Episode | null
   episodes: Episode[]
   characters: Character[]
   derivatives: CharacterDerivative[]
@@ -629,6 +631,46 @@ export interface BatchEstimateResult {
   blockedCount: number
   missingCount: number
   staleCount: number
+}
+
+export type SheetGenerationStatus = 'current' | 'stale' | 'missing' | 'blocked'
+
+export interface BatchEstimateSheetItem {
+  id: string
+  name: string
+  kind: 'character' | 'derivative' | 'location' | 'prop'
+  model: string
+  status: SheetGenerationStatus
+  blockers: string[]
+  estimatedCredits: number | null
+}
+
+export interface BatchEstimateSheetResult {
+  canRun: boolean
+  totalItems: number
+  totalCredits: number | null
+  items: BatchEstimateSheetItem[]
+  blockedCount: number
+  missingCount: number
+  staleCount: number
+}
+
+export interface SeriesProgressSummary {
+  totalEpisodes: number
+  plannedEpisodes: number
+  draftScriptEpisodes: number
+  confirmedEpisodes: number
+  totalAssets: number
+  missingSheets: number
+  totalClips: number
+  missingClipImages: number
+  missingClipVideos: number
+}
+
+export interface PlanBatchScriptsResult {
+  plannedEpisodeIds: string[]
+  skippedEpisodeIds: string[]
+  failedEpisodes: { episodeId: string; title: string; error: string }[]
 }
 
 /** The local Whisper model used to time caption words. */

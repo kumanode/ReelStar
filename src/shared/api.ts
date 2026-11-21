@@ -5,6 +5,7 @@ import type {
   Asset,
   AssetUsageSummary,
   BatchEstimateResult,
+  BatchEstimateSheetResult,
   BuiltinSfx,
   Character,
   CharacterDerivative,
@@ -26,11 +27,13 @@ import type {
   ModelSource,
   MusicPrompt,
   NewProjectInput,
+  PlanBatchScriptsResult,
   PlanEpisodesInput,
   ProjectBundle,
   ProjectSnapshot,
   ProjectSummary,
   Prop,
+  SeriesProgressSummary,
   SmartSfxCue,
   TtsProvider,
   ThumbnailConcept,
@@ -49,12 +52,14 @@ export interface StudioApi {
     remove(id: string): Promise<void>
     duplicate(id: string): Promise<ProjectSummary>
     setCover(projectId: string, clipId: string): Promise<{ coverAssetId: string }>
+    progress(projectId: string): Promise<SeriesProgressSummary>
   }
   episodes: {
     list(projectId: string): Promise<Episode[]>
     create(projectId: string, input?: Partial<Episode>): Promise<Episode>
     update(episodeId: string, patch: Partial<Episode>): Promise<Episode>
     remove(episodeId: string): Promise<void>
+    removeAll(projectId: string): Promise<void>
     reorder(projectId: string, episodeIds: string[]): Promise<Episode[]>
   }
   lorebook: {
@@ -92,6 +97,10 @@ export interface StudioApi {
     planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
     /** Writes the detailed draft script (shots + new asset proposals) for an episode before confirmation. */
     planEpisodeScript(projectId: string, episodeId: string): Promise<EpisodeScriptDraft>
+    /** Plans draft scripts sequentially for all planned episodes that don't have drafts yet. */
+    planAllScripts(projectId: string): Promise<PlanBatchScriptsResult>
+    /** Cancels an ongoing batch script drafting process. */
+    cancelBatchScripts(projectId: string): Promise<void>
     /** Confirms the episode script draft, registers new assets, and creates actual clips in an atomic transaction. */
     confirmEpisodeScript(projectId: string, episodeId: string, draft: EpisodeScriptDraft): Promise<ProjectBundle>
     /** Generates labelled visualPrompt and videoPrompt for clips in an episode. */
@@ -129,6 +138,8 @@ export interface StudioApi {
     /** Credits for one image, or one video of about `seconds`, with this model. Null without a working key. */
     estimate(kind: 'image' | 'video', modelId: string, aspect: AspectRatio, seconds?: number, resolution?: string | null): Promise<CreditEstimate | null>
     batchEstimate(projectId: string, episodeId: string | undefined, kind: 'image' | 'video', includeStale?: boolean): Promise<BatchEstimateResult>
+    batchEstimateSheets(projectId: string, includeStale?: boolean): Promise<BatchEstimateSheetResult>
+    missingSheets(projectId: string, includeStale?: boolean): Promise<Job[]>
   }
   clips: {
     /** Splits a clip at `atMs` into two clips (picture, voice and narration divided at the nearest pause). */

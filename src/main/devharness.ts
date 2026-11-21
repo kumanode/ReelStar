@@ -9,7 +9,20 @@ import { anchorPoint } from '@shared/overlays'
 import { NO_MUSIC, NO_MUSIC_DIALOG, modelSupportsNativeAudio } from '@shared/higgsfield'
 import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt } from '@shared/prompts'
 import { computeClipImageBasisHash, computeClipVideoBasisHash, computeDerivativeSheetBasisHash } from '@shared/hash'
-import { checkClipImagePrerequisites, checkClipVideoPrerequisites, clipImageBasis, getClipImageStatus, getClipVideoStatus, planBatch, referenceLimit, videoSecondsFor } from '@shared/validation'
+import {
+  MAX_EPISODE_DURATION_SEC,
+  MAX_SERIES_DURATION_SEC,
+  MIN_EPISODE_DURATION_SEC,
+  checkClipImagePrerequisites,
+  checkClipVideoPrerequisites,
+  clipImageBasis,
+  getClipImageStatus,
+  getClipVideoStatus,
+  planBatch,
+  planBatchSheets,
+  referenceLimit,
+  videoSecondsFor
+} from '@shared/validation'
 import { startExport } from './exporter'
 import { assetAbsPath, binPath } from './paths'
 import { extractAudio, probeDurationMs, probeHasAudio } from './services/audio'
@@ -23,6 +36,7 @@ import {
   insertAsset,
   listEpisodes,
   patchClip,
+  removeAllEpisodes,
   replaceStory,
   saveSnapshot,
   setCharacterSheet,
@@ -34,7 +48,7 @@ import {
 } from './repo'
 import { getSettings, setSettings } from './settings'
 import { planEpisodes, writePrompts } from './story'
-import { batchEstimate, extractVideoDialogueAudio, generateMissingImages, setActiveAsset } from './generation'
+import { batchEstimate, batchEstimateSheets, extractVideoDialogueAudio, generateMissingImages, setActiveAsset } from './generation'
 import { recordCheck, setSecret } from './secrets'
 import type { ApiProvider, Asset, Character, Clip, EpisodeScriptDraft, ExportOptions } from '@shared/types'
 
@@ -74,7 +88,7 @@ async function addDemoSpeech(projectId: string): Promise<void> {
   const fresh = getBundle(projectId)
   saveSnapshot({
     project: fresh.project,
-    episodeId: fresh.episode.id,
+    episodeId: fresh.episode!.id,
     characters: fresh.characters,
     clips: fresh.clips.map((c, i) => ({ ...c, narration: lines[i % lines.length] }))
   })
@@ -112,7 +126,7 @@ function addDemoOverlays(projectId: string): void {
         ]
       }
     },
-    episodeId: b.episode.id,
+    episodeId: b.episode!.id,
     characters: b.characters,
     clips: b.clips
   })
@@ -191,7 +205,7 @@ function seedDemo(): string {
   const fresh = getBundle(p.id)
   saveSnapshot({
     project: { ...fresh.project, step: 4, status: 'editing', editor: { ...fresh.project.editor, musicAssetId: m.id } },
-    episodeId: fresh.episode.id,
+    episodeId: fresh.episode!.id,
     characters: fresh.characters,
     clips: fresh.clips
   })
@@ -777,6 +791,76 @@ async function checkPhase4(projectId: string): Promise<boolean> {
   return true
 }
 
+export async function checkPhase6(projectId: string): Promise<boolean> {
+  // 1. Run checkPhase4 first to ensure project has full entities
+  await checkPhase4(projectId)
+  console.log('[checkPhase6] Prasyarat Fase 4 terpenuhi')
+
+  // 2. Target episode count & 1-hour series validation
+  const b0 = getBundle(projectId)
+  b0.project.targetEpisodeCount = 5
+  saveSnapshot({
+    project: b0.project,
+    episodeId: b0.episode?.id ?? b0.episodes[0]!.id,
+    characters: b0.characters,
+    clips: b0.clips
+  })
+  const bUpdated = getBundle(projectId)
+  if (bUpdated.project.targetEpisodeCount !== 5) {
+    throw new Error(`targetEpisodeCount gagal disimpan: ${bUpdated.project.targetEpisodeCount}`)
+  }
+
+  // Verify duration limits
+  if (MIN_EPISODE_DURATION_SEC !== 30 || MAX_EPISODE_DURATION_SEC !== 180 || MAX_SERIES_DURATION_SEC !== 3600) {
+    throw new Error('Konstanta durasi tidak sesuai spesifikasi')
+  }
+
+  // 3. Lorebook batch planning & 2-wave execution
+  const testItems = [
+    { id: '1', status: { status: 'missing' as const, blockers: [], basisHash: 'a', hasResult: false } },
+    { id: '2', status: { status: 'stale' as const, blockers: [], basisHash: 'b', hasResult: true } },
+    { id: '3', status: { status: 'blocked' as const, blockers: ['error'], basisHash: 'c', hasResult: false } },
+    { id: '4', status: { status: 'current' as const, blockers: [], basisHash: 'd', hasResult: true } }
+  ]
+  const p1 = planBatchSheets(testItems, false)
+  if (p1.targets.length !== 1 || p1.blocking.length !== 1) throw new Error('planBatchSheets false gagal')
+  const p2 = planBatchSheets(testItems, true)
+  if (p2.targets.length !== 2 || p2.blocking.length !== 1) throw new Error('planBatchSheets true gagal')
+
+  const estimate = await batchEstimateSheets(projectId, true)
+  if (typeof estimate.canRun !== 'boolean' || !Array.isArray(estimate.items)) {
+    throw new Error('batchEstimateSheets harus mengembalikan hasil estimasi valid')
+  }
+  const wave1Targets = estimate.items.filter((t) => t.kind !== 'derivative' && (t.status === 'missing' || t.status === 'stale'))
+  const wave2Targets = estimate.items.filter((t) => t.kind === 'derivative' && (t.status === 'missing' || t.status === 'stale'))
+  console.log(`[checkPhase6] Lorebook wave targets: wave1=${wave1Targets.length}, wave2=${wave2Targets.length}`)
+
+  // 4. Remove all episodes (Task 35)
+  const epsBefore = listEpisodes(projectId)
+  if (epsBefore.length === 0) throw new Error('Harus ada episode sebelum removeAllEpisodes')
+
+  removeAllEpisodes(projectId)
+
+  const epsAfter = listEpisodes(projectId)
+  if (epsAfter.length !== 0) {
+    throw new Error(`removeAllEpisodes gagal: masih ada ${epsAfter.length} episode`)
+  }
+  const bAfterDelete = getBundle(projectId)
+  if (bAfterDelete.episode !== null) {
+    throw new Error('Setelah removeAllEpisodes, bAfterDelete.episode harus null')
+  }
+  if (bAfterDelete.clips.length !== 0) {
+    throw new Error('Setelah removeAllEpisodes, clips harus kosong')
+  }
+  // Lorebook must still be preserved!
+  if (bAfterDelete.characters.length === 0) {
+    throw new Error('removeAllEpisodes TIDAK boleh menghapus karakter Lorebook')
+  }
+
+  console.log('[checkPhase6] Semua pengujian backend Fase 6 BERHASIL!')
+  return true
+}
+
 /**
  * For harness runs: keep painting and timers going while the test window sits behind other windows, so
  * screenshots show the current state. Must run before the app is ready.
@@ -807,7 +891,7 @@ export function attachDevHarness(win: BrowserWindow): void {
   const planPath = process.env.STUDIO_CAPTURE_PLAN
   if (!planPath) return
   let plan: {
-    main?: 'seed' | 'seedEpisodes' | 'checkIsolation' | 'checkPhase3' | 'checkPhase4' | 'export' | 'key' | 'overlays' | 'speech' | 'videos'
+    main?: 'seed' | 'seedEpisodes' | 'checkIsolation' | 'checkPhase3' | 'checkPhase4' | 'checkPhase6' | 'export' | 'key' | 'overlays' | 'speech' | 'videos'
     openProject?: boolean
     exportTo?: string
     encoder?: ExportOptions['encoder']
@@ -845,6 +929,7 @@ export function attachDevHarness(win: BrowserWindow): void {
         if (step.main === 'checkIsolation' && (step.projectId ?? demoId)) checkIsolation((step.projectId ?? demoId)!)
         if (step.main === 'checkPhase3' && (step.projectId ?? demoId)) await checkPhase3((step.projectId ?? demoId)!)
         if (step.main === 'checkPhase4' && (step.projectId ?? demoId)) await checkPhase4((step.projectId ?? demoId)!)
+        if (step.main === 'checkPhase6' && (step.projectId ?? demoId)) await checkPhase6((step.projectId ?? demoId)!)
         if (step.openProject && demoId) {
           await win.webContents.executeJavaScript(`(() => { window.useApp?.getState().go({ name: 'project', id: ${JSON.stringify(demoId)} }); })()`)
         }

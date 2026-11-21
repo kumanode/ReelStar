@@ -4,6 +4,7 @@ import { formatChapters } from '@shared/chapters'
 import { LANGUAGES } from '@shared/models'
 import { isNarratorName, needsVisual, visualSourceOf } from '@shared/script'
 import { getStyle } from '@shared/styles'
+import { MIN_EPISODE_DURATION_SEC, MAX_EPISODE_DURATION_SEC } from '@shared/validation'
 import type {
   CameraPresetId,
   Clip,
@@ -13,6 +14,7 @@ import type {
   MotionStrength,
   MusicPrompt,
   NewAssetProposal,
+  PlanBatchScriptsResult,
   PlanEpisodesInput,
   ProjectBundle,
   SmartSfxCue,
@@ -147,7 +149,11 @@ export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
   const project = getProject(projectId)
   const sourceText = (input.sourceText ?? project.sourceText ?? '').trim()
   const sourceKind: SourceKind = input.sourceKind ?? project.sourceKind ?? 'novel'
-  const targetDuration = Math.max(30, Math.min(input.targetDurationSec ?? project.durationSec ?? 75, 180))
+  const targetDuration = Math.max(
+    MIN_EPISODE_DURATION_SEC,
+    Math.min(input.targetDurationSec ?? project.durationSec ?? 60, MAX_EPISODE_DURATION_SEC)
+  )
+  const targetEpisodeCount = input.targetEpisodeCount ?? project.targetEpisodeCount ?? null
   const mode = input.mode ?? 'replace'
 
   if (!sourceText) {
@@ -173,6 +179,7 @@ export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
   }
 
   const windows = planWindows(sourceText, from)
+  const totalRemainingLen = Math.max(1, sourceText.length - from)
   const system = sourceKind === 'screenplay'
     ? [
         'You are an expert drama script supervisor.',
@@ -204,16 +211,28 @@ export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
     const label = windows.length > 1 ? `bagian ${wi + 1} dari ${windows.length}` : 'teks sumber'
     emit.storyProgress({ projectId, message: `Merencanakan episode dari ${label}...` })
 
+    const windowLen = w.end - w.start
+    let windowTargetCount: number | null = null
+    if (targetEpisodeCount) {
+      if (mode === 'continue') {
+        const remainingTotal = Math.max(1, targetEpisodeCount - existing.length)
+        windowTargetCount = Math.max(1, Math.round((windowLen / totalRemainingLen) * remainingTotal))
+      } else {
+        windowTargetCount = Math.max(1, Math.round((windowLen / totalRemainingLen) * targetEpisodeCount))
+      }
+    }
+
     const prompt = [
       `Serial Title: ${project.title || '(untitled)'}`,
       `Source Type: ${sourceKind === 'screenplay' ? 'Naskah Jadi (Screenplay)' : 'Novel / Prosa'}`,
       `Target Duration per Episode: ${targetDuration} seconds`,
+      windowTargetCount ? `Target Number of Episodes for this part: about ${windowTargetCount} episodes` : '',
       prev && prev.status !== 'draft'
         ? `Previous Episode ${prev.episodeNum} (${prev.title}): ${prev.summary}\nIts cliffhanger, which the first new episode must pick up: ${prev.cliffhanger}`
         : 'This part starts the series.',
       w.end < sourceText.length ? 'More source text follows after this part.' : 'This is the last part of the source: the final episode may resolve the story.',
       `Source Part:\n"""\n${part}\n"""`
-    ].join('\n\n')
+    ].filter(Boolean).join('\n\n')
 
     let items: RawEpisodePlanItem[] = []
     let problem: string | null = 'belum dicoba'
@@ -246,14 +265,33 @@ export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
         sourceText: str(item.source_excerpt) || (items.length === 1 ? part : ''),
         sourceKind,
         status: 'planned',
-        durationSec: Math.max(30, Math.min(Number(item.target_duration_sec) || targetDuration, 180))
+        durationSec: Math.max(
+          MIN_EPISODE_DURATION_SEC,
+          Math.min(Number(item.target_duration_sec) || targetDuration, MAX_EPISODE_DURATION_SEC)
+        )
       })
     }
     setPlanProgress(projectId, { coveredChars: w.end, coveredHash: hashText(sourceText.slice(0, w.end)) })
   }
 
-  emit.storyProgress({ projectId, message: 'Rencana episode tersimpan.' })
-  return listEpisodes(projectId)
+  const finalEps = listEpisodes(projectId)
+  if (targetEpisodeCount) {
+    const diff = finalEps.length - targetEpisodeCount
+    if (diff !== 0) {
+      emit.storyProgress({
+        projectId,
+        message: `Rencana episode tersimpan: ${finalEps.length} episode dibuat (target: ${targetEpisodeCount}, selisih ${diff > 0 ? '+' : ''}${diff}).`
+      })
+    } else {
+      emit.storyProgress({
+        projectId,
+        message: `Rencana episode tersimpan: tepat ${finalEps.length} episode sesuai target.`
+      })
+    }
+  } else {
+    emit.storyProgress({ projectId, message: 'Rencana episode tersimpan.' })
+  }
+  return finalEps
 }
 
 const SCRIPT_DRAFT_SCHEMA = {
@@ -481,6 +519,73 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
 
 export async function confirmEpisodeScript(projectId: string, episodeId: string, draft: EpisodeScriptDraft): Promise<ProjectBundle> {
   return confirmEpisodeScriptRepo(projectId, episodeId, draft)
+}
+
+const batchScriptControllers = new Map<string, AbortController>()
+
+export function cancelBatchScripts(projectId: string): void {
+  const ctrl = batchScriptControllers.get(projectId)
+  if (ctrl) {
+    ctrl.abort()
+    batchScriptControllers.delete(projectId)
+  }
+}
+
+export async function planAllMissingEpisodeScripts(
+  projectId: string
+): Promise<PlanBatchScriptsResult> {
+  cancelBatchScripts(projectId)
+  const ctrl = new AbortController()
+  batchScriptControllers.set(projectId, ctrl)
+
+  const episodes = listEpisodes(projectId)
+  const plannedEpisodeIds: string[] = []
+  const skippedEpisodeIds: string[] = []
+  const failedEpisodes: { episodeId: string; title: string; error: string }[] = []
+
+  try {
+    for (const [idx, ep] of episodes.entries()) {
+      if (ctrl.signal.aborted) break
+
+      const existingClips = clipsOf(projectId, ep.id)
+      // Only plan for episodes that don't have clips or existing drafts and are in draft/planned status
+      if (existingClips.length > 0 || ep.scriptDraft || !['draft', 'planned'].includes(ep.status)) {
+        skippedEpisodeIds.push(ep.id)
+        continue
+      }
+
+      emit.storyProgress({
+        projectId,
+        message: `Menyusun draf naskah Episode ${ep.episodeNum} (${idx + 1}/${episodes.length}): ${ep.title}...`
+      })
+
+      try {
+        await planEpisodeScript(projectId, ep.id)
+        plannedEpisodeIds.push(ep.id)
+      } catch (err) {
+        failedEpisodes.push({
+          episodeId: ep.id,
+          title: ep.title,
+          error: err instanceof Error ? err.message : String(err)
+        })
+      }
+    }
+  } finally {
+    if (batchScriptControllers.get(projectId) === ctrl) {
+      batchScriptControllers.delete(projectId)
+    }
+  }
+
+  emit.storyProgress({
+    projectId,
+    message: `Selesai menyusun naskah (${plannedEpisodeIds.length} draf dibuat, ${skippedEpisodeIds.length} dilewati, ${failedEpisodes.length} gagal).`
+  })
+
+  return {
+    plannedEpisodeIds,
+    skippedEpisodeIds,
+    failedEpisodes
+  }
 }
 
 export async function writePrompts(projectId: string, episodeId: string, clipIds?: string[]): Promise<ProjectBundle> {
