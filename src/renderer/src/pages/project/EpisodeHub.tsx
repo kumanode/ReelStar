@@ -32,10 +32,11 @@ const STATUS_BADGE: Record<EpisodeStatus, { tone: 'draft' | 'info' | 'warn' | 'o
   exported: { tone: 'ok', label: 'Terekspor' }
 }
 
-const TARGET_EPISODE_OPTIONS = Array.from({ length: 20 }, (_, i) => ({
-  value: i + 1,
-  label: `${i + 1} episode`
-}))
+// 0 stands for "no target": the planner then follows the source, as it did before targets existed.
+const TARGET_EPISODE_OPTIONS = [
+  { value: 0, label: 'Otomatis' },
+  ...Array.from({ length: 20 }, (_, i) => ({ value: i + 1, label: `${i + 1} episode` }))
+]
 
 function formatDuration(sec: number): string {
   const m = Math.floor(sec / 60)
@@ -93,10 +94,10 @@ export function EpisodeHub() {
 
   if (!project) return null
 
-  const targetEpCount = project.targetEpisodeCount ?? 3
+  const targetEpCount = project.targetEpisodeCount ?? null
   const targetDurationSec = project.durationSec ?? 60
-  const totalEstimatedSec = targetEpCount * targetDurationSec
-  const isOverOneHour = totalEstimatedSec > MAX_SERIES_DURATION_SEC
+  const totalEstimatedSec = targetEpCount ? targetEpCount * targetDurationSec : null
+  const isOverOneHour = totalEstimatedSec != null && totalEstimatedSec > MAX_SERIES_DURATION_SEC
 
   const handlePlanEpisodes = async (continuation = false) => {
     if (!project.sourceText?.trim()) {
@@ -120,22 +121,38 @@ export function EpisodeHub() {
     setIsPlanning(true)
     setPlanMessage('Menganalisis teks sumber...')
     try {
+      // The planner reads the saved source and may replace the open episode, so pending edits go first.
       await flush()
-      await window.api.story.planEpisodes({
+      const planned = await window.api.story.planEpisodes({
         projectId: project.id,
         sourceText: project.sourceText,
         sourceKind: project.sourceKind ?? 'novel',
         targetDurationSec,
-        targetEpisodeCount: targetEpCount,
+        targetEpisodeCount: targetEpCount ?? undefined,
         mode: continuation ? 'continue' : 'replace'
       })
-      toast('success', continuation ? 'Perencanaan episode dilanjutkan.' : 'Serial selesai dipecah jadi episode.')
+      const done = continuation ? 'Perencanaan episode dilanjutkan' : 'Serial selesai dipecah jadi episode'
+      // The source decides how many episodes it can carry, so a missed target is reported rather than hidden.
+      const count = planned.filter((e) => e.status !== 'draft').length
+      if (targetEpCount && count !== targetEpCount) {
+        const diff = count - targetEpCount
+        toast('info', `${done}: ${count} episode, target ${targetEpCount} (selisih ${diff > 0 ? '+' : ''}${diff}). Tinjau daftarnya, lalu ubah target atau sumber kalau perlu.`)
+      } else {
+        toast('success', `${done}: ${count} episode.`)
+      }
+      const plannedSec = planned.reduce((acc, e) => acc + (e.durationSec || targetDurationSec), 0)
+      if (plannedSec > MAX_SERIES_DURATION_SEC) {
+        toast('info', `Total durasi hasil rencana ${formatDuration(plannedSec)}, lebih dari batas 1 jam. Hapus atau gabungkan beberapa episode, atau pilih durasi per episode yang lebih pendek.`)
+      }
     } catch (err) {
       toast('error', `Gagal merencanakan episode: ${errorText(err)}`)
     } finally {
+      // Reload even after a failure: earlier parts of the source may already be saved as episodes.
       try {
         load(await window.api.projects.get(project.id), { keepHistory: false })
-      } catch {}
+      } catch {
+        // The hub keeps its current list; the toast above already told the creator what happened.
+      }
       setIsPlanning(false)
       setPlanMessage(null)
     }
@@ -146,23 +163,26 @@ export function EpisodeHub() {
     try {
       await flush()
       const res = await window.api.story.planAllScripts(project.id)
-      if (res.plannedEpisodeIds.length > 0) {
+      if (res.failedEpisodes.length > 0) {
+        const failed = res.failedEpisodes.map((f) => `${f.title} (${f.error})`).join('; ')
         toast(
-          'success',
-          `Berhasil menyusun draf naskah untuk ${res.plannedEpisodeIds.length} episode.` +
-            (res.failedEpisodes.length ? ` (${res.failedEpisodes.length} gagal)` : '')
+          'error',
+          `${res.plannedEpisodeIds.length} draf dibuat, ${res.failedEpisodes.length} gagal. Tekan "Buat semua naskah" lagi untuk mencoba ulang yang gagal: ${failed}`
         )
-      } else if (res.failedEpisodes.length > 0) {
-        toast('error', `Gagal menyusun naskah: ${res.failedEpisodes[0].error}`)
+      } else if (res.plannedEpisodeIds.length > 0) {
+        toast('success', `Draf naskah dibuat untuk ${res.plannedEpisodeIds.length} episode. Tinjau dan konfirmasi di tab Rencana & Tinjau.`)
       } else {
         toast('info', 'Semua episode sudah memiliki draf naskah atau klip.')
       }
     } catch (err) {
       toast('error', `Gagal menyusun naskah batch: ${errorText(err)}`)
     } finally {
+      // Drafts saved before a failure or a stop are kept, so the hub reloads either way.
       try {
         load(await window.api.projects.get(project.id), { keepHistory: false })
-      } catch {}
+      } catch {
+        // The toast above already reported the outcome.
+      }
       setIsBatchDrafting(false)
     }
   }
@@ -170,7 +190,7 @@ export function EpisodeHub() {
   const handleCancelBatchDrafting = async () => {
     try {
       await window.api.story.cancelBatchScripts(project.id)
-      toast('info', 'Penyusunan naskah dihentikan.')
+      toast('info', 'Penyusunan naskah berhenti setelah episode yang sedang dikerjakan selesai.')
     } catch (err) {
       toast('error', errorText(err))
     }
@@ -354,9 +374,9 @@ export function EpisodeHub() {
                       <div className="w-32">
                         <Select
                           label="Target jumlah episode"
-                          value={targetEpCount}
                           options={TARGET_EPISODE_OPTIONS}
-                          onChange={(v) => updateProject({ targetEpisodeCount: Number(v) })}
+                          value={targetEpCount ?? 0}
+                          onChange={(v) => updateProject({ targetEpisodeCount: Number(v) || null })}
                           size="sm"
                         />
                       </div>
@@ -379,7 +399,7 @@ export function EpisodeHub() {
                     <div className="flex items-center gap-1.5 font-medium text-ink-2">
                       <span>Total estimasi:</span>
                       <span className={cx('font-mono font-bold', isOverOneHour ? 'text-bad' : 'text-accent-dark')}>
-                        {formatDuration(totalEstimatedSec)}
+                        {totalEstimatedSec != null ? formatDuration(totalEstimatedSec) : 'mengikuti sumber'}
                       </span>
                     </div>
                   </div>
@@ -545,7 +565,7 @@ export function EpisodeHub() {
                     onClick={() => void handleCancelBatchDrafting()}
                     className="text-bad hover:bg-bad-soft"
                   >
-                    Berhenti
+                    Berhenti setelah episode ini
                   </Button>
                 )}
 

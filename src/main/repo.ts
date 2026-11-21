@@ -311,33 +311,35 @@ export function removeEpisode(id: string): void {
   getDb().prepare('DELETE FROM episodes WHERE id = ?').run(id)
 }
 
+/**
+ * Deletes every episode with its clips and their generated files, keeping the source text and the Lorebook
+ * (characters, variants, locations, props and their sheets: those assets carry neither an episode nor a clip).
+ */
 export function removeAllEpisodes(projectId: string): void {
   const db = getDb()
-  const assetsToDelete = db
-    .prepare(
-      `SELECT local_path FROM assets WHERE project_id = ? AND (episode_id IS NOT NULL OR clip_id IS NOT NULL)`
-    )
-    .all(projectId) as { local_path: string }[]
-
-  for (const a of assetsToDelete) {
-    if (a.local_path) {
-      try {
-        const fullPath = assetAbsPath(projectId, a.local_path)
-        if (existsSync(fullPath)) rmSync(fullPath, { force: true })
-      } catch {
-        // ignore disk removal errors
-      }
-    }
-  }
+  const scope = `project_id = ? AND (episode_id IS NOT NULL OR clip_id IS NOT NULL)`
+  const paths = (db.prepare(`SELECT local_path FROM assets WHERE ${scope}`).all(projectId) as { local_path: string | null }[])
+    .map((a) => a.local_path)
+    .filter((p): p is string => !!p)
 
   db.transaction(() => {
-    db.prepare('DELETE FROM assets WHERE project_id = ? AND (episode_id IS NOT NULL OR clip_id IS NOT NULL)').run(projectId)
-    db.prepare('DELETE FROM jobs WHERE project_id = ? AND (episode_id IS NOT NULL OR clip_id IS NOT NULL)').run(projectId)
+    db.prepare(`DELETE FROM assets WHERE ${scope}`).run(projectId)
+    db.prepare(`DELETE FROM jobs WHERE ${scope}`).run(projectId)
     db.prepare('DELETE FROM episodes WHERE project_id = ?').run(projectId)
     db.prepare('DELETE FROM settings WHERE key = ?').run(`plan_progress:${projectId}`)
     db.prepare('DELETE FROM settings WHERE key = ?').run(`last_episode:${projectId}`)
     touchProject(projectId)
   })()
+
+  // Files go only after the rows are gone: a failed transaction must not leave assets pointing at deleted files.
+  for (const rel of paths) {
+    try {
+      const fullPath = assetAbsPath(projectId, rel)
+      if (existsSync(fullPath)) rmSync(fullPath, { force: true })
+    } catch {
+      // A file that cannot be removed only wastes disk space; the episodes are already gone.
+    }
+  }
 }
 
 export function reorderEpisodes(projectId: string, episodeIds: string[]): Episode[] {

@@ -30,6 +30,7 @@ import {
   referenceLimit,
   videoSecondsFor,
   type ClipStatusResult,
+  type SheetStatusResult,
   type GenerationPrerequisitesContext
 } from '@shared/validation'
 import type {
@@ -39,6 +40,7 @@ import type {
   BatchEstimateResult,
   BatchEstimateSheetItem,
   BatchEstimateSheetResult,
+  SeriesProgressSummary,
   Character,
   CharacterDerivative,
   Clip,
@@ -72,6 +74,7 @@ import {
   getProp,
   insertAsset,
   insertJob,
+  listEpisodes,
   locationsOf,
   patchClip,
   propsOf,
@@ -1234,178 +1237,205 @@ export async function batchEstimate(
   }
 }
 
-export async function batchEstimateSheets(
+interface SheetBatchItem {
+  id: string
+  name: string
+  kind: 'character' | 'derivative' | 'location' | 'prop'
+  status: SheetStatusResult
+}
+
+/** Every Lorebook entity with its sheet status. Shared by the estimate and the run so both see the same targets. */
+function sheetBatchItems(
   projectId: string,
-  includeStale = false
-): Promise<BatchEstimateSheetResult> {
+  includeStale: boolean
+): { targets: SheetBatchItem[]; blocking: SheetBatchItem[]; all: SheetBatchItem[] } {
+  const project = getProject(projectId)
+  const characters = charactersOf(projectId)
+  const assets = assetsOf(projectId)
+
+  const charItems: SheetBatchItem[] = characters.map((c) => ({
+    id: c.id,
+    name: c.name,
+    kind: 'character',
+    status: getCharacterSheetStatus(c, project, assets)
+  }))
+  const charTargets = new Set(
+    charItems.filter((i) => i.status.status === 'missing' || (includeStale && i.status.status === 'stale')).map((i) => i.id)
+  )
+
+  const derivItems: SheetBatchItem[] = derivativesOf(projectId).map((d) => {
+    const parent = characters.find((c) => c.id === d.characterId)
+    // A variant whose base sheet is made earlier in this same batch is not blocked: wave 2 waits for it.
+    const baseWillBeGenerated = !!parent && charTargets.has(parent.id)
+    return {
+      id: d.id,
+      name: `${parent ? parent.name + ' - ' : ''}${d.name}`,
+      kind: 'derivative',
+      status: getDerivativeSheetStatus(d, parent, project, assets, baseWillBeGenerated)
+    }
+  })
+  const locItems: SheetBatchItem[] = locationsOf(projectId).map((l) => ({
+    id: l.id,
+    name: l.name,
+    kind: 'location',
+    status: getLocationSheetStatus(l, project, assets)
+  }))
+  const propItems: SheetBatchItem[] = propsOf(projectId).map((p) => ({
+    id: p.id,
+    name: p.name,
+    kind: 'prop',
+    status: getPropSheetStatus(p, project, assets)
+  }))
+
+  const all = [...charItems, ...derivItems, ...locItems, ...propItems]
+  return { ...planBatchSheets(all, includeStale), all }
+}
+
+export async function batchEstimateSheets(projectId: string, includeStale = false): Promise<BatchEstimateSheetResult> {
   const project = getProject(projectId)
   const ctx = prereqContext(projectId)
   const settings = getSettings()
   const modelName = ctx.isFlow2Api
     ? getFlow2ApiModel(project.imageModel && !project.imageModel.includes('/') ? project.imageModel : settings.flow2apiImageModel, 'image').name
     : getImageModel(project.imageModel).name
+  const { targets, blocking, all } = sheetBatchItems(projectId, includeStale)
 
-  const characters = charactersOf(projectId)
-  const derivatives = derivativesOf(projectId)
-  const locations = locationsOf(projectId)
-  const props = propsOf(projectId)
-  const assets = assetsOf(projectId)
-
-  const charItems = characters.map((c) => ({
-    id: c.id,
-    name: c.name,
-    kind: 'character' as const,
-    status: getCharacterSheetStatus(c, project, assets)
-  }))
-
-  const charTargets = charItems.filter((i) => i.status.status === 'missing' || (includeStale && i.status.status === 'stale'))
-  const charWillBeGeneratedIds = new Set(charTargets.map((c) => c.id))
-
-  const derivItems = derivatives.map((d) => {
-    const parent = characters.find((c) => c.id === d.characterId)
-    const baseWillBeGenerated = !!parent && (charWillBeGeneratedIds.has(parent.id) || !parent.sheetAssetId)
-    return {
-      id: d.id,
-      name: `${parent ? parent.name + ' - ' : ''}${d.name}`,
-      kind: 'derivative' as const,
-      status: getDerivativeSheetStatus(d, parent, project, assets, baseWillBeGenerated)
-    }
-  })
-
-  const locItems = locations.map((l) => ({
-    id: l.id,
-    name: l.name,
-    kind: 'location' as const,
-    status: getLocationSheetStatus(l, project, assets)
-  }))
-
-  const propItems = props.map((p) => ({
-    id: p.id,
-    name: p.name,
-    kind: 'prop' as const,
-    status: getPropSheetStatus(p, project, assets)
-  }))
-
-  const allItems = [...charItems, ...derivItems, ...locItems, ...propItems]
-  const { targets, blocking } = planBatchSheets(allItems, includeStale)
-
+  // Sheets are always one 16:9 image, so one lookup prices the whole batch; Flow2API spends no Higgsfield credits.
   let pricePerSheet: number | null = null
   if (!ctx.isFlow2Api) {
     const est = await estimateCredits('image', project.imageModel || '', '16:9', 0, null).catch(() => null)
     pricePerSheet = est?.credits ?? null
   }
 
-  const shown = allItems.filter((it) => targets.includes(it) || blocking.includes(it))
-  const itemsOut: BatchEstimateSheetItem[] = shown.map((it) => ({
-    id: it.id,
-    name: it.name,
-    kind: it.kind,
-    model: modelName,
-    status: it.status.status,
-    blockers: it.status.blockers,
-    estimatedCredits: targets.includes(it) ? pricePerSheet : null
-  }))
-
-  const totalCredits = pricePerSheet != null ? Math.round(targets.length * pricePerSheet * 10) / 10 : null
+  const items: BatchEstimateSheetItem[] = all
+    .filter((it) => targets.includes(it) || blocking.includes(it))
+    .map((it) => ({
+      id: it.id,
+      name: it.name,
+      kind: it.kind,
+      model: modelName,
+      status: it.status.status,
+      blockers: it.status.blockers,
+      estimatedCredits: targets.includes(it) ? pricePerSheet : null
+    }))
 
   return {
     canRun: blocking.length === 0 && targets.length > 0,
     totalItems: targets.length,
-    totalCredits,
-    items: itemsOut,
+    totalCredits: pricePerSheet != null ? Math.round(targets.length * pricePerSheet * 10) / 10 : null,
+    items,
     blockedCount: blocking.length,
-    missingCount: allItems.filter((i) => i.status.status === 'missing').length,
-    staleCount: allItems.filter((i) => i.status.status === 'stale').length
+    missingCount: all.filter((i) => i.status.status === 'missing').length,
+    staleCount: all.filter((i) => i.status.status === 'stale').length
   }
 }
 
+/** Why a wave-2 variant must not start once wave 1 has settled, or null when it can. */
+export function derivativeWaveBlocker(
+  parentJobStatus: Job['status'] | null,
+  parentHasSheet: boolean,
+  anyWave1Canceled: boolean
+): { skip: 'canceled' } | { skip: 'failed'; reason: string } | null {
+  // Cancelling any part of the batch stops the variants too: they would spend credits the creator just refused.
+  if (anyWave1Canceled) return { skip: 'canceled' }
+  if (parentJobStatus && parentJobStatus !== 'done') {
+    return { skip: 'failed', reason: 'Lembar karakter dasar gagal dibuat, jadi varian kostum ini dilewati.' }
+  }
+  if (!parentHasSheet) return { skip: 'failed', reason: 'Karakter belum punya lembar dasar, jadi varian kostum ini dilewati.' }
+  return null
+}
+
+/**
+ * Makes the missing (and, when asked, stale) Lorebook sheets in two waves: base characters, locations and props
+ * first, then costume variants, which are edits of their base sheet and need it on disk. All or nothing (§6.J):
+ * if anything that would be made is blocked, nothing starts.
+ */
 export function generateMissingSheets(projectId: string, includeStale = false): Job[] {
-  const project = getProject(projectId)
-  const characters = charactersOf(projectId)
-  const derivatives = derivativesOf(projectId)
-  const locations = locationsOf(projectId)
-  const props = propsOf(projectId)
-  const assets = assetsOf(projectId)
-
-  const charItems = characters.map((c) => ({
-    id: c.id,
-    name: c.name,
-    kind: 'character' as const,
-    status: getCharacterSheetStatus(c, project, assets)
-  }))
-  const charTargets = charItems.filter((i) => i.status.status === 'missing' || (includeStale && i.status.status === 'stale'))
-  const charWillBeGeneratedIds = new Set(charTargets.map((c) => c.id))
-
-  const derivItems = derivatives.map((d) => {
-    const parent = characters.find((c) => c.id === d.characterId)
-    const baseWillBeGenerated = !!parent && (charWillBeGeneratedIds.has(parent.id) || !parent.sheetAssetId)
-    return {
-      id: d.id,
-      name: `${parent ? parent.name + ' - ' : ''}${d.name}`,
-      kind: 'derivative' as const,
-      status: getDerivativeSheetStatus(d, parent, project, assets, baseWillBeGenerated)
-    }
-  })
-
-  const locItems = locations.map((l) => ({
-    id: l.id,
-    name: l.name,
-    kind: 'location' as const,
-    status: getLocationSheetStatus(l, project, assets)
-  }))
-
-  const propItems = props.map((p) => ({
-    id: p.id,
-    name: p.name,
-    kind: 'prop' as const,
-    status: getPropSheetStatus(p, project, assets)
-  }))
-
-  const allItems = [...charItems, ...derivItems, ...locItems, ...propItems]
-  const { targets, blocking } = planBatchSheets(allItems, includeStale)
-
+  const { targets, blocking } = sheetBatchItems(projectId, includeStale)
   if (blocking.length) {
     const reasons = blocking.map((b) => `${b.name}: ${b.status.blockers.join(', ')}`).join('\n')
     throw new Error(`Ada ${blocking.length} lembar Lorebook yang terblokir:\n${reasons}`)
   }
 
-  const wave1Targets = targets.filter((t) => t.kind !== 'derivative')
-  const wave2Targets = targets.filter((t) => t.kind === 'derivative')
-
-  const wave1Jobs: Job[] = []
-  for (const t of wave1Targets) {
-    if (t.kind === 'character') wave1Jobs.push(generateCharacterSheet(t.id))
-    else if (t.kind === 'location') wave1Jobs.push(generateLocationSheet(t.id))
-    else if (t.kind === 'prop') wave1Jobs.push(generatePropSheet(t.id))
+  const wave1Jobs = new Map<string, Job>()
+  for (const t of targets) {
+    if (t.kind === 'character') wave1Jobs.set(t.id, generateCharacterSheet(t.id))
+    else if (t.kind === 'location') wave1Jobs.set(t.id, generateLocationSheet(t.id))
+    else if (t.kind === 'prop') wave1Jobs.set(t.id, generatePropSheet(t.id))
   }
+  const wave2Targets = targets.filter((t) => t.kind === 'derivative')
 
   if (wave2Targets.length > 0) {
     void (async () => {
-      while (true) {
-        const unfinished = wave1Jobs.filter((j) => {
-          const current = getJob(j.id)
-          return current && (current.status === 'queued' || current.status === 'running')
-        })
-        if (unfinished.length === 0) break
+      const ids = [...wave1Jobs.values()].map((j) => j.id)
+      const settled = (id: string) => !['queued', 'running'].includes(getJob(id)?.status ?? '')
+      while (!ids.every(settled)) {
         await new Promise((r) => setTimeout(r, 500))
       }
+      const anyCanceled = ids.some((id) => getJob(id)?.status === 'canceled')
       for (const d of wave2Targets) {
+        const deriv = getDerivative(d.id)
+        if (!deriv) continue
         try {
-          const deriv = getDerivative(d.id)
-          if (deriv) {
-            const char = getCharacter(deriv.characterId)
-            if (char?.sheetAssetId) {
-              generateDerivativeSheet(d.id)
-            }
-          }
+          const char = getCharacter(deriv.characterId)
+          const parentJob = wave1Jobs.get(char.id)
+          const blocker = derivativeWaveBlocker(
+            parentJob ? (getJob(parentJob.id)?.status ?? null) : null,
+            !!char.sheetAssetId,
+            anyCanceled
+          )
+          if (!blocker) generateDerivativeSheet(d.id)
+          else if (blocker.skip === 'failed') recordSkippedSheet(projectId, deriv.characterId, d.id, blocker.reason)
         } catch (err) {
-          console.error('[batch-sheet] wave 2 error:', err)
+          recordSkippedSheet(projectId, deriv.characterId, d.id, err instanceof Error ? err.message : String(err))
         }
       }
     })()
   }
 
-  return wave1Jobs
+  return [...wave1Jobs.values()]
+}
+
+/** A failed job row, so a variant that wave 2 could not start shows up in the job list instead of vanishing. */
+function recordSkippedSheet(projectId: string, characterId: string, derivativeId: string, reason: string): void {
+  const job = insertJob({
+    projectId,
+    characterId,
+    kind: 'sheet',
+    provider: isFlow2Api() ? 'flow2api' : 'higgsfield',
+    payload: { target: 'derivative-sheet', derivativeId }
+  })
+  emit.job(updateJob(job.id, { status: 'failed', error: reason, message: null }))
+}
+
+
+/**
+ * The series progress shown in the Episode Hub. Sheet and clip counts use the same status functions as the
+ * Lorebook badges and the Storyboard, so the summary never disagrees with what those screens show.
+ */
+const noResult = (status: ClipStatusResult['status'], assetId: string | null): boolean =>
+  status === 'missing' || (status === 'blocked' && !assetId)
+
+export function seriesProgress(projectId: string): SeriesProgressSummary {
+  const project = getProject(projectId)
+  const ctx = prereqContext(projectId)
+  const episodes = listEpisodes(projectId)
+  const { all: sheets } = sheetBatchItems(projectId, false)
+  const clips = clipsOf(projectId)
+
+  const notConfirmed = episodes.filter((e) => e.status === 'draft' || e.status === 'planned')
+  return {
+    totalEpisodes: episodes.length,
+    plannedEpisodes: notConfirmed.length,
+    draftScriptEpisodes: notConfirmed.filter((e) => !!e.scriptDraft).length,
+    confirmedEpisodes: episodes.length - notConfirmed.length,
+    totalAssets: sheets.length,
+    missingSheets: sheets.filter((i) => i.status.status === 'missing' || (i.status.status === 'blocked' && !i.status.hasResult)).length,
+    totalClips: clips.length,
+    // A blocked clip with no result yet still counts as "not made": the Storyboard shows it without a picture.
+    missingClipImages: clips.filter((c) => noResult(getClipImageStatus(c, project, ctx).status, c.imageAssetId)).length,
+    missingClipVideos: clips.filter((c) => noResult(getClipVideoStatus(c, project, ctx).status, c.videoAssetId)).length
+  }
 }
 
 /** After a restart, keep polling Higgsfield requests that were already submitted; fail the rest. */

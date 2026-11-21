@@ -18,6 +18,7 @@ import {
   clipImageBasis,
   getClipImageStatus,
   getClipVideoStatus,
+  getDerivativeSheetStatus,
   planBatch,
   planBatchSheets,
   referenceLimit,
@@ -33,6 +34,7 @@ import {
   createProject,
   getBundle,
   getClip,
+  getPlanProgress,
   insertAsset,
   listEpisodes,
   patchClip,
@@ -47,8 +49,8 @@ import {
   updateDerivative
 } from './repo'
 import { getSettings, setSettings } from './settings'
-import { planEpisodes, writePrompts } from './story'
-import { batchEstimate, batchEstimateSheets, extractVideoDialogueAudio, generateMissingImages, setActiveAsset } from './generation'
+import { needsScriptDraft, planEpisodes, splitEpisodeTarget, writePrompts } from './story'
+import { batchEstimate, batchEstimateSheets, derivativeWaveBlocker, extractVideoDialogueAudio, generateMissingImages, seriesProgress, setActiveAsset } from './generation'
 import { recordCheck, setSecret } from './secrets'
 import type { ApiProvider, Asset, Character, Clip, EpisodeScriptDraft, ExportOptions } from '@shared/types'
 
@@ -835,9 +837,62 @@ export async function checkPhase6(projectId: string): Promise<boolean> {
   const wave2Targets = estimate.items.filter((t) => t.kind === 'derivative' && (t.status === 'missing' || t.status === 'stale'))
   console.log(`[checkPhase6] Lorebook wave targets: wave1=${wave1Targets.length}, wave2=${wave2Targets.length}`)
 
+  // 3b. Wave 2 rules: cancelling stops every variant; a failed or missing base sheet skips with a reason.
+  if (derivativeWaveBlocker('done', true, false) !== null) throw new Error('Varian dengan lembar dasar selesai harus jalan')
+  if (derivativeWaveBlocker(null, true, false) !== null) throw new Error('Varian dengan lembar dasar lama harus jalan')
+  if (derivativeWaveBlocker('done', true, true)?.skip !== 'canceled') throw new Error('Batal di gelombang 1 harus menghentikan varian')
+  if (derivativeWaveBlocker('failed', false, false)?.skip !== 'failed') throw new Error('Lembar dasar gagal harus melewati varian')
+  if (derivativeWaveBlocker(null, false, false)?.skip !== 'failed') throw new Error('Tanpa lembar dasar varian harus dilewati')
+
+  // 3c. Variant sheets from before basis hashes are stale when the base sheet is newer (regression guard).
+  const legacyChar = { id: 'c', name: 'A', sheetAssetId: 'base' } as Character
+  const legacyDeriv = { id: 'd', characterId: 'c', name: 'V', promptChange: 'x', sheetAssetId: 'var' } as unknown as Parameters<typeof getDerivativeSheetStatus>[0]
+  const legacyAssets = (baseAt: number, varAt: number) =>
+    [{ id: 'base', createdAt: baseAt, meta: {} }, { id: 'var', createdAt: varAt, meta: {} }] as unknown as Asset[]
+  if (getDerivativeSheetStatus(legacyDeriv, legacyChar, { imageModel: null }, legacyAssets(2, 1)).status !== 'stale') {
+    throw new Error('Lembar varian lama dengan lembar dasar lebih baru harus basi')
+  }
+  if (getDerivativeSheetStatus(legacyDeriv, legacyChar, { imageModel: null }, legacyAssets(1, 2)).status !== 'current') {
+    throw new Error('Lembar varian lama yang lebih baru dari lembar dasar harus terkini')
+  }
+
+  // 3d. Episode targets split over source windows add up to the target, at least one per window.
+  const sum = (xs: number[]) => xs.reduce((a, x) => a + x, 0)
+  const cases: [number[], number, number][] = [
+    [[9000, 9000, 2000], 5, 5],
+    [[100, 100, 9000], 3, 3],
+    [[100, 100, 100], 2, 3],
+    [[9000], 7, 7]
+  ]
+  for (const [lens, target, want] of cases) {
+    const got = splitEpisodeTarget(lens, target)
+    if (sum(got) !== want || got.some((n) => n < 1)) throw new Error(`splitEpisodeTarget(${lens}, ${target}) = ${got}`)
+  }
+
+  // 3e. "Buat semua naskah" only fills empty planned episodes and never touches drafts or clips.
+  const ep = (status: string, summary = 'ada', scriptDraft: unknown = null) =>
+    ({ status, summary, scriptDraft }) as Parameters<typeof needsScriptDraft>[0]
+  const draftCases: [Parameters<typeof needsScriptDraft>[0], number, boolean][] = [
+    [ep('planned'), 0, true],
+    [ep('planned', 'ada', { shots: [] }), 0, false],
+    [ep('planned'), 2, false],
+    [ep('draft', ''), 0, false],
+    [ep('draft', 'ringkasan manual'), 0, true],
+    [ep('script'), 0, false]
+  ]
+  for (const [e, clips, want] of draftCases) {
+    if (needsScriptDraft(e, clips) !== want) throw new Error(`needsScriptDraft(${e.status}, draf=${!!e.scriptDraft}, klip=${clips}) harus ${want}`)
+  }
+
+  // 3f. Progress summary counts what the hub shows.
+  const prog = seriesProgress(projectId)
+  if (prog.totalEpisodes !== listEpisodes(projectId).length) throw new Error('seriesProgress.totalEpisodes salah')
+  console.log(`[checkPhase6] Progres: ${JSON.stringify(prog)}`)
+
   // 4. Remove all episodes (Task 35)
   const epsBefore = listEpisodes(projectId)
   if (epsBefore.length === 0) throw new Error('Harus ada episode sebelum removeAllEpisodes')
+  const sheetIdsBefore = getBundle(projectId).characters.map((c) => c.sheetAssetId).filter(Boolean)
 
   removeAllEpisodes(projectId)
 
@@ -856,6 +911,10 @@ export async function checkPhase6(projectId: string): Promise<boolean> {
   if (bAfterDelete.characters.length === 0) {
     throw new Error('removeAllEpisodes TIDAK boleh menghapus karakter Lorebook')
   }
+  const assetIdsAfter = new Set(bAfterDelete.assets.map((x) => x.id))
+  if (sheetIdsBefore.some((id) => !assetIdsAfter.has(id!))) throw new Error('removeAllEpisodes TIDAK boleh menghapus lembar Lorebook')
+  if (bAfterDelete.assets.some((x) => x.clipId || x.episodeId)) throw new Error('Aset klip/episode harus ikut terhapus')
+  if (getPlanProgress(projectId)) throw new Error('plan_progress harus dihapus agar perencanaan mulai dari awal')
 
   console.log('[checkPhase6] Semua pengujian backend Fase 6 BERHASIL!')
   return true

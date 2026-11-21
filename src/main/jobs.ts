@@ -55,6 +55,11 @@ function release(q: QueueName): void {
   if (running[q] < limit) waiting[q].shift()?.()
 }
 
+/** updateJob finds no row once "Hapus semua episode" removed it; such a job is not reported any more. */
+function emitIfKept(job: Job | null | undefined): void {
+  if (job) emit.job(job)
+}
+
 /**
  * Runs a job in its queue. `beforeQueue` runs first, without holding a queue slot, for waits on other
  * work (such as a voice-over the job needs) that should not block unrelated jobs in the same queue.
@@ -70,6 +75,8 @@ export function runJob(job: Job, queue: QueueName, task: Task, beforeQueue?: (ct
     progress: (p, message) => {
       const now = Date.now()
       const j = updateJob(job.id, { progress: Math.min(0.99, Math.max(0, p)), ...(message !== undefined ? { message } : {}) })
+      // The row is gone when its episode was deleted mid-run; there is nothing left to report.
+      if (!j) return
       if (now - lastEmit > 250 || p >= 0.99) {
         lastEmit = now
         emit.job(j)
@@ -89,14 +96,14 @@ export function runJob(job: Job, queue: QueueName, task: Task, beforeQueue?: (ct
         throw new Error('Dibatalkan')
       }
       console.info('[job] queue wait completed', { kind: job.kind, provider: job.provider, elapsedMs: Date.now() - queuedAt })
-      emit.job(updateJob(job.id, { status: 'running', progress: 0.02 }))
+      emitIfKept(updateJob(job.id, { status: 'running', progress: 0.02 }))
       const result = await task(ctx)
       const extra =
         typeof result === 'string' ? { resultAssetId: result, message: null } : { message: result?.message ?? null }
-      emit.job(updateJob(job.id, { status: 'done', progress: 1, ...extra }))
+      emitIfKept(updateJob(job.id, { status: 'done', progress: 1, ...extra }))
     } catch (e) {
       const canceled = ctrl.signal.aborted || (e as Error)?.message === 'Dibatalkan'
-      emit.job(
+      emitIfKept(
         updateJob(job.id, {
           status: canceled ? 'canceled' : 'failed',
           error: canceled ? null : ((e as Error)?.message ?? String(e)),
@@ -136,4 +143,20 @@ export async function cancelProjectJobs(projectId: string, kind?: string): Promi
 
 export function isActive(id: string): boolean {
   return controllers.has(id)
+}
+
+/** Cancels the running work tied to episodes or clips, leaving Lorebook sheet jobs of the same project alone. */
+export async function cancelEpisodeJobs(projectId: string): Promise<void> {
+  const rows = getDb()
+    .prepare(
+      `SELECT id FROM jobs WHERE project_id = ? AND (episode_id IS NOT NULL OR clip_id IS NOT NULL) AND status IN ('queued', 'running')`
+    )
+    .all(projectId) as { id: string }[]
+  await Promise.all(rows.map((r) => cancelJob(r.id)))
+  // Their rows are about to be deleted, so wait until each task has stopped writing to them (bounded: a task
+  // stuck in a download still gets its abort, it just is not waited for).
+  const deadline = Date.now() + 15000
+  while (rows.some((r) => controllers.has(r.id)) && Date.now() < deadline) {
+    await new Promise((res) => setTimeout(res, 100))
+  }
 }

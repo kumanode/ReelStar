@@ -16,7 +16,6 @@ import type { Asset, Character, CharacterDerivative, Clip, Job, Location, Projec
 export const MIN_EPISODE_DURATION_SEC = 30
 export const MAX_EPISODE_DURATION_SEC = 180
 export const MAX_SERIES_DURATION_SEC = 3600 // 1 jam
-export const DEFAULT_TARGET_EPISODE_COUNT = 3
 
 export const EPISODE_DURATION_OPTIONS = [
   { value: 45, label: '45 detik' },
@@ -351,9 +350,14 @@ export function getDerivativeSheetStatus(
   })
   const asset = findAsset(assets, derivative.sheetAssetId)
   if (asset) {
+    // Stale (§6.G): a generated variant sheet records the base sheet and prompt_change it was made from, so
+    // editing the costume change or remaking the base sheet both mark it. Uploaded sheets never go stale; sheets
+    // from before basis hashes fall back to "base sheet is newer".
     if (asset.meta?.uploaded) return { status: 'current', blockers: [], basisHash, hasResult: true }
     const stored = (asset.meta as Record<string, unknown> | undefined)?.basisHash
-    if (typeof stored !== 'string' || stored === basisHash) return { status: 'current', blockers: [], basisHash, hasResult: true }
+    const baseSheet = findAsset(assets, character?.sheetAssetId)
+    const isStale = typeof stored === 'string' ? stored !== basisHash : !!baseSheet && baseSheet.createdAt > asset.createdAt
+    if (!isStale) return { status: 'current', blockers: [], basisHash, hasResult: true }
     return blockers.length === 0
       ? { status: 'stale', blockers: [], basisHash, hasResult: true }
       : { status: 'blocked', blockers, basisHash, hasResult: true }

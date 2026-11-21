@@ -418,8 +418,10 @@ export function LorebookPage() {
             size="sm"
             icon={<ArrowRight className="size-3.5" />}
             onClick={() => {
-              if (episodes.length > 0) {
-                void switchEpisode(episodes[0].id)
+              // Open the first episode still waiting for its script, so the creator lands where the next step is.
+              const next = episodes.find((e) => e.status === 'draft' || e.status === 'planned') ?? episodes[0]
+              if (next) {
+                void switchEpisode(next.id)
                 setActiveView('episode')
                 setProjectActiveTab('plan')
               } else {

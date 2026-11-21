@@ -110,6 +110,28 @@ const PLAN_ATTEMPTS = 3
 const hashText = (text: string): string => createHash('sha1').update(text).digest('hex')
 
 /** Cuts the source at paragraph (or sentence) boundaries so no episode starts mid-sentence. */
+/**
+ * Splits a series-wide episode target over the source windows by their length. Largest-remainder rounding keeps
+ * the sum equal to the target (each window still gets at least one episode, since every window is planned).
+ */
+export function splitEpisodeTarget(windowLengths: number[], target: number): number[] {
+  if (!windowLengths.length) return []
+  const total = windowLengths.reduce((a, b) => a + b, 0) || 1
+  const exact = windowLengths.map((len) => (len / total) * Math.max(target, windowLengths.length))
+  const out = exact.map((x) => Math.max(1, Math.floor(x)))
+  let left = Math.max(target, windowLengths.length) - out.reduce((a, b) => a + b, 0)
+  const order = exact.map((x, i) => ({ i, r: x - Math.floor(x) })).sort((a, b) => b.r - a.r)
+  for (let k = 0; left > 0; k = (k + 1) % order.length, left--) out[order[k].i]++
+  // The one-episode floor can overshoot when a short window rounds down to zero; take it back from the largest.
+  while (left < 0) {
+    const big = out.indexOf(Math.max(...out))
+    if (out[big] <= 1) break
+    out[big]--
+    left++
+  }
+  return out
+}
+
 function planWindows(text: string, from: number): { start: number; end: number }[] {
   const windows: { start: number; end: number }[] = []
   const minCut = PLAN_WINDOW_CHARS * 0.5
@@ -179,7 +201,13 @@ export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
   }
 
   const windows = planWindows(sourceText, from)
-  const totalRemainingLen = Math.max(1, sourceText.length - from)
+  // Fixed once before the loop: episodes saved by earlier windows of this run must not shrink the later shares.
+  const windowTargets = targetEpisodeCount
+    ? splitEpisodeTarget(
+        windows.map((w) => w.end - w.start),
+        Math.max(1, targetEpisodeCount - (mode === 'continue' ? listEpisodes(projectId).filter((e) => e.status !== 'draft').length : 0))
+      )
+    : null
   const system = sourceKind === 'screenplay'
     ? [
         'You are an expert drama script supervisor.',
@@ -211,16 +239,7 @@ export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
     const label = windows.length > 1 ? `bagian ${wi + 1} dari ${windows.length}` : 'teks sumber'
     emit.storyProgress({ projectId, message: `Merencanakan episode dari ${label}...` })
 
-    const windowLen = w.end - w.start
-    let windowTargetCount: number | null = null
-    if (targetEpisodeCount) {
-      if (mode === 'continue') {
-        const remainingTotal = Math.max(1, targetEpisodeCount - existing.length)
-        windowTargetCount = Math.max(1, Math.round((windowLen / totalRemainingLen) * remainingTotal))
-      } else {
-        windowTargetCount = Math.max(1, Math.round((windowLen / totalRemainingLen) * targetEpisodeCount))
-      }
-    }
+    const windowTargetCount = windowTargets?.[wi] ?? null
 
     const prompt = [
       `Serial Title: ${project.title || '(untitled)'}`,
@@ -521,6 +540,16 @@ export async function confirmEpisodeScript(projectId: string, episodeId: string,
   return confirmEpisodeScriptRepo(projectId, episodeId, draft)
 }
 
+/**
+ * Whether "Buat semua naskah" should write a draft for this episode: it is planned (or a hand-made episode with
+ * a summary to work from) and has neither a draft nor clips, so nothing the creator made can be overwritten.
+ */
+export function needsScriptDraft(ep: Pick<Episode, 'status' | 'scriptDraft' | 'summary'>, clipCount: number): boolean {
+  if (clipCount > 0 || ep.scriptDraft) return false
+  return ep.status === 'planned' || (ep.status === 'draft' && ep.summary.trim().length > 0)
+}
+
+// Stops between episodes: a draft already being written by the LLM is finished and kept.
 const batchScriptControllers = new Map<string, AbortController>()
 
 export function cancelBatchScripts(projectId: string): void {
@@ -547,9 +576,7 @@ export async function planAllMissingEpisodeScripts(
     for (const [idx, ep] of episodes.entries()) {
       if (ctrl.signal.aborted) break
 
-      const existingClips = clipsOf(projectId, ep.id)
-      // Only plan for episodes that don't have clips or existing drafts and are in draft/planned status
-      if (existingClips.length > 0 || ep.scriptDraft || !['draft', 'planned'].includes(ep.status)) {
+      if (!needsScriptDraft(ep, clipsOf(projectId, ep.id).length)) {
         skippedEpisodeIds.push(ep.id)
         continue
       }
