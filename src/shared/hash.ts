@@ -71,6 +71,7 @@ export interface ClipVideoBasisParams {
   /** The video length actually requested (videoSecondsFor), not the clip length: a dialogue clip takes the
    *  video's length afterwards, and that must not make the same video look stale. */
   seconds: number
+  prevAssetId?: string | null
 }
 
 /**
@@ -78,7 +79,7 @@ export interface ClipVideoBasisParams {
  * compiled video prompt, initial image asset id, clip duration, model, and speech dialogue.
  */
 export function computeClipVideoBasisHash(params: ClipVideoBasisParams): string {
-  const { project, clip, characters, seconds } = params
+  const { project, clip, characters, seconds, prevAssetId } = params
   const compiledVideoPrompt = compileClipVideoPrompt(project, clip, characters)
   const durationSec = seconds
 
@@ -86,11 +87,12 @@ export function computeClipVideoBasisHash(params: ClipVideoBasisParams): string 
     JSON.stringify([
       'video',
       project.videoModel || 'default',
-      clip.imageAssetId || null,
+      clip.continueFromPrevious ? `prev:${prevAssetId || 'none'}` : clip.imageAssetId || null,
       durationSec,
       compiledVideoPrompt,
       project.dialogAudio || 'tts',
-      clip.speakerId && project.dialogAudio === 'video' ? clip.narration.trim() : null
+      clip.speakerId && project.dialogAudio === 'video' ? clip.narration.trim() : null,
+      Boolean(clip.continueFromPrevious)
     ])
   )
 }
@@ -101,6 +103,7 @@ export function computeCharacterSheetBasisHash(params: {
   description: string
   styleId: string
   imageModel: string | null
+  profile?: unknown
 }): string {
   return fnv1a(
     JSON.stringify([
@@ -108,7 +111,8 @@ export function computeCharacterSheetBasisHash(params: {
       params.name.trim(),
       params.description.trim(),
       params.styleId,
-      params.imageModel || 'default'
+      params.imageModel || 'default',
+      params.profile ? JSON.stringify(params.profile) : null
     ])
   )
 }
@@ -118,12 +122,14 @@ export function computeDerivativeSheetBasisHash(params: {
   baseSheetAssetId: string | null
   promptChange: string
   imageModel: string | null
+  costumeKeyphrase?: string
 }): string {
   return fnv1a(
     JSON.stringify([
       'derivative-sheet',
       params.baseSheetAssetId || null,
       params.promptChange.trim(),
+      params.costumeKeyphrase ? params.costumeKeyphrase.trim() : '',
       params.imageModel || 'default'
     ])
   )
@@ -135,6 +141,7 @@ export function computeLocationSheetBasisHash(params: {
   description: string
   styleId: string
   imageModel: string | null
+  profile?: unknown
 }): string {
   return fnv1a(
     JSON.stringify([
@@ -142,7 +149,8 @@ export function computeLocationSheetBasisHash(params: {
       params.name.trim(),
       (params.description || '').trim(),
       params.styleId,
-      params.imageModel || 'default'
+      params.imageModel || 'default',
+      params.profile ? JSON.stringify(params.profile) : null
     ])
   )
 }
@@ -153,6 +161,7 @@ export function computePropSheetBasisHash(params: {
   description: string
   styleId: string
   imageModel: string | null
+  profile?: unknown
 }): string {
   return fnv1a(
     JSON.stringify([
@@ -160,7 +169,8 @@ export function computePropSheetBasisHash(params: {
       params.name.trim(),
       (params.description || '').trim(),
       params.styleId,
-      params.imageModel || 'default'
+      params.imageModel || 'default',
+      params.profile ? JSON.stringify(params.profile) : null
     ])
   )
 }

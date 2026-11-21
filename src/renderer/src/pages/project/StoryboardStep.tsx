@@ -603,6 +603,31 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
                 aria-label="Arahan gerak video"
                 className={cx(inputCls, 'py-2 text-[13px] leading-relaxed')}
               />
+              {clip.sort > 0 && (
+                <div className="flex items-center justify-between rounded-xl border border-line-2 bg-surface px-3 py-2 text-xs">
+                  <div>
+                    <span className="font-semibold text-ink">Sambung video dari shot sebelumnya</span>
+                    <p className="text-[11px] text-muted">Generate awal video dari frame terakhir shot #{clip.sort}.</p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={Boolean(clip.continueFromPrevious)}
+                    onClick={() => updateClip(clip.id, { continueFromPrevious: !clip.continueFromPrevious })}
+                    className={cx(
+                      'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors',
+                      clip.continueFromPrevious ? 'bg-accent' : 'bg-line-2'
+                    )}
+                  >
+                    <span
+                      className={cx(
+                        'inline-block size-4 transform rounded-full bg-white transition-transform',
+                        clip.continueFromPrevious ? 'translate-x-6' : 'translate-x-1'
+                      )}
+                    />
+                  </button>
+                </div>
+              )}
               {vidStatus.status === 'blocked' && (
                 <div className="rounded-lg border border-bad/30 bg-bad-soft px-3 py-2 text-xs text-bad-ink">
                   <span className="font-semibold">Video terblokir:</span> {vidStatus.blockers.join(' · ')}

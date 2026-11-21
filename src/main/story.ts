@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { CAMERA_PRESETS, MOTION_STRENGTHS, TRANSITIONS } from '@shared/motion'
 import { formatChapters } from '@shared/chapters'
 import { LANGUAGES } from '@shared/models'
@@ -7,16 +7,23 @@ import { getStyle } from '@shared/styles'
 import { MIN_EPISODE_DURATION_SEC, MAX_EPISODE_DURATION_SEC } from '@shared/validation'
 import type {
   CameraPresetId,
+  CandidateCharacter,
+  CandidateDerivative,
+  CandidateLocation,
+  CandidateProp,
   Clip,
+  DialogueType,
   DraftShot,
   Episode,
   EpisodeScriptDraft,
+  LorebookExtractionResult,
   MotionStrength,
   MusicPrompt,
   NewAssetProposal,
   PlanBatchScriptsResult,
   PlanEpisodesInput,
   ProjectBundle,
+  ShotDetail,
   SmartSfxCue,
   SourceKind,
   ThumbnailConcept,
@@ -169,7 +176,8 @@ function planProblem(items: RawEpisodePlanItem[]): string | null {
 export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]> {
   const projectId = input.projectId
   const project = getProject(projectId)
-  const sourceText = (input.sourceText ?? project.sourceText ?? '').trim()
+  const rawSource = (input.sourceText ?? project.sourceText ?? '').trim()
+  const sourceText = rawSource || (project.synopsis ?? '').trim()
   const sourceKind: SourceKind = input.sourceKind ?? project.sourceKind ?? 'novel'
   const targetDuration = Math.max(
     MIN_EPISODE_DURATION_SEC,
@@ -179,7 +187,7 @@ export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
   const mode = input.mode ?? 'replace'
 
   if (!sourceText) {
-    throw new Error('Teks sumber cerita masih kosong. Masukkan novel atau naskah serial dulu.')
+    throw new Error('Teks sumber cerita atau sinopsis masih kosong. Masukkan cerita atau sinopsis terlebih dahulu.')
   }
 
   let from = 0
@@ -232,6 +240,10 @@ export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
         'All titles, summaries, hooks, beats, teasers, and excerpts must be in gripping, natural Indonesian.'
       ].join(' ')
 
+  const effectiveSystem = project.seriesGuidelines
+    ? `${system}\n\nCreator Guidelines for this series:\n${project.seriesGuidelines}`
+    : system
+
   for (const [wi, w] of windows.entries()) {
     const part = sourceText.slice(w.start, w.end)
     const existing = listEpisodes(projectId)
@@ -258,7 +270,7 @@ export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
     for (let attempt = 1; attempt <= PLAN_ATTEMPTS && problem; attempt++) {
       if (attempt > 1) emit.storyProgress({ projectId, message: `Mengulang ${label} (percobaan ${attempt}): ${problem}...` })
       try {
-        const res = await generateJson<RawEpisodePlanResponse>({ system, prompt, schema: EPISODE_PLAN_SCHEMA, name: 'episode_planner' })
+        const res = await generateJson<RawEpisodePlanResponse>({ system: effectiveSystem, prompt, schema: EPISODE_PLAN_SCHEMA, name: 'episode_planner' })
         items = res.episodes ?? []
         problem = planProblem(items)
       } catch (e) {
@@ -357,7 +369,21 @@ const SCRIPT_DRAFT_SCHEMA = {
           text: { type: 'string', description: 'Dialogue line spoken in the shot, or narration text. Empty if silent.' },
           emotion: { type: 'string', description: 'Emotional delivery and facial expression, e.g. "marah, mencemooh".' },
           framing: { type: 'string', description: 'Shot framing: close-up, medium shot, extreme close-up, two-shot, over-the-shoulder, wide.' },
-          durationSec: { type: 'integer', description: 'Shot duration in seconds (typically 3 to 7).' }
+          durationSec: { type: 'integer', description: 'Shot duration in seconds (typically 3 to 7).' },
+          shot_detail: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              camera_motion: { type: 'string', description: 'Camera movement, e.g. "slow pan left", "whip pan", "static", "dramatic push in".' },
+              camera_reason: { type: 'string', description: 'Cinematic rationale for this camera choice.' },
+              lighting: { type: 'string', description: 'Lighting setup, e.g. "chiaroscuro, rim light, low-key dramatic".' },
+              blocking: { type: 'string', description: 'Character staging and physical movement in frame.' },
+              non_speaking_reaction: { type: 'string', description: 'What other visible non-speaking characters are doing or emoting.' },
+              sfx_ambience: { type: 'string', description: 'Sound effect cue or background ambience.' },
+              speech_delivery: { type: 'string', description: 'Voice intonation delivery, e.g. "berbisik sinis", "membentak tegas", "suara bergetar".' },
+              dialogue_type: { type: 'string', enum: ['dialogue', 'os', 'vo', 'narration'], description: 'Type: dialogue (on-screen lip sync), os (off-screen character), vo (voice-over internal monologue), narration (story narrator).' }
+            }
+          }
         },
         required: ['title', 'sourceExcerpt', 'visualAction', 'characters', 'costumes', 'location', 'props', 'speaker', 'text', 'emotion', 'framing', 'durationSec']
       }
@@ -400,6 +426,16 @@ interface RawDraftShot {
   emotion?: string
   framing?: string
   durationSec?: number
+  shot_detail?: {
+    camera_motion?: string
+    camera_reason?: string
+    lighting?: string
+    blocking?: string
+    non_speaking_reaction?: string
+    sfx_ambience?: string
+    speech_delivery?: string
+    dialogue_type?: string
+  }
 }
 
 interface RawScriptDraftResponse {
@@ -449,9 +485,11 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
     '4. CONTINUITY: If a previous episode ended on a cliffhanger, this episode must immediately resolve or escalate it in the opening beats.',
     '5. DEFAULT COSTUMES: Each character wears a consistent costume variant for the episode unless an explicit wardrobe change occurs in the story.',
     '6. LOREBOOK & ASSET DETECTION: Match characters, locations, and props to registered entities whenever possible.',
+    '7. SHOT DETAILS & PACING: For every shot, provide rich shot_detail (camera_motion, camera_reason, lighting, blocking, non_speaking_reaction, sfx_ambience, speech_delivery, dialogue_type). Speech must be concise (< 3 words/second).',
     'If the story introduces a new recurring character, costume variant, location, or prop not in the Lorebook, propose it in "newAssets" with kind, name, description, action, target, and reason.',
-    'Write dialogue, action, emotions, and titles in natural, dramatic Indonesian.'
-  ].join('\n')
+    'Write dialogue, action, emotions, and titles in natural, dramatic Indonesian.',
+    project.seriesGuidelines ? `Creator guidelines for this series:\n${project.seriesGuidelines}` : ''
+  ].filter(Boolean).join('\n')
 
   const prompt = [
     `Current Episode: ${ep.title} (Target duration: ${ep.durationSec}s)`,
@@ -499,6 +537,24 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
     const characters = Array.isArray(s.characters) ? s.characters.map(str).filter(Boolean) : []
     if (speaker && !characters.some((c) => c.toLowerCase() === speaker.toLowerCase())) characters.unshift(speaker)
 
+    const text = str(s.text)
+    const wordCount = text.trim().split(/\s+/).filter(Boolean).length
+    const minDurForSpeech = wordCount > 0 ? Math.ceil(wordCount / 2.8) : 2
+    const requestedDur = Number(s.durationSec) || 5
+    const durationSec = Math.max(minDurForSpeech, Math.min(requestedDur, 12))
+
+    const rawDetail = s.shot_detail || {}
+    const shotDetail: ShotDetail = {
+      cameraMotion: str(rawDetail.camera_motion),
+      cameraReason: str(rawDetail.camera_reason),
+      lighting: str(rawDetail.lighting),
+      blocking: str(rawDetail.blocking),
+      nonSpeakingReaction: str(rawDetail.non_speaking_reaction),
+      sfxAmbience: str(rawDetail.sfx_ambience),
+      speechDelivery: str(rawDetail.speech_delivery),
+      dialogueType: (rawDetail.dialogue_type as DialogueType) || (speaker ? 'dialogue' : text ? 'narration' : undefined)
+    }
+
     return {
       title: str(s.title) || `Shot ${i + 1}`,
       sourceExcerpt: str(s.sourceExcerpt),
@@ -508,10 +564,11 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
       location: str(s.location) || null,
       props: Array.isArray(s.props) ? s.props.map(str).filter(Boolean) : [],
       speaker,
-      text: str(s.text),
+      text,
       emotion: str(s.emotion),
       framing: str(s.framing) || 'medium shot',
-      durationSec: Math.max(2, Math.min(Number(s.durationSec) || 5, 12))
+      durationSec,
+      shotDetail
     }
   })
 
@@ -1188,5 +1245,220 @@ export async function generateThumbnailConcept(projectId: string, title: string,
     prompt: str(r.prompt) || `Dramatic close-up of the main character reacting to the moment described by the title "${clean}", high contrast, atmospheric lighting`,
     composition: str(r.composition),
     textHook: str(r.textHook).toUpperCase() || clean.split(/\s+/).slice(0, 3).join(' ').toUpperCase()
+  }
+}
+
+// ---------- Phase 7: Lorebook Extraction from Story ----------
+
+const LOREBOOK_EXTRACTION_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    characters: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string', description: 'Character full name in the story' },
+          description: { type: 'string', description: 'Comprehensive visual appearance in 1-2 Indonesian sentences' },
+          voiceStyle: { type: 'string', description: 'Speaking tone / vocal style in Indonesian (e.g. tegas, sinis, dingin)' },
+          aliases: { type: 'array', items: { type: 'string' }, description: 'Aliases, nicknames, or title forms' },
+          visual: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              age: { type: 'string', description: 'Age range, e.g. "25-30 tahun"' },
+              gender: { type: 'string', description: 'Pria / Wanita' },
+              bodyType: { type: 'string', description: 'Body build and posture' },
+              facialFeatures: { type: 'string', description: 'Distinct face features' },
+              hair: { type: 'string', description: 'Hair length, color, styling' },
+              distinctiveFeatures: { type: 'string', description: 'Unique identifiers (scars, mole, glasses)' },
+              defaultOutfit: { type: 'string', description: 'Everyday signature wardrobe' }
+            }
+          },
+          narrative: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              role: { type: 'string', description: 'Role in story (protagonis, antagonis, pendukung)' },
+              desire: { type: 'string', description: 'Main motivation or desire' },
+              secret: { type: 'string', description: 'Hidden secret or vulnerability' },
+              arc: { type: 'string', description: 'Character trajectory or transformation' },
+              speechPattern: { type: 'string', description: 'Speech mannerism or habits' }
+            }
+          }
+        },
+        required: ['name', 'description']
+      }
+    },
+    derivatives: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          characterName: { type: 'string', description: 'Character who wears this costume' },
+          name: { type: 'string', description: 'Name of the costume variant (e.g. Gaun Merah Pesta, Jas Hitam Kantor)' },
+          promptChange: { type: 'string', description: 'Description of the changed attire and makeup' },
+          costumeKeyphrase: { type: 'string', description: 'Short, memorable anchor keyphrase for image/video prompts' }
+        },
+        required: ['characterName', 'name', 'promptChange', 'costumeKeyphrase']
+      }
+    },
+    locations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string', description: 'Location name' },
+          description: { type: 'string', description: 'Visual atmosphere and scenic details' },
+          aliases: { type: 'array', items: { type: 'string' } },
+          profile: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              interiorExterior: { type: 'string', description: 'Interior / Eksterior' },
+              timeOfDayLighting: { type: 'string', description: 'Lighting ambiance' },
+              architecturalStyle: { type: 'string', description: 'Design/architectural aesthetic' },
+              keyFeatures: { type: 'string', description: 'Defining physical features' }
+            }
+          }
+        },
+        required: ['name', 'description']
+      }
+    },
+    props: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string', description: 'Prop name' },
+          description: { type: 'string', description: 'Physical appearance' },
+          aliases: { type: 'array', items: { type: 'string' } },
+          profile: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              category: { type: 'string', description: 'Category (dokumen, senjata, perhiasan, dll)' },
+              appearance: { type: 'string', description: 'Specific color, material, texture' },
+              significance: { type: 'string', description: 'Plot or emotional significance' }
+            }
+          }
+        },
+        required: ['name', 'description']
+      }
+    }
+  },
+  required: ['characters', 'derivatives', 'locations', 'props']
+}
+
+export async function extractLorebookFromStory(projectId: string): Promise<LorebookExtractionResult> {
+  const p = getProject(projectId)
+  const episodes = listEpisodes(projectId)
+  const source = p.sourceText.trim() || p.synopsis.trim()
+  if (!source) throw new Error('Tidak ada teks cerita atau sinopsis untuk diekstrak ke Lorebook.')
+
+  emit.storyProgress({ projectId, message: 'Menganalisis cerita untuk mengekstrak Lorebook & profil karakter...' })
+
+  const epSummaries = episodes.map((e) => `Ep ${e.episodeNum} (${e.title}): ${e.summary}. Beats: ${(e.storyBeats || []).join('; ')}`).join('\n')
+  const system = [
+    p.promptTemplates?.lorebook_extract ||
+      'You are an expert story analyst and visual director specializing in worldbuilding bibles for vertical drama series.',
+    'Extract all recurring characters (with visual profiles and narrative bibles), their prominent costume variants with anchor keyphrases, recurring locations, and dramatic props.',
+    'Anchor keyphrases for costume variants must be concise, distinctive phrases (e.g. "gaun merah sutra belahan paha", "jas wol hitam bergaris emas") that prevent AI image/video models from drifting from key wardrobe details.',
+    p.seriesGuidelines ? `Creator guidelines for this series:\n${p.seriesGuidelines}` : ''
+  ].filter(Boolean).join('\n\n')
+
+  const prompt = [
+    `Series Title: ${p.title}`,
+    `Series Synopsis: ${p.synopsis}`,
+    epSummaries ? `Planned Episodes:\n${epSummaries}` : '',
+    `Source Story Content:\n"""\n${source.slice(0, 15000)}\n"""`
+  ].filter(Boolean).join('\n\n')
+
+  const res = await generateJson<any>({
+    system,
+    prompt,
+    schema: LOREBOOK_EXTRACTION_SCHEMA,
+    name: 'lorebook_extraction'
+  })
+
+  const rawChars = Array.isArray(res.characters) ? res.characters : []
+  const rawDerivs = Array.isArray(res.derivatives) ? res.derivatives : []
+  const rawLocs = Array.isArray(res.locations) ? res.locations : []
+  const rawProps = Array.isArray(res.props) ? res.props : []
+
+  const characters: CandidateCharacter[] = rawChars.map((c: any) => ({
+    tempId: randomUUID(),
+    name: str(c.name),
+    description: str(c.description),
+    voiceStyle: str(c.voiceStyle) || undefined,
+    aliases: Array.isArray(c.aliases) ? c.aliases.map(str).filter(Boolean) : [],
+    profile: {
+      visual: {
+        age: str(c.visual?.age),
+        gender: str(c.visual?.gender),
+        bodyType: str(c.visual?.bodyType),
+        facialFeatures: str(c.visual?.facialFeatures),
+        hair: str(c.visual?.hair),
+        distinctiveFeatures: str(c.visual?.distinctiveFeatures),
+        defaultOutfit: str(c.visual?.defaultOutfit)
+      },
+      narrative: {
+        role: str(c.narrative?.role),
+        desire: str(c.narrative?.desire),
+        secret: str(c.narrative?.secret),
+        arc: str(c.narrative?.arc),
+        speechPattern: str(c.narrative?.speechPattern)
+      }
+    }
+  })).filter((c: CandidateCharacter) => Boolean(c.name))
+
+  const derivatives: CandidateDerivative[] = rawDerivs.map((d: any) => ({
+    tempId: randomUUID(),
+    characterName: str(d.characterName),
+    name: str(d.name),
+    promptChange: str(d.promptChange),
+    costumeKeyphrase: str(d.costumeKeyphrase)
+  })).filter((d: CandidateDerivative) => Boolean(d.name && d.characterName))
+
+  const locations: CandidateLocation[] = rawLocs.map((l: any) => ({
+    tempId: randomUUID(),
+    name: str(l.name),
+    description: str(l.description),
+    aliases: Array.isArray(l.aliases) ? l.aliases.map(str).filter(Boolean) : [],
+    profile: {
+      interiorExterior: str(l.profile?.interiorExterior),
+      timeOfDayLighting: str(l.profile?.timeOfDayLighting),
+      architecturalStyle: str(l.profile?.architecturalStyle),
+      keyFeatures: str(l.profile?.keyFeatures)
+    }
+  })).filter((l: CandidateLocation) => Boolean(l.name))
+
+  const props: CandidateProp[] = rawProps.map((pr: any) => ({
+    tempId: randomUUID(),
+    name: str(pr.name),
+    description: str(pr.description),
+    aliases: Array.isArray(pr.aliases) ? pr.aliases.map(str).filter(Boolean) : [],
+    profile: {
+      category: str(pr.profile?.category),
+      appearance: str(pr.profile?.appearance),
+      significance: str(pr.profile?.significance)
+    }
+  })).filter((pr: CandidateProp) => Boolean(pr.name))
+
+  emit.storyProgress({
+    projectId,
+    message: `Ekstraksi selesai: ditemukan ${characters.length} karakter, ${derivatives.length} kostum, ${locations.length} lokasi, dan ${props.length} prop.`
+  })
+
+  return {
+    characters,
+    derivatives,
+    locations,
+    props
   }
 }

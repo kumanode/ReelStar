@@ -187,7 +187,7 @@ UI lama tetap dipakai dan selalu membuka episode pertama.
 
 ## Fase 5 — Opsional
 
-Diprioritaskan setelah fase 4 dipakai pada satu serial nyata: speed ramp, sambung frame antar-shot, Magic Wand,
+Diprioritaskan setelah fase 4 dipakai pada satu serial nyata: speed ramp, Magic Wand,
 tombol cepat gerak kamera, auto-draft 1 klik, preset subtitle kreatif, ekspor draft CapCut, storyboard grid, video
 dari gambar referensi, pemeriksaan otomatis video, riwayat versi dengan rollback, lip-sync TTS lewat model
 ber-`audio_url`.
@@ -313,6 +313,281 @@ secara massal tanpa kehilangan kendali atas draf atau biaya generate.
   durasi, navigasi, batch Lorebook, pembuatan draf massal, dan penghapusan massal termasuk batal, kegagalan, serta
   episode yang sudah memiliki hasil.
 
+## Fase 7 — Lorebook otomatis, shot lebih rinci, dan arahan yang bisa diedit
+
+Tujuan: setelah episode direncanakan, tokoh/lokasi/prop sudah tersedia untuk ditinjau sehingga kreator di Lorebook
+tinggal membuat gambar; data shot cukup rinci untuk gambar, video, dan dialog yang konsisten; kreator bisa
+mengarahkan gaya AI tanpa menulis ulang prompt di setiap layar.
+
+- Dasar: analisa 2026-11-21 (keluhan pengguna + perbandingan dengan huobao-drama, drama-skills, dramaclaw,
+  LocalMiniDrama, short-drama-factory, Jellyfish, ViMax). Yang diambil hanya **ide alur**; huobao-drama
+  (CC BY-NC-SA) dan dramaclaw (Elastic 2.0) tidak boleh disalin kodenya.
+- Dikerjakan di branch sendiri (mis. `fase-7-lorebook-shot`) dari `fase-6-alur-serial` setelah fase 6 di-merge.
+- Urutan: **36 → 37 → 38 → 39 → 40 → 41 → 42 → 43**. Tugas 36 murni tampilan dan bisa dikerjakan lebih dulu
+  secara terpisah.
+- Prinsip yang dibawa dari fase 6: AI tidak pernah menyimpan atau menimpa data kreator tanpa langkah tinjau; aksi
+  berbiaya selalu menampilkan estimasi dulu.
+- Di luar cakupan: infinite canvas, previz 3D, cerita bercabang (alur ReelStar tetap linear).
+
+### Tugas 36 — Rapikan Buat Serial Baru, target episode, dan kartu sumber
+- Modal "Buat Serial Baru" (`Home.tsx`): pakai `EPISODE_DURATION_OPTIONS` dari `shared/validation.ts` (hapus dua
+  daftar durasi lokal), tambahkan target jumlah episode + total estimasi + peringatan 1 jam (logika sama dengan
+  Episode Hub, ditulis sekali di `shared/`), tambahkan jenis sumber (Novel/Naskah Jadi) dan kolom/unggah teks
+  sumber opsional.
+- Perbaiki klaim premis: planner hanya membaca teks sumber. Pilih satu dan catat di `docs/keputusan-teknis.md`:
+  (a) premis tanpa sumber boleh direncanakan — planner memakai premis sebagai bahan cerita; atau (b) teks bantuan
+  diubah dan Hub meminta teks sumber. Rekomendasi: (a), karena serial dari ide satu kalimat adalah alur umum.
+- Ganti dropdown target episode (21 opsi, kotak cari muncul otomatis, menu selebar tombol 128 px) dengan input
+  angka −/+ (1–20) dan sakelar "Otomatis". Bila tetap `Select`, minimal `searchable={false}` + `menuWidth`.
+- Kartu "Sumber & Target" selalu tampil di Episode Hub; hanya kotak teks sumbernya yang bisa dilipat. Target,
+  durasi, total estimasi, dan tombol Rencanakan tidak boleh ikut tersembunyi.
+- Berkas utama: `Home.tsx`, `EpisodeHub.tsx`, `shared/validation.ts`, `story.ts` (bila opsi a).
+- Kriteria selesai: serial baru bisa diberi target dan sumber sejak awal; nilai modal dan Hub sama; dropdown tidak
+  terpotong di 1180×720; pengaturan perencanaan selalu terlihat.
+
+### Tugas 37 — Ekstraksi Lorebook dan character bible
+- Langkah baru "Siapkan Lorebook": AI membaca seluruh sumber (per potongan seperti planner) dan episode yang sudah
+  direncanakan, lalu menghasilkan **kandidat** tokoh, varian kostum per episode, lokasi, dan prop. Nama yang sama
+  atau alias digabung (dedup) sebelum ditampilkan.
+- Kolom terstruktur:
+  - Tokoh — visual: usia, gender, ciri wajah, rambut, postur, pakaian bawaan, ciri khas; naratif: peran,
+    keinginan, rahasia, perkembangan, ciri cara bicara; suara: gaya suara (dipakai TTS/Veo).
+  - Varian kostum — **frasa kunci kostum**: satu kalimat tetap yang ditempel apa adanya ke setiap prompt shot
+    (menguatkan `promptChange`), plus episode tempat varian dipakai.
+  - Lokasi — jenis tempat, waktu/pencahayaan bawaan, suasana, detail tetap. Prop — bentuk, bahan, status.
+- Tinjau kandidat: terima, gabung ke entri yang ada, atau abaikan (pola tinjau usulan aset di Rencana & Tinjau).
+  Tidak ada yang tersimpan tanpa diterima.
+- Pemicu: tombol "Lanjut ke Lorebook" menjalankan ekstraksi bila Lorebook masih kosong; di Lorebook ada tombol
+  "Perbarui dari cerita" yang hanya menambah kandidat baru. Berjalan sebagai proses dengan progres dan bisa
+  dibatalkan.
+- Prompt lembar referensi (`sheetPrompt`, `derivativeSheetPrompt`) disusun dari kolom terstruktur dan tetap bisa
+  diedit; hash basis lembar ikut kolom baru agar lembar lama jadi basi.
+- Naskah shot (`planEpisodeScript`) memakai character bible (ciri cara bicara, gaya suara) dan frasa kunci kostum.
+- Berkas utama: `story.ts` (ekstraksi), `repo.ts` + migrasi (kolom profil), `shared/types.ts`, `shared/hash.ts`,
+  `generation.ts` (prompt lembar), `LorebookPage.tsx` (form + tinjau kandidat), `EpisodeHub.tsx`, IPC 3 tempat.
+- Catatan kode: tokoh kini hanya punya `description` bebas. Simpan profil sebagai satu kolom JSON per tabel
+  (`profile_json`) agar migrasi kecil; `description` tetap terbaca untuk proyek lama dan diisi sebagai ringkasan.
+- Kriteria selesai: dari novel contoh, Lorebook terisi kandidat yang bisa ditinjau; tidak ada duplikat untuk nama
+  + alias yang sama; menerima kandidat lalu "Buat semua lembar" langsung bisa jalan tanpa mengetik prompt.
+
+### Tugas 38 — Skema shot diperluas dan dialog lebih tepat
+- Kolom shot baru di draf dan klip: gerak kamera + alasannya, keadaan awal dan akhir, pencahayaan/waktu, posisi dan
+  arah pandang pemain (blocking), reaksi tokoh yang tidak bicara, SFX/ambien, cara penyampaian ucapan (terpisah
+  dari emosi).
+- Jenis teks: dialog di layar, suara dari luar layar (O.S.), monolog batin (V.O. tokoh), dan narasi. Klip O.S./V.O.
+  tidak mewajibkan pembicara terlihat dan diarahkan ke TTS, bukan lip-sync Veo.
+- Batas kata per durasi: konstanta di `shared/` (sekitar 2,5–3 kata/detik bahasa Indonesia) dan batas panjang
+  video model. Draf yang melanggar ditandai di Rencana & Tinjau dengan saran memecah shot; tidak dipotong diam-diam.
+- `compileClipPrompt`/`compileClipVideoPrompt` memakai kolom baru (kamera, framing, blocking, pencahayaan); prompt
+  cadangan "camera slowly pushes in" diganti prompt dari data shot. Hash basis ikut berubah.
+- UI: kolom baru tampil ringkas di kartu Rencana & Tinjau dan Inspector Storyboard (bagian "Detail shot" yang bisa
+  dilipat).
+- Berkas utama: `story.ts` (`SCRIPT_DRAFT_SCHEMA`, prompt sistem), `shared/types.ts` (`DraftShot`, `Clip`),
+  `shared/prompts.ts`, `shared/validation.ts`, `repo.ts`, `PlanStep.tsx`, `StoryboardStep.tsx`.
+- Catatan kode: kolom klip baru wajib di semua tempat (AGENTS.md no. 4). Pertimbangkan satu kolom JSON
+  `shot_detail_json` untuk mengurangi titik sentuh; tetap ikuti daftar itu (tipe, migrasi, `toClip`,
+  `saveSnapshot`, `duplicateProject`, `insertClipAfter`, `CLIP_COLS`, `addClip`).
+- Kriteria selesai: draf baru berisi kolom kamera/pencahayaan/blocking; prompt video berbeda antar shot sesuai data;
+  ucapan terlalu panjang ditandai; klip O.S. tidak diblokir karena pembicara tak terlihat.
+
+### Tugas 39 — Dokter naskah sebelum konfirmasi
+- Pemeriksaan draf naskah per episode: aturan tetap (tanpa AI) dulu — hook di shot pertama, cliffhanger di shot
+  terakhir, ucapan terlalu panjang, tokoh/varian/lokasi yang tidak ada di Lorebook, kostum berganti tanpa alasan,
+  durasi total vs target episode; lalu opsi "Periksa dengan AI" untuk ritme dan kontinuitas antar-episode.
+- Hasil berupa kartu masalah bertingkat (wajib/disarankan/catatan) dengan tombol lompat ke shot. Kreator tetap bisa
+  konfirmasi walau ada catatan; masalah "wajib" meminta konfirmasi tambahan.
+- Indikator ritme episode: bar per shot diwarnai durasi dan ukuran shot.
+- Berkas utama: `shared/` (aturan pemeriksaan, dipakai renderer dan dev harness), `story.ts` (opsi AI),
+  `PlanStep.tsx`.
+- Kriteria selesai: draf contoh dengan ucapan panjang dan tokoh tak terdaftar memunculkan kartu yang tepat; tidak
+  ada perubahan draf otomatis.
+
+### Tugas 40 — Arahan serial dan template prompt
+- **Arahan serial** (pengaturan proyek): catatan sutradara yang ikut ke planner, naskah, ekstraksi Lorebook, prompt
+  gambar, dan prompt video. Contoh: era, budaya, palet warna, aturan busana.
+- **Template per tahap** yang bisa diganti dan dikembalikan ke bawaan: planner episode, naskah shot, ekstraksi
+  Lorebook, lembar referensi, prompt gambar, prompt video, dokter naskah. Disimpan per proyek (bawaan aplikasi tetap
+  di kode). Variabel wajib (mis. sumber, daftar Lorebook) divalidasi sebelum disimpan; skema JSON keluaran tetap di
+  kode dan tidak bisa diedit.
+- Perubahan arahan/template menandai hasil terkait sebagai basi lewat hash basis, tidak membuat ulang otomatis.
+- Berkas utama: `story.ts`, `shared/prompts.ts`, `shared/hash.ts`, `repo.ts` + migrasi, halaman pengaturan proyek.
+- Kriteria selesai: arahan serial terlihat efeknya di prompt gambar/video; template rusak ditolak dengan pesan yang
+  jelas; "kembalikan ke bawaan" bekerja.
+
+### Tugas 41 — Pusat tugas
+- Panel tugas global: job berjalan/antre/gagal/selesai per proyek dengan progres, durasi, pesan error, tombol batal,
+  coba ulang yang gagal (satuan dan semua), dan lompat ke shot/aset/episode asal.
+- Termasuk proses non-job (draf massal, ekstraksi Lorebook) agar semua pekerjaan panjang terlihat di satu tempat.
+- Berkas utama: komponen baru di `renderer/src/components`, `App.tsx` (listener event job sudah ada di sana),
+  `jobs.ts`, IPC untuk coba ulang.
+- Kriteria selesai: batch lembar dan video terlihat di panel; job gagal bisa diulang tanpa mengulang yang sukses.
+
+### Tugas 42 — Lanjutkan semua (pipeline bertahap)
+- Satu aksi per episode atau serial: naskah → konfirmasi (tetap manual) → prompt → gambar → video → suara, yang
+  melewati hasil yang sudah ada, berhenti di setiap langkah berbiaya untuk konfirmasi estimasi, dan bisa dilanjutkan
+  setelah gagal/batal.
+- Memakai fungsi batch yang sudah ada (`generateMissingImages`, `generateMissingVideos`, narasi), bukan jalur baru.
+- Berkas utama: `EpisodeHub.tsx`/`StudioHeader.tsx`, orkestrasi di main, Pusat tugas (Tugas 41).
+- Kriteria selesai: episode setengah jadi bisa dilanjutkan tanpa mengulang langkah yang sudah selesai; tidak ada
+  langkah berbiaya yang jalan tanpa konfirmasi.
+
+### Tugas 43 — Sambung frame terakhir antar-shot (dipindah dari fase 5)
+- Opsi per shot "lanjut dari shot sebelumnya": frame terakhir video shot sebelumnya dipakai sebagai frame awal (atau
+  referensi) shot berikutnya, hanya untuk model yang mendukung; sumber frame masuk hash basis sehingga shot
+  berikutnya basi bila video sebelumnya diganti.
+- Berkas utama: `generation.ts` (ambil frame dengan FFmpeg), `shared/higgsfield.ts` + katalog Flow2API (dukungan
+  model), `shared/validation.ts`, `StoryboardStep.tsx`.
+- Kriteria selesai: dua shot berurutan dengan opsi aktif memakai frame terakhir yang benar; mengganti video
+  sebelumnya menandai shot berikutnya basi.
+
+- **Checkpoint 7** — typecheck/build bersih; dev harness (`STUDIO_USER_DATA` sementara) menguji: dedup kandidat
+  Lorebook, migrasi profil pada salinan database lama, kolom shot baru di prompt, batas kata per durasi, aturan
+  dokter naskah, template rusak ditolak, dan basi akibat arahan/template/frame sebelumnya; screenshot modal Home,
+  Hub, Lorebook (tinjau kandidat), Rencana & Tinjau, dan Pusat tugas di 1180×720 terang dan gelap.
+
+## Fase 8 — Kontinuitas, referensi per shot, dan pengiriman
+
+Tujuan: wajah, kostum, dan prop tetap sama antar-shot dan antar-episode; kreator bisa melihat dan mengatur referensi
+setiap shot; hasil ekspor siap diunggah ke platform tujuan tanpa diolah ulang.
+
+- Dasar: [rencana referensi drama short](../docs/superpowers/plans/2026-11-21-referensi-drama-short.md)
+  (huobao-drama, drama-skills, awesome-short-drama-skills, dramaclaw, LocalMiniDrama, dramaxis,
+  short-drama-factory), ditambah tinjauan kode 2026-11-21. Seperti fase 7, yang diambil hanya **ide alur**.
+- Yang **tidak** diulang di sini karena sudah tercakup fase 7: pemetaan `shot_detail` (Tugas 38), panel Dokter
+  Naskah dan strip ritme (Tugas 39), pusat tugas dan coba ulang yang gagal (Tugas 41). Sisa dan bug dari dua tugas
+  pertama dikumpulkan di Tugas 44.
+- Dikerjakan di branch sendiri (mis. `fase-8-kontinuitas`) setelah fase 7 di-merge.
+- Urutan: **44 → 45 → 46 → 47 → 48**. Tugas 49–52 tidak saling bergantung dan boleh dikerjakan kapan saja setelah
+  44. Tugas 49 menyentuh ekspor, jadi diuji paling akhir.
+- Setiap input baru yang memengaruhi prompt harus ikut mengubah hash basis. Uji wajibnya: mengubah input itu membuat
+  hasil lama menjadi `stale`, bukan tetap `current`.
+
+### Tugas 44 — Rapikan sisa Tugas 38–39
+- Select tipe dialog di `PlanStep.tsx` memakai nilai bawaan `'spoken'`, padahal nilai itu tidak ada di
+  `DialogueType` (`dialogue|os|vo|narration`). Nilai bawaan harus diambil dari pembicara: ada pembicara → `dialogue`,
+  hanya teks → `narration`. Pakai logika yang sama dengan `cleanShots`, ditulis sekali di `shared/`.
+- `cleanShots` (`story.ts`) selalu mengisi `shotDetail` dengan string kosong. Simpan hanya kunci yang berisi supaya
+  draf dan `shot_detail_json` tetap ringkas, dan supaya badge "Terisi" tidak menyala karena data kosong.
+- Dokter Naskah (`shared/validation.ts`):
+  - `UNREGISTERED_SPEAKER` dan aturan "pembicara harus terlihat" hanya berlaku untuk `dialogueType === 'dialogue'`.
+    O.S., V.O., dan narasi tidak butuh tokoh di layar.
+  - `WEAK_HOOK` tidak boleh lolos hanya karena shot pertama punya teks. Shot itu harus punya aksi visual atau emosi.
+- Prompt video (`compileClipVideoPrompt`): shot O.S./V.O. tidak boleh meminta gerak bibir, dan di mode
+  `dialog_audio = 'video'` shot seperti itu diarahkan ke TTS (sesuai kriteria Tugas 38).
+- Jalur trim `compileClipPrompt` (dipakai saat prompt melebihi `promptLimit`) sekarang membuang pencahayaan,
+  blocking, props, emosi, dan framing. Urutkan prioritasnya: identitas, kostum, dan lokasi dipertahankan paling
+  akhir, dan detail sutradara dipotong lebih dulu daripada identitas.
+- Berkas utama: `story.ts`, `shared/validation.ts`, `shared/prompts.ts`, `PlanStep.tsx`.
+- Kriteria selesai: draf dengan shot V.O. tidak memicu peringatan pembicara; Select tipe dialog selalu menampilkan
+  salah satu opsinya; prompt model dengan `promptLimit` kecil tetap memuat identitas tokoh dan kostum.
+
+### Tugas 45 — Kunci kontinuitas (lock words)
+- Frasa identitas yang ditempel **apa adanya** ke setiap prompt gambar dan video: ciri wajah/rambut tokoh, frasa
+  kunci kostum (`costumeKeyphrase` dari Tugas 37), ciri tetap lokasi, bentuk/bahan prop, ditambah frasa manual.
+  Setiap frasa punya `id`, `label`, `text`, `source`, dan `enabled`.
+- Disimpan per serial (`series_lock_json` di `projects`) dan per episode (`lock_words_json` di `episodes`).
+  Keduanya migrasi baru di akhir `MIGRATIONS`.
+- `shared/lock.ts`: `buildLockWords`, `renderLockBlock`, `checkLockCompliance`. Blok `LOCKED (keep verbatim): ...`
+  ditaruh setelah scene dan sebelum art style, di `compileClipPrompt` dan `compileClipVideoPrompt`, **termasuk jalur
+  trim**. Lock yang tetap terpotong dilaporkan sebagai peringatan di Storyboard, bukan pemblokir.
+- Hash: karena hash gambar/video dibangun dari prompt hasil kompilasi, lock otomatis ikut. Tetap uji bahwa mengubah
+  satu lock membuat hasil `stale`.
+- UI: panel kunci di Lorebook (tingkat serial) dan di Rencana & Tinjau (tingkat episode); frasa otomatis bisa
+  dimatikan, tidak dihapus.
+- Berkas utama: migrasi + `repo.ts`, `shared/lock.ts`, `shared/prompts.ts`, `shared/types.ts`, `LorebookPage.tsx`,
+  `PlanStep.tsx`, `StoryboardStep.tsx`, IPC 3 tempat bila perlu.
+- Kriteria selesai: semua prompt gambar/video memuat blok LOCKED; mengubah lock menandai hasil terkait basi; proyek
+  lama tanpa lock tetap berjalan.
+
+### Tugas 46 — Aturan ritme Dokter Naskah
+- Aturan tetap baru (tanpa AI):
+  - `DIALOGUE_RUN_TOO_LONG`: lebih dari 6 shot dialog berturut-turut tanpa shot aksi/reaksi.
+  - `VISUAL_ANCHOR_MISSING`: 4 shot dialog berturut-turut tanpa satu pun shot aksi/reaksi sebagai jangkar visual.
+  - `CLIFFHANGER_UNRESOLVED`: Ep N tidak membuka dengan jawaban cliffhanger Ep N−1. Tambah parameter opsional
+    `previousEpisode` agar pemanggil lama tidak pecah. Mulai sebagai `info`, karena pencocokan teks tidak pasti.
+- Four-beat (hook / konfrontasi / pembalikan / aftermath, diskalakan ke durasi target episode): tambahkan kolom
+  `beat` ke skema shot planner, lalu periksa dari label itu. Tanpa label, aturan ini cukup `info`, supaya tidak
+  menghasilkan false positive dari tebakan kata kunci.
+- Tombol perbaikan tanpa AI di kartu masalah: "Perpanjang durasi" (durasi = ceil(kata ÷ konstanta kata/detik di
+  `shared/`)) dan "Bagi jadi 2 shot". Perbaikan dengan AI dipisahkan, diberi tanda biaya, dan tidak berjalan sendiri.
+- Berkas utama: `shared/validation.ts`, `story.ts` (kolom `beat`), `PlanStep.tsx`.
+- Kriteria selesai: draf 8 shot close-up dialog memicu aturan ritme; narator dan V.O. tidak memicu peringatan
+  pembicara; tombol perbaikan mengubah draf hanya saat diklik.
+
+### Tugas 47 — Catatan kontinuitas lintas episode
+- Tabel `continuity_items`: `id, project_id, kind (foreshadow|prop|rule|relationship), name, detail,
+  status (open|paid|dropped), tier (hot|cold), planted_episode_id, payoff_episode_id, created_at`.
+- Tab "Kontinuitas" di Lorebook atau Episode Hub: daftar item terbuka, umurnya (berapa episode), dan tombol
+  "Dibayar di episode ini".
+- Planner (`planEpisodeScript`) menerima item terbuka yang jatuh tempo beserta instruksi menutupnya. Item usulan AI
+  masuk sebagai kandidat yang ditinjau dulu, mengikuti pola Tugas 37.
+- Dokter Naskah: `CONTINUITY_OPEN_TOO_LONG` (item hot terbuka lebih dari 3 episode), `PAYOFF_MISSING`, dan
+  `PROP_VANISHED`. Dua aturan terakhir berbasis pencocokan teks, jadi mulai sebagai `info`.
+- Berkas utama: migrasi + `repo.ts`, `shared/types.ts`, IPC 3 tempat, `story.ts`, `shared/validation.ts`,
+  `LorebookPage.tsx`/`EpisodeHub.tsx`; `docs/data-model.md`.
+- Kriteria selesai: item yang ditanam di Ep 1 muncul di konteks planner Ep 3; menandai dibayar menutup item; tidak
+  ada item yang tersimpan tanpa ditinjau.
+
+### Tugas 48 — Referensi per shot
+- Kolom klip `reference_asset_ids_json`: `null` berarti otomatis (perilaku `collectReferenceSheets` sekarang), isi
+  berarti override yang tetap dipotong ke `maxRefs(model)`. Kolom klip baru wajib ditambahkan di semua tempat
+  (AGENTS.md no. 4).
+- UI chip referensi di Inspector/Storyboard dengan urutan tokoh/kostum → lokasi → prop, tombol lepas, dan
+  "Unggah referensi" (aset `image` dengan `clipId`).
+- `resolveReferenceUrls` (`generation.ts`) memakai override bila ada. Hash sudah memuat `refSheetAssetIds`, jadi
+  cukup pastikan nilainya diambil dari daftar override, bukan hasil pilih otomatis.
+- Berkas utama: migrasi + `repo.ts`, `shared/types.ts`, `generation.ts`, `shared/hash.ts`, `Inspector.tsx`,
+  `StoryboardStep.tsx`, `store/project.ts`.
+- Kriteria selesai: melepas satu referensi menandai gambar basi; generate ulang memakai urutan baru, dan prompt di
+  `assets.prompt` menyebut urutan yang sama.
+
+### Tugas 49 — Preset platform ekspor
+- `shared/exportPresets.ts` dengan `{ id, label, w, h, fps, bitrateKbps, maxDurationSec?, note }`. Mulai dari
+  TikTok, Reels, Shorts (1080×1920), YouTube dan Facebook (1920×1080), serta Kustom. Preset pasar China (Douyin,
+  Kuaishou, Bilibili, RED) ditunda.
+- `ExportOptions` mendapat kolom opsional `presetId`, `videoBitrateKbps`, dan `maxDurationSec` supaya payload lama
+  tetap valid. Exporter: bila ada bitrate, pakai `-b:v`/`-maxrate`/`-bufsize`; bila tidak, tetap CRF seperti
+  sekarang. Estimasi ruang disk memakai bitrate preset.
+- **Untuk sekarang hanya preset dengan rasio yang sama dengan proyek.** Rasio berbeda (mis. 3:4 dari proyek 9:16)
+  butuh crop/pad. Itu perubahan filter graph yang harus ditulis di `shared/` dan ikut tampil di pratinjau (AGENTS.md
+  no. 1), jadi dijadikan tugas terpisah bersama matte blur 9:16 untuk proyek 16:9.
+- UI: grid preset (bukan `<select>`) yang menampilkan perkiraan ukuran file, fps, dan peringatan bila durasi
+  melewati `maxDurationSec` (mis. "video 78 dtk melewati batas 60 dtk Shorts").
+- Jangan mengubah `planSegments` atau transisi.
+- Berkas utama: `shared/exportPresets.ts`, `shared/types.ts`, `exporter.ts`, `ExportDialog.tsx`.
+- Kriteria selesai: ekspor demo dengan preset Shorts dan YouTube dicek dengan `ffprobe` (ukuran, fps, bitrate) dan
+  selisih durasi video vs audio di bawah 100 ms.
+
+### Tugas 50 — Versi naskah dan rollback (dari fase 5)
+- Tabel `script_versions(id, episode_id, draft_json, note, created_at)`. Versi disimpan setiap kali planner
+  menghasilkan draf dan setiap konfirmasi, maksimal 20 per episode (yang terlama dibuang).
+- Rencana & Tinjau: daftar versi (komponen `Select`) dan tombol "Pulihkan". Memulihkan versi hanya mengganti draf;
+  klip yang sudah dikonfirmasi tidak ikut berubah.
+- Berkas utama: migrasi + `repo.ts`, `shared/types.ts`, IPC 3 tempat, `PlanStep.tsx`.
+- Kriteria selesai: membuat draf ulang lalu memulihkan versi lama mengembalikan isi draf persis.
+
+### Tugas 51 — Aksi grup di Storyboard
+- Mode pilih beberapa shot (kotak centang di kartu), lalu aksi "Gambar ulang", "Video ulang", dan "Suara ulang".
+  Aksi ini memakai fungsi batch yang sudah ada (`generateClipsVideo`, `generateMissingImages`, TTS), bukan jalur baru.
+- Modal estimasi gabungan sebelum jalan; progres dan pembatalan lewat Pusat tugas (Tugas 41).
+- Penyedia tanpa id job yang bisa dilacak (Flow2API) ditandai "tidak bisa dilanjutkan" dan ditawarkan untuk
+  diulang. Jangan berpura-pura bisa melanjutkan.
+- Berkas utama: `StoryboardStep.tsx`, IPC bila perlu orkestrasi baru.
+- Kriteria selesai: tiga shot terpilih diproses dengan satu konfirmasi biaya; shot yang tidak dipilih tidak
+  tersentuh.
+
+### Tugas 52 — Paket kirim
+- Setelah MP4 selesai, opsi menulis `manifest.json` (durasi, resolusi, fps, daftar aset, versi naskah, hash file),
+  `checksums.txt`, dan SRT bila dipilih, lalu menggabungkannya menjadi satu zip.
+- Tanpa dependensi baru: Windows 10/11 sudah punya `tar.exe` yang bisa membuat zip (`tar -a -c -f paket.zip ...`).
+- Berkas utama: modul baru `src/main/package.ts`, `ExportDialog.tsx`.
+- Kriteria selesai: zip berisi MP4, manifest, dan checksum yang cocok dengan file.
+
+- **Checkpoint 8** — typecheck/build bersih; dev harness (`STUDIO_USER_DATA` sementara) menguji: hasil menjadi basi
+  saat lock atau referensi diubah, aturan Dokter Naskah tanpa false positive untuk narator/O.S./V.O., migrasi pada
+  salinan database lama, dan ekspor preset diperiksa dengan `ffprobe`; screenshot Lorebook (kunci, kontinuitas),
+  Rencana & Tinjau, Storyboard (chip referensi, mode pilih), dan dialog ekspor di 1180×720 terang dan gelap.
+
 ## Risiko
 
 | Risiko | Dampak | Penanganan |
@@ -324,3 +599,10 @@ secara massal tanpa kehilangan kendali atas draf atau biaya generate.
 | Batch generate menguras kredit | Biaya tak terduga | Estimasi kredit dan batch semua-atau-tidak-sama-sekali (tugas 29) |
 | Target jumlah/durasi tidak sesuai panjang sumber | Hasil perencanaan meleset dari ekspektasi | Tampilkan estimasi dan selisih; jangan menyatakan target tercapai bila planner menghasilkan jumlah berbeda |
 | Aksi massal menimpa draf/hasil atau menghapus data yang salah | Kehilangan pekerjaan pengguna | Draf massal hanya mengisi yang kosong; hapus semua meminta konfirmasi dan mempertahankan Lorebook/sumber |
+| Ekstraksi Lorebook membuat duplikat atau tokoh salah | Lorebook berantakan, lembar terbuang | Dedup nama + alias; semua kandidat ditinjau dulu, tidak ada yang tersimpan otomatis |
+| Template prompt yang diedit merusak keluaran AI | Planner/naskah gagal | Validasi variabel wajib, skema JSON tetap di kode, tombol kembalikan ke bawaan |
+| Kolom shot/profil baru tidak terbaca di proyek lama | Data lama error | Kolom JSON opsional dengan nilai bawaan; uji salinan database lama di Checkpoint 7 |
+| Input prompt baru (lock, referensi) tidak masuk hash basis | Hasil lama tampak terkini padahal prompt berubah | Hash dari prompt hasil kompilasi + daftar referensi efektif; uji `current → stale` di Checkpoint 8 |
+| Prompt terpotong di model dengan `promptLimit` kecil | Identitas/kostum hilang, wajah melenceng | Jalur trim mempertahankan identitas, kostum, dan lock; lock yang terpotong ditandai |
+| Aturan Dokter Naskah berbasis tebakan teks | Peringatan palsu membuat kreator mengabaikan semuanya | Aturan tak pasti mulai sebagai `info`; four-beat memakai label `beat` dari planner |
+| Preset ekspor dengan rasio berbeda | Pratinjau ≠ ekspor | Fase 8 hanya preset rasio sama; crop/pad/matte ditulis di `shared/` sebagai tugas terpisah |

@@ -43,6 +43,8 @@ dalam transaksi, lalu `user_version` dinaikkan.
 | 11 | `projects.story_plan_json` untuk hook dan kerangka cerita yang ditinjau |
 | 12 | Studio multi-episode: `episodes` + backfill Episode 1; kolom drama `clips` (`episode_id`, `emotion`, `costume_ids`, `location_id`, `prop_ids`, `framing`, `source_excerpt`); tabel `character_derivatives`, `locations`, `props`; kolom aset & job `episode_id` |
 | 13 | `projects.target_episode_count` untuk target jumlah episode serial |
+| 14 | Fase 7 Lorebook: `profile_json` pada `characters`, `locations`, `props`; `costume_keyphrase` pada `character_derivatives` |
+| 15 | Fase 7 Sinematografi & Arahan: `shot_detail_json` dan `continue_from_previous` pada `clips`; `series_guidelines` dan `prompt_templates_json` pada `projects` |
 
 **Aturan:** tambahkan migrasi baru di akhir. Jangan mengubah migrasi yang sudah ada, karena pengguna lama sudah
 menjalankannya.
@@ -57,6 +59,8 @@ menjalankannya.
 | `storyPlan` | plan cerita JSON sebelum naskah dibuat: gaya narasi, judul, pertanyaan, pembuka, bab (ringkasan, detail kunci, `beats`, sasaran adegan), penutup, hal yang dihindari, sifat isi, serta fakta untuk dicek. Field baru bersifat opsional agar plan lama (`hook` + `brief` + babak) tetap terbaca; dinormalisasi saat naskah dibuat. |
 | `durationSec`, `language`, `aspectRatio` | target durasi, bahasa naskah/suara, `16:9` atau `9:16` |
 | `targetEpisodeCount` | target jumlah episode untuk planner; null = "Otomatis" (planner mengikuti panjang sumber, seperti proyek lama) |
+| `seriesGuidelines` | instruksi / batasan panduan gaya, nada cerita, atau aturan semesta serial dari kreator |
+| `promptTemplates` | kamus kustomisasi template prompt AI (`PromptTemplateKey` → template string) |
 | `styleId` | gaya visual (`src/shared/styles.ts`, 24 gaya) |
 | `ttsProvider`, `ttsVoice` | `gemini` atau `elevenlabs` + ID suara |
 | `imageModel`, `videoModel`, `videoResolution` | model Higgsfield per proyek (null = bawaan aplikasi) |
@@ -106,6 +110,8 @@ Satu klip = satu adegan: gambar atau video, suara narasinya, dan geraknya. Klip 
 | `mediaInMs` | titik mulai video di dalam filenya (tepi kiri klip video yang ditarik) |
 | `voiceInMs`, `voiceOutMs`, `voiceStartMs` | potongan suara: bagian file yang dipakai (`out` null = sampai akhir) dan posisinya dari awal klip |
 | `speakerId` | pemeran yang berbicara di adegan ini; `null` memakai narator proyek. `characterIds` tetap hanya menandai pemeran yang tampil |
+| `shotDetail` | metadata sinematografi & suara shot (`cameraMotion`, `cameraReason`, `lighting`, `blocking`, `nonSpeakingReaction`, `sfxAmbience`, `speechDelivery`, `dialogueType`) |
+| `continueFromPrevious` | apakah shot ini menyambung frame akhir video shot sebelumnya (ekstraksi frame `-0.1s` via FFmpeg untuk initial image model video) |
 | `imageAssetId`, `videoAssetId`, `audioAssetId` | aset aktif (dimiliki proses utama, tidak ikut snapshot) |
 
 Aturan potongan suara ada di `voiceSpan()` (`src/shared/timeline.ts`): suara yang melewati akhir klip dipotong.
@@ -122,6 +128,20 @@ Tambahkan di semua tempat berikut, atau data akan hilang diam-diam:
 6. `CLIP_COLS` di `repo.ts` kalau proses utama perlu mengubahnya lewat `patchClip`
 7. Nilai bawaan di `addClip` (`renderer/src/store/project.ts`)
 8. `StoryClip` di `repo.ts` (daftar `Omit`) kalau kolom tidak berasal dari naskah AI
+
+## Entitas Lorebook (`Character`, `CharacterDerivative`, `Location`, `Prop`)
+
+Lorebook menyimpan bible konsistensi visual dan narasi dunia serial drama.
+
+- **`Character`**: Memiliki `name`, `description`, `aliases`, `voiceStyle`, `sheetAssetId`, serta `profile` (`CharacterProfile`).
+  - `profile.visual`: `CharacterVisualProfile` (usia, gender, bentuk wajah/mata, gaya rambut, postur tubuh, pakaian bawaan, ciri khas mencolok).
+  - `profile.narrative`: `CharacterNarrativeProfile` (peran cerita, hasrat/tujuan, rahasia/konflik batin, busur karakter, pola bicara khas).
+- **`CharacterDerivative`**: Varian kostum atau penampilan tokoh. Memiliki `characterId`, `name`, `promptChange`, `sheetAssetId`, dan `costumeKeyphrase`.
+  - `costumeKeyphrase`: frasa jangkar deskriptif singkat (misal *"jas wol hitam bergaris emas"*) untuk mengunci prompt visual dan video agar AI tidak melenceng.
+- **`Location`**: Latar dan lokasi adegan. Memiliki `name`, `description`, `aliases`, `sheetAssetId`, dan `profile` (`LocationProfile`).
+  - `profile`: tipe tempat, `interiorExterior` (interior/exterior/mixed), pencahayaan & suasana, gaya arsitektur, dan fitur tetap lingkungan.
+- **`Prop`**: Barang atau objek kunci adegan. Memiliki `name`, `description`, `aliases`, `sheetAssetId`, dan `profile` (`PropProfile`).
+  - `profile`: bentuk/kategori, warna/material/tampilan visual, dan signifikansi cerita.
 
 ## Aset (`Asset`)
 

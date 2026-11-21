@@ -53,7 +53,7 @@ Rincian setiap tugas ada di [plan.md](plan.md); desain di
 ## Fase 5 — Opsional
 
 - [ ] Speed ramp durasi video vs suara
-- [ ] Sambung frame terakhir ke frame awal shot berikutnya
+- [ ] ~~Sambung frame terakhir ke frame awal shot berikutnya~~ → dipindah ke Tugas 43 (fase 7)
 - [ ] Magic Wand perbaikan prompt
 - [ ] Tombol cepat gerak kamera
 - [ ] Auto-draft 1 klik
@@ -62,7 +62,7 @@ Rincian setiap tugas ada di [plan.md](plan.md); desain di
 - [ ] Storyboard grid
 - [ ] Video dari gambar referensi
 - [ ] Pemeriksaan otomatis video (layar hitam, gambar macet)
-- [ ] Riwayat versi dengan rollback
+- [ ] ~~Riwayat versi dengan rollback~~ → dipindah ke Tugas 50 (fase 8)
 - [ ] Lip-sync TTS lewat model ber-`audio_url`
 
 ## Fase 6 — Penyempurnaan alur serial
@@ -76,3 +76,34 @@ Urutan pengerjaan yang disarankan: 35 → 32 → 31 → 34 → 33.
 - [x] Tugas 34 — Buat draf naskah semua episode yang belum punya draf; jangan otomatis konfirmasi/menimpa.
 - [x] Tugas 35 — Hapus semua episode dengan konfirmasi; pertahankan sumber cerita dan Lorebook.
 - [x] Checkpoint 6 — typecheck/build dan verifikasi alur/batch massal lewat dev harness.
+
+## Fase 7 — Lorebook otomatis, shot lebih rinci, dan arahan yang bisa diedit
+
+Rincian dan kriteria penerimaan: [Fase 7 di plan.md](plan.md#fase-7--lorebook-otomatis-shot-lebih-rinci-dan-arahan-yang-bisa-diedit).
+Urutan pengerjaan: 36 → 37 → 38 → 39 → 40 → 41 → 42 → 43.
+
+- [x] Tugas 36 — Modal Buat Serial Baru (durasi, target, sumber), input target episode, kartu Sumber & Target selalu tampil.
+- [x] Tugas 37 — Ekstraksi Lorebook + character bible + frasa kunci kostum, dengan tinjau kandidat.
+- [x] Tugas 38 — Skema shot diperluas (kamera, pencahayaan, blocking, SFX), jenis teks O.S./V.O., batas kata per durasi.
+- [x] Tugas 39 — Dokter naskah dan indikator ritme sebelum konfirmasi.
+- [x] Tugas 40 — Arahan serial dan template prompt per tahap yang bisa dikembalikan ke bawaan.
+- [x] Tugas 41 — Pusat tugas: progres, batal, coba ulang, lompat ke asal.
+- [x] Tugas 42 — Lanjutkan semua: pipeline bertahap dengan konfirmasi biaya.
+- [x] Tugas 43 — Sambung frame terakhir antar-shot (dari fase 5).
+- [x] Checkpoint 7 — typecheck/build, dev harness, screenshot 1180×720 terang dan gelap.
+
+## Fase 8 — Kontinuitas, referensi per shot, dan pengiriman
+
+Rincian dan kriteria penerimaan: [Fase 8 di plan.md](plan.md#fase-8--kontinuitas-referensi-per-shot-dan-pengiriman).
+Urutan pengerjaan: 44 → 45 → 46 → 47 → 48; tugas 49–52 bebas setelah 44 (49 diuji paling akhir).
+
+- [ ] Tugas 44 — Rapikan sisa Tugas 38–39: nilai bawaan tipe dialog, `shotDetail` ringkas, aturan O.S./V.O., `WEAK_HOOK`, prioritas jalur trim prompt.
+- [ ] Tugas 45 — Kunci kontinuitas (lock words) per serial dan episode, masuk prompt (termasuk jalur trim) dan hash.
+- [ ] Tugas 46 — Aturan ritme Dokter Naskah: deretan dialog, jangkar visual, four-beat dengan label `beat`, cliffhanger antar-episode.
+- [ ] Tugas 47 — Catatan kontinuitas lintas episode (foreshadow, prop, aturan, relasi) + konteks planner.
+- [ ] Tugas 48 — Referensi per shot: chip, lepas, unggah, override masuk hash.
+- [ ] Tugas 49 — Preset platform ekspor (rasio sama dengan proyek), bitrate, peringatan durasi.
+- [ ] Tugas 50 — Versi naskah dan rollback (dari fase 5).
+- [ ] Tugas 51 — Aksi grup di Storyboard dengan estimasi gabungan.
+- [ ] Tugas 52 — Paket kirim: manifest, checksum, SRT, zip.
+- [ ] Checkpoint 8 — typecheck/build, dev harness (hash basi, Dokter Naskah, migrasi, `ffprobe`), screenshot 1180×720 terang dan gelap.

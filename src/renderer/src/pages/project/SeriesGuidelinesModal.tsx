@@ -1,0 +1,263 @@
+import { useState, useEffect } from 'react'
+import { BookOpen, RotateCcw, Sparkles, Check, FileCode } from 'lucide-react'
+import {
+  DEFAULT_PROMPT_TEMPLATES,
+  type PromptTemplateKey
+} from '@shared/types'
+import { AutoTextarea } from '../../components/AutoTextarea'
+import { Badge, Button, Modal, Segmented, cx } from '../../components/ui'
+import { useApp } from '../../store/app'
+import { useProject } from '../../store/project'
+
+interface SeriesGuidelinesModalProps {
+  open: boolean
+  onClose: () => void
+}
+
+type ModalTab = 'guidelines' | 'templates'
+
+export function SeriesGuidelinesModal({ open, onClose }: SeriesGuidelinesModalProps) {
+  const { project, updateProject, flush } = useProject()
+  const { toast } = useApp()
+
+  const [activeTab, setActiveTab] = useState<ModalTab>('guidelines')
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState<PromptTemplateKey>('episode_planner')
+
+  // Local state for guidelines & templates
+  const [guidelines, setGuidelines] = useState(project?.seriesGuidelines ?? '')
+  const [templates, setTemplates] = useState<Record<string, string>>(
+    () => project?.promptTemplates ?? {}
+  )
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (open && project) {
+      setGuidelines(project.seriesGuidelines ?? '')
+      setTemplates(project.promptTemplates ?? {})
+    }
+  }, [open, project])
+
+  if (!project) return null
+
+  const handleResetTemplate = (key: PromptTemplateKey) => {
+    const defaultDef = DEFAULT_PROMPT_TEMPLATES[key]
+    if (!defaultDef) return
+    setTemplates((prev) => {
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+    toast('info', `Template "${defaultDef.name}" dikembalikan ke instruksi bawaan.`)
+  }
+
+  const handleResetAllTemplates = () => {
+    setTemplates({})
+    toast('info', 'Semua template prompt dikembalikan ke bawaan.')
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      updateProject({
+        seriesGuidelines: guidelines.trim(),
+        promptTemplates: templates
+      })
+      await flush()
+      toast('success', 'Arahan serial dan template prompt berhasil disimpan.')
+      onClose()
+    } catch {
+      toast('error', 'Gagal menyimpan arahan serial.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const activeTemplateDef = DEFAULT_PROMPT_TEMPLATES[selectedTemplateKey]
+  const currentPrompt = templates[selectedTemplateKey] ?? activeTemplateDef.template
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Arahan Serial & Kustomisasi Prompt AI"
+      subtitle="Sesuaikan nada, aturan cerita, dan template prompt yang digunakan oleh AI untuk serial ini."
+      width={780}
+    >
+      <div className="flex flex-col gap-4">
+        {/* Navigation Tabs */}
+        <div className="flex items-center justify-between border-b border-line pb-3">
+          <Segmented<ModalTab>
+            value={activeTab}
+            onChange={setActiveTab}
+            options={[
+              {
+                id: 'guidelines',
+                label: (
+                  <span className="flex items-center gap-1.5">
+                    <BookOpen className="size-3.5" />
+                    Arahan Serial (Series Guidelines)
+                  </span>
+                )
+              },
+              {
+                id: 'templates',
+                label: (
+                  <span className="flex items-center gap-1.5">
+                    <FileCode className="size-3.5" />
+                    Template Prompt AI ({Object.keys(DEFAULT_PROMPT_TEMPLATES).length})
+                  </span>
+                )
+              }
+            ]}
+          />
+
+          {activeTab === 'templates' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<RotateCcw className="size-3.5" />}
+              onClick={handleResetAllTemplates}
+            >
+              Reset Semua ke Bawaan
+            </Button>
+          )}
+        </div>
+
+        {/* Tab 1: Guidelines */}
+        {activeTab === 'guidelines' && (
+          <div className="flex flex-col gap-3 py-1">
+            <div className="rounded-xl border border-line bg-sand/30 p-3 text-xs text-ink-2 space-y-1">
+              <span className="font-semibold text-ink flex items-center gap-1.5">
+                <Sparkles className="size-3.5 text-accent" />
+                Bagaimana Arahan Serial Digunakan?
+              </span>
+              <p>
+                Teks arahan ini akan disematkan secara otomatis ke dalam prompt LLM saat AI memecah episode,
+                merancang draf naskah shot-by-shot, dan memeriksa ritme cerita.
+              </p>
+              <p className="text-[11px] text-muted">
+                Contoh: &ldquo;Serial drama vertikal misteri. Karakter utama selalu bersikap tenang dan sinis.
+                Pantangan: jangan gunakan adegan darah berlebihan. Pertahankan dialog pendek dan tajam.&rdquo;
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold text-ink">Catatan Arahan Gaya & Dunia Cerita</label>
+              <AutoTextarea
+                value={guidelines}
+                onChange={(e) => setGuidelines(e.target.value)}
+                placeholder="Tuliskan aturan nada, gaya bahasa, pantangan adegan, atau karakteristik khusus serial ini..."
+                minRows={8}
+                maxHeight={260}
+                className="w-full rounded-xl border border-line bg-surface p-3 text-xs leading-relaxed text-ink outline-none transition-colors focus:border-ink"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Tab 2: Prompt Templates */}
+        {activeTab === 'templates' && (
+          <div className="flex flex-col gap-3 py-1">
+            {/* Template selector pills */}
+            <div className="flex flex-wrap gap-1.5 border-b border-line pb-2.5">
+              {(Object.keys(DEFAULT_PROMPT_TEMPLATES) as PromptTemplateKey[]).map((key) => {
+                const def = DEFAULT_PROMPT_TEMPLATES[key]
+                const isCustom = Boolean(templates[key] && templates[key] !== def.template)
+                const isSelected = selectedTemplateKey === key
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setSelectedTemplateKey(key)}
+                    className={cx(
+                      'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors',
+                      isSelected
+                        ? 'border-ink bg-ink text-paper'
+                        : 'border-line bg-surface text-ink hover:border-line-2'
+                    )}
+                  >
+                    <span>{def.name}</span>
+                    {isCustom && <span className="size-1.5 rounded-full bg-accent" />}
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Template detail editor */}
+            <div className="flex flex-col gap-2.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-display text-sm font-bold text-ink flex items-center gap-2">
+                    {activeTemplateDef.name}
+                    <Badge tone="info" className="text-[10px]">
+                      {selectedTemplateKey}
+                    </Badge>
+                  </h4>
+                  <p className="text-xs text-muted mt-0.5">{activeTemplateDef.description}</p>
+                </div>
+
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<RotateCcw className="size-3" />}
+                  onClick={() => handleResetTemplate(selectedTemplateKey)}
+                >
+                  Kembalikan ke Bawaan
+                </Button>
+              </div>
+
+              {/* Supported Placeholders */}
+              {activeTemplateDef.placeholders && activeTemplateDef.placeholders.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+                  <span className="font-semibold">Placeholder:</span>
+                  {activeTemplateDef.placeholders.map((ph: string) => (
+                    <span
+                      key={ph}
+                      className="rounded bg-sand px-1.5 py-0.5 font-mono text-[10px] text-accent-dark font-medium border border-line"
+                    >
+                      {`{${ph}}`}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* System Prompt Textarea */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[11px] font-semibold text-ink-2">Instruksi Prompt</label>
+                <AutoTextarea
+                  value={currentPrompt}
+                  onChange={(e) => {
+                    const newPrompt = e.target.value
+                    setTemplates((prev) => ({
+                      ...prev,
+                      [selectedTemplateKey]: newPrompt
+                    }))
+                  }}
+                  minRows={10}
+                  maxHeight={280}
+                  className="w-full rounded-xl border border-line bg-surface p-3 font-mono text-xs leading-relaxed text-ink outline-none transition-colors focus:border-ink"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Footer */}
+        <div className="flex items-center justify-between border-t border-line pt-3 mt-1">
+          <Button variant="secondary" size="sm" onClick={onClose} disabled={saving}>
+            Batal
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<Check className="size-3.5" />}
+            onClick={handleSave}
+            loading={saving}
+          >
+            {saving ? 'Menyimpan...' : 'Simpan Arahan & Template'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}

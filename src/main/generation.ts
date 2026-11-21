@@ -88,7 +88,7 @@ import {
   updateJob
 } from './repo'
 import { dropCache, getSettings, readCache, writeCache } from './settings'
-import { extractAudio, probeDurationMs, probeHasAudio, probeSize } from './services/audio'
+import { extractAudio, extractLastFrame, probeDurationMs, probeHasAudio, probeSize } from './services/audio'
 import { timeScript, whisperReady } from './whisper'
 import * as eleven from './services/elevenlabs'
 import * as gemini from './services/gemini'
@@ -142,36 +142,64 @@ function characterLine(c: Character): string {
 
 function sheetPrompt(project: Project, c: Character): string {
   const style = getStyle(project.styleId)
+  const visualParts: string[] = []
+  if (c.profile?.visual) {
+    const v = c.profile.visual
+    if (v.age) visualParts.push(`Age: ${v.age}`)
+    if (v.gender) visualParts.push(`Gender: ${v.gender}`)
+    if (v.bodyType) visualParts.push(`Body: ${v.bodyType}`)
+    if (v.facialFeatures) visualParts.push(`Face: ${v.facialFeatures}`)
+    if (v.hair) visualParts.push(`Hair: ${v.hair}`)
+    if (v.distinctiveFeatures) visualParts.push(`Distinguishing features: ${v.distinctiveFeatures}`)
+    if (v.defaultOutfit) visualParts.push(`Standard attire: ${v.defaultOutfit}`)
+  }
+  const details = visualParts.length ? ` Visual traits: ${visualParts.join(', ')}.` : ''
   return [
     style.prompt,
-    `Character reference sheet for "${c.name}": ${c.description}. The character is ${style.characterHint}.`,
+    `Character reference sheet for "${c.name}": ${c.description}.${details} The character is ${style.characterHint}.`,
     'Show the SAME character three times side by side: front view, three-quarter view and side view, full body, neutral standing pose, evenly spaced, on a plain light neutral background (this overrides any background instruction above). Consistent proportions, costume and colors in all three views.'
   ].join('\n\n')
 }
 
 function derivativeSheetPrompt(project: Project, c: Character, d: CharacterDerivative): string {
   const style = getStyle(project.styleId)
+  const keyphrase = d.costumeKeyphrase ? ` Key costume elements: ${d.costumeKeyphrase}.` : ''
   return [
     style.prompt,
-    `Character reference sheet variant for "${c.name}" (${d.name}). Base appearance: ${c.description}. Costume change: ${d.promptChange}. The character is ${style.characterHint}.`,
+    `Character reference sheet variant for "${c.name}" (${d.name}). Base appearance: ${c.description}. Costume change: ${d.promptChange}.${keyphrase} The character is ${style.characterHint}.`,
     'Show the SAME character three times side by side: front view, three-quarter view and side view, full body, neutral standing pose, evenly spaced, on a plain light neutral background. Consistent proportions, face, hair, and costume in all three views matching the costume modification.'
   ].join('\n\n')
 }
 
 function locationSheetPrompt(project: Project, l: Location): string {
   const style = getStyle(project.styleId)
+  const details: string[] = []
+  if (l.profile) {
+    if (l.profile.interiorExterior) details.push(`Type: ${l.profile.interiorExterior}`)
+    if (l.profile.timeOfDayLighting) details.push(`Lighting: ${l.profile.timeOfDayLighting}`)
+    if (l.profile.architecturalStyle) details.push(`Style: ${l.profile.architecturalStyle}`)
+    if (l.profile.keyFeatures) details.push(`Key features: ${l.profile.keyFeatures}`)
+  }
+  const extra = details.length ? ` (${details.join(', ')})` : ''
   return [
     style.prompt,
-    `Location environment reference for "${l.name}": ${l.description || l.name}.`,
+    `Location environment reference for "${l.name}": ${l.description || l.name}.${extra}`,
     'Clean architectural or landscape establishing shot, cinematic composition, NO people, NO characters, empty scenery, high detail, clear lighting.'
   ].join('\n\n')
 }
 
 function propSheetPrompt(project: Project, p: Prop): string {
   const style = getStyle(project.styleId)
+  const details: string[] = []
+  if (p.profile) {
+    if (p.profile.category) details.push(`Category: ${p.profile.category}`)
+    if (p.profile.appearance) details.push(`Appearance: ${p.profile.appearance}`)
+    if (p.profile.significance) details.push(`Significance: ${p.profile.significance}`)
+  }
+  const extra = details.length ? ` (${details.join(', ')})` : ''
   return [
     style.prompt,
-    `Prop reference sheet for "${p.name}": ${p.description || p.name}.`,
+    `Prop reference sheet for "${p.name}": ${p.description || p.name}.${extra}`,
     'Isolated studio shot of the single object, clean light neutral background, high detail, centered, NO people, NO hands holding it.'
   ].join('\n\n')
 }
@@ -449,6 +477,7 @@ function prereqContext(projectId: string): GenerationPrerequisitesContext {
     locations: locationsOf(projectId),
     props: propsOf(projectId),
     assets: assetsOf(projectId),
+    clips: clipsOf(projectId),
     activeJobs: activeJobsOf(projectId),
     isFlow2Api: isFlow2Api(),
     flow2apiImageModel: s.flow2apiImageModel,
@@ -950,11 +979,62 @@ export function generatePropSheet(propId: string): Job {
   })
 }
 
+async function resolveInitialImageForClip(
+  fresh: Clip,
+  project: Project
+): Promise<{ buffer: Buffer; asset: Asset; prevAssetId?: string }> {
+  if (fresh.continueFromPrevious) {
+    const episodeClips = clipsOf(project.id, fresh.episodeId).sort((a, b) => a.sort - b.sort)
+    const idx = episodeClips.findIndex((c) => c.id === fresh.id)
+    if (idx > 0) {
+      const prev = episodeClips[idx - 1]
+      if (prev.videoAssetId) {
+        const videoAsset = getAsset(prev.videoAssetId)
+        if (videoAsset) {
+          const videoAbs = assetAbsPath(project.id, videoAsset.localPath)
+          const frameRel = `images/lastframe-${fresh.id}.png`
+          const frameAbs = assetAbsPath(project.id, frameRel)
+          mkdirSync(dirname(frameAbs), { recursive: true })
+          await extractLastFrame(videoAbs, frameAbs)
+          const size = await probeSize(frameAbs).catch(() => null)
+          const frameAsset = insertAsset({
+            projectId: project.id,
+            clipId: fresh.id,
+            kind: 'image',
+            provider: 'local',
+            prompt: `Frame terakhir ${prev.title}`,
+            localPath: frameRel,
+            width: size?.width ?? null,
+            height: size?.height ?? null,
+            meta: { extractedFromVideo: prev.videoAssetId }
+          })
+          emit.asset(frameAsset)
+          const buf = readFileSync(frameAbs)
+          return { buffer: buf, asset: frameAsset, prevAssetId: videoAsset.id }
+        }
+      } else if (prev.imageAssetId) {
+        const imgAsset = getAsset(prev.imageAssetId)
+        if (imgAsset) {
+          const abs = assetAbsPath(project.id, imgAsset.localPath)
+          const buf = readFileSync(abs)
+          return { buffer: buf, asset: imgAsset, prevAssetId: imgAsset.id }
+        }
+      }
+    }
+  }
+
+  const image = getAsset(fresh.imageAssetId)
+  if (!image) throw new Error('Gambar klip tidak ditemukan')
+  const imgAbs = assetAbsPath(project.id, image.localPath)
+  if (!existsSync(imgAbs)) throw new Error('File gambar klip tidak ditemukan di disk')
+  const buf = readFileSync(imgAbs)
+  return { buffer: buf, asset: image }
+}
+
 export function generateClipVideo(clipId: string): Job {
   const existing = activeJobFor({ clipId }, 'video')
   if (existing) return existing
   const clip = getClip(clipId)
-  if (!clip.imageAssetId) throw new Error('Buat gambar klip ini dulu sebelum membuat video AI.')
 
   const prereqs = checkClipVideoPrerequisites(clip, getProject(clip.projectId), prereqContext(clip.projectId))
   if (!prereqs.ok) {
@@ -966,14 +1046,9 @@ export function generateClipVideo(clipId: string): Job {
     emit.job(job)
     return runJob(job, 'flow2api', async (ctx) => {
       const fresh = getClip(clipId)
-      const image = getAsset(fresh.imageAssetId)
-      if (!image) throw new Error('Gambar klip tidak ditemukan')
       const project = getProject(fresh.projectId)
       const allChars = charactersOf(project.id)
-
-      const imgAbs = assetAbsPath(project.id, image.localPath)
-      if (!existsSync(imgAbs)) throw new Error('File gambar klip tidak ditemukan di disk')
-      const imgBuffer = readFileSync(imgAbs)
+      const initial = await resolveInitialImageForClip(fresh, project)
 
       const durationSec = videoSecondsFor(project, fresh, prereqContext(project.id)).seconds
       const baseModel = (project.videoModel && !project.videoModel.includes('/') ? project.videoModel : null) ?? getSettings().flow2apiVideoModel
@@ -981,7 +1056,7 @@ export function generateClipVideo(clipId: string): Job {
       const modelId = video.model
 
       const prompt = compileClipVideoPrompt(project, fresh, allChars, 2000)
-      const basisHash = computeClipVideoBasisHash({ project, clip: fresh, characters: allChars, seconds: durationSec })
+      const basisHash = computeClipVideoBasisHash({ project, clip: fresh, characters: allChars, seconds: durationSec, prevAssetId: initial.prevAssetId })
 
       ctx.progress(0.04, 'Menyiapkan video Flow2API (Veo)')
       const { mediaUrl } = await f2a.generateVideo({
@@ -989,7 +1064,7 @@ export function generateClipVideo(clipId: string): Job {
         model: modelId,
         aspectRatio: video.aspectRatio,
         durationSec: video.durationSec,
-        initialImage: video.withImage ? imgBuffer : undefined,
+        initialImage: video.withImage ? initial.buffer : undefined,
         signal: ctx.signal,
         onProgress: (p, msg) => ctx.progress(p, msg)
       })
@@ -1031,20 +1106,19 @@ export function generateClipVideo(clipId: string): Job {
   const job = insertJob({ projectId: clip.projectId, clipId, kind: 'video', provider: 'higgsfield' })
   return startHiggsfield(job, async (ctx) => {
     const fresh = getClip(clipId)
-    const image = getAsset(fresh.imageAssetId)
-    if (!image) throw new Error('Gambar klip tidak ditemukan')
     const project = getProject(fresh.projectId)
     const model = getVideoModel(project.videoModel)
     const allChars = charactersOf(project.id)
+    const initial = await resolveInitialImageForClip(fresh, project)
 
     ctx.progress(0.05, 'Menyiapkan gambar awal')
-    const url = await publicUrlFor(image, ctx.signal)
+    const url = await publicUrlFor(initial.asset, ctx.signal)
     let prompt = compileClipVideoPrompt(project, fresh, allChars, promptLimit(model))
     if (model.input.mode === 'reference') {
       prompt = `Open on the exact scene of the reference image and keep its art style, characters and composition. ${prompt}`
     }
     const seconds = videoSecondsFor(project, fresh, prereqContext(project.id)).seconds
-    const basisHash = computeClipVideoBasisHash({ project, clip: fresh, characters: allChars, seconds })
+    const basisHash = computeClipVideoBasisHash({ project, clip: fresh, characters: allChars, seconds, prevAssetId: initial.prevAssetId })
     const isVideoDialog = isVideoDialogue(project, fresh)
     return {
       endpoint: model.id,

@@ -1,4 +1,5 @@
 import type {
+  AcceptLorebookCandidatesInput,
   ApiProvider,
   AspectRatio,
   AppSettings,
@@ -22,6 +23,7 @@ import type {
   KeyStatus,
   KeyTestResult,
   Location,
+  LorebookExtractionResult,
   MergeAssetInput,
   ModelList,
   ModelSource,
@@ -91,6 +93,13 @@ export interface StudioApi {
 
     assetUsage(projectId: string, kind: 'character' | 'derivative' | 'location' | 'prop', id: string): Promise<AssetUsageSummary>
     merge(input: MergeAssetInput): Promise<{ message: string }>
+    extract(projectId: string): Promise<LorebookExtractionResult>
+    acceptCandidates(input: AcceptLorebookCandidatesInput): Promise<{
+      createdCharacters: Character[]
+      createdDerivatives: CharacterDerivative[]
+      createdLocations: Location[]
+      createdProps: Prop[]
+    }>
   }
   story: {
     /** Adapts serial source text into structured episodes with hook, cliffhanger, and story beats. */

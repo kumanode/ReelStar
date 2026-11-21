@@ -61,7 +61,9 @@ const api: StudioApi = {
     pickPropSheet: call('lorebook:pickPropSheet'),
 
     assetUsage: call('lorebook:assetUsage'),
-    merge: call('lorebook:merge')
+    merge: call('lorebook:merge'),
+    extract: call('lorebook:extract'),
+    acceptCandidates: call('lorebook:acceptCandidates')
   },
   story: {
     planEpisodes: call('story:planEpisodes'),

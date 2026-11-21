@@ -1,8 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, ArrowRight, Copy, FolderOpen, MoreHorizontal, Plus, RefreshCw, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { AlertTriangle, ArrowRight, Copy, FolderOpen, Minus, MoreHorizontal, Plus, RefreshCw, Search, SlidersHorizontal, Trash2, Upload } from 'lucide-react'
 import { LANGUAGES, llmName } from '@shared/models'
 import { getStyle } from '@shared/styles'
-import type { ApiProvider, AppSettings, AspectRatio, DialogAudio, KeyStatus, ProjectStatus, ProjectSummary, TtsProvider } from '@shared/types'
+import {
+  calculateSeriesDuration,
+  DEFAULT_TARGET_EPISODE_COUNT,
+  EPISODE_DURATION_OPTIONS,
+  MAX_TARGET_EPISODES,
+  MIN_TARGET_EPISODES
+} from '@shared/validation'
+import type { ApiProvider, AppSettings, AspectRatio, DialogAudio, KeyStatus, ProjectStatus, ProjectSummary, SourceKind, TtsProvider } from '@shared/types'
 import { Logo } from '../components/Logo'
 import { Select, type SelectOption } from '../components/Select'
 import { StyleSwatch } from '../components/StyleArt'
@@ -33,15 +40,6 @@ const SUGGESTIONS = [
   'Pewaris kaya menyamar jadi office girl dan dihina atasannya sendiri',
   'Istri yang diusir mertuanya kembali lima tahun kemudian sebagai bos besar',
   'Dua saudara kembar yang tertukar sejak lahir bertemu di hari pernikahan'
-]
-
-/** Target length of one episode; the planner keeps each episode within 30–180 seconds. */
-const EPISODE_DURATIONS: SelectOption<number>[] = [
-  { value: 45, label: '45 dtk / episode' },
-  { value: 60, label: '60 dtk / episode' },
-  { value: 75, label: '75 dtk / episode' },
-  { value: 90, label: '90 dtk / episode' },
-  { value: 120, label: '120 dtk / episode' }
 ]
 
 /** "a, b dan c" */
@@ -249,7 +247,7 @@ export function Home() {
                 label="Durasi episode"
                 value={durationSec}
                 onChange={setDurationSec}
-                options={EPISODE_DURATIONS}
+                options={EPISODE_DURATION_OPTIONS}
               />
               <Select
                 variant="pill"
@@ -417,29 +415,62 @@ function NewSerialModal({
   const [title, setTitle] = useState('')
   const [synopsis, setSynopsis] = useState(initialSynopsis)
   const [durationSec, setDurationSec] = useState(initialDurationSec)
+  const [targetEpisodeCount, setTargetEpisodeCount] = useState<number>(DEFAULT_TARGET_EPISODE_COUNT)
+  const [isAutoEpisodes, setIsAutoEpisodes] = useState(false)
+  const [sourceKind, setSourceKind] = useState<SourceKind>('novel')
+  const [sourceText, setSourceText] = useState('')
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(initialAspectRatio)
   const [styleId, setStyleId] = useState(initialStyleId)
   const [dialogAudio, setDialogAudio] = useState<DialogAudio>('video')
   const [creating, setCreating] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useApp()
 
   useEffect(() => {
     if (open) {
       setSynopsis(initialSynopsis)
       setDurationSec(initialDurationSec)
+      setTargetEpisodeCount(DEFAULT_TARGET_EPISODE_COUNT)
+      setIsAutoEpisodes(false)
+      setSourceKind('novel')
+      setSourceText('')
       setAspectRatio(initialAspectRatio)
       setStyleId(initialStyleId)
       setTitle('')
     }
   }, [open, initialSynopsis, initialDurationSec, initialAspectRatio, initialStyleId])
 
+  const { totalEstimatedSec, isOverOneHour } = calculateSeriesDuration(
+    isAutoEpisodes ? null : targetEpisodeCount,
+    durationSec
+  )
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      const text = String(event.target?.result ?? '')
+      setSourceText(text)
+      toast('info', `File "${file.name}" dimuat (${text.length.toLocaleString()} karakter)`)
+    }
+    reader.readAsText(file)
+  }
+
   const handleCreate = async () => {
+    if (isOverOneHour) {
+      toast('error', 'Total estimasi serial melebihi batas 1 jam. Kurangi episode atau durasi.')
+      return
+    }
     setCreating(true)
     try {
       const bundle = await window.api.projects.create({
         title: title.trim() || synopsis.slice(0, 30).trim() || 'Serial Baru',
         synopsis: synopsis.trim(),
         durationSec,
+        targetEpisodeCount: isAutoEpisodes ? null : targetEpisodeCount,
+        sourceKind,
+        sourceText: sourceText.trim(),
         aspectRatio,
         styleId,
         dialogAudio
@@ -458,8 +489,8 @@ function NewSerialModal({
       open={open}
       onClose={onClose}
       title="Buat Serial Baru"
-      subtitle="Atur judul, naskah sumber, rasio aspek, gaya visual, dan sumber dialog untuk serial drama kamu."
-      width={680}
+      subtitle="Atur judul, naskah sumber, target episode, rasio aspek, gaya visual, dan sumber dialog untuk serial kamu."
+      width={720}
     >
       <div className="flex flex-col gap-4 text-sm text-ink">
         <Field label="Judul Serial" hint="Opsional, akan otomatis dinamai dari sinopsis jika dikosongkan.">
@@ -474,7 +505,7 @@ function NewSerialModal({
 
         <Field label="Premis atau sinopsis serial" hint="AI memakai premis ini untuk merencanakan episode dan adegan serial kamu.">
           <textarea
-            rows={3}
+            rows={2}
             value={synopsis}
             onChange={(e) => setSynopsis(e.target.value)}
             placeholder="Contoh: Rani, office girl yang selalu dihina manajernya, ternyata pewaris tunggal perusahaan tempat dia bekerja…"
@@ -482,7 +513,124 @@ function NewSerialModal({
           />
         </Field>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {/* Source Text & Kind (Optional) */}
+        <div className="flex flex-col gap-2 rounded-xl border border-line bg-paper/60 p-3.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-ink-2">Bahan Sumber Cerita (Opsional)</span>
+            <Segmented<SourceKind>
+              value={sourceKind}
+              onChange={setSourceKind}
+              options={[
+                { id: 'novel', label: 'Novel / Cerita' },
+                { id: 'screenplay', label: 'Naskah Jadi' }
+              ]}
+              size="sm"
+            />
+          </div>
+          <div className="flex items-center justify-between text-xs text-muted">
+            <span>
+              {sourceKind === 'novel'
+                ? 'Novel/cerpen diadaptasi menjadi shot visual & dialog.'
+                : 'Naskah jadi mempertahankan adegan dan dialog kata per kata.'}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              icon={<Upload className="size-3.5" />}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              Unggah berkas
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".txt,.md"
+              className="hidden"
+              onChange={handleFileUpload}
+            />
+          </div>
+          <textarea
+            rows={3}
+            value={sourceText}
+            onChange={(e) => setSourceText(e.target.value)}
+            placeholder="Tempel teks cerita di sini, atau unggah file .txt/.md (bisa juga diisi nanti di Episode Hub)..."
+            className={cx(inputCls, 'resize-none py-2 text-xs leading-relaxed')}
+          />
+        </div>
+
+        {/* Target episode & duration */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field
+            label="Target Episode"
+            hint={isAutoEpisodes ? 'Jumlah episode otomatis mengikuti panjang cerita' : `${targetEpisodeCount} episode direncanakan`}
+          >
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={isAutoEpisodes || targetEpisodeCount <= MIN_TARGET_EPISODES}
+                onClick={() => setTargetEpisodeCount((prev) => Math.max(MIN_TARGET_EPISODES, prev - 1))}
+                className="flex size-9 items-center justify-center rounded-lg border border-line bg-paper text-ink transition-colors hover:bg-surface disabled:opacity-40"
+              >
+                <Minus className="size-4" />
+              </button>
+              <span className="w-12 text-center font-mono text-base font-bold text-ink">
+                {isAutoEpisodes ? 'Auto' : targetEpisodeCount}
+              </span>
+              <button
+                type="button"
+                disabled={isAutoEpisodes || targetEpisodeCount >= MAX_TARGET_EPISODES}
+                onClick={() => setTargetEpisodeCount((prev) => Math.min(MAX_TARGET_EPISODES, prev + 1))}
+                className="flex size-9 items-center justify-center rounded-lg border border-line bg-paper text-ink transition-colors hover:bg-surface disabled:opacity-40"
+              >
+                <Plus className="size-4" />
+              </button>
+              <Button
+                type="button"
+                size="sm"
+                variant={isAutoEpisodes ? 'primary' : 'ghost'}
+                onClick={() => setIsAutoEpisodes(!isAutoEpisodes)}
+                className="ml-auto"
+              >
+                {isAutoEpisodes ? 'Otomatis aktif' : 'Setel otomatis'}
+              </Button>
+            </div>
+          </Field>
+
+          <Field label="Target Durasi per Episode">
+            <Select
+              label="Target durasi"
+              value={durationSec}
+              onChange={(v) => setDurationSec(Number(v))}
+              options={EPISODE_DURATION_OPTIONS}
+              size="md"
+            />
+          </Field>
+        </div>
+
+        {/* Total duration estimate */}
+        <div
+          className={cx(
+            'flex items-center justify-between rounded-xl px-3.5 py-2.5 text-xs',
+            isOverOneHour
+              ? 'border border-bad/30 bg-bad-soft text-bad-ink'
+              : 'border border-line bg-surface text-ink-2'
+          )}
+        >
+          <span>Total estimasi serial:</span>
+          <span className="font-mono font-bold">
+            {totalEstimatedSec != null
+              ? `${Math.floor(totalEstimatedSec / 60)} menit${totalEstimatedSec % 60 ? ` ${totalEstimatedSec % 60} dtk` : ''}`
+              : 'mengikuti panjang sumber'}
+          </span>
+          {isOverOneHour && (
+            <span className="text-[11px] font-semibold text-bad">
+              Maksimal durasi serial 1 jam (60 menit)!
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Rasio Aspek">
             <Segmented<AspectRatio>
               value={aspectRatio}
@@ -490,22 +638,6 @@ function NewSerialModal({
               options={[
                 { id: '9:16', label: '9:16 (Shorts)' },
                 { id: '16:9', label: '16:9' }
-              ]}
-              size="md"
-            />
-          </Field>
-
-          <Field label="Target Durasi">
-            <Select
-              label="Target durasi"
-              value={durationSec}
-              onChange={(v) => setDurationSec(Number(v))}
-              options={[
-                { value: 45, label: '45 detik' },
-                { value: 60, label: '60 detik' },
-                { value: 75, label: '75 detik' },
-                { value: 90, label: '90 detik' },
-                { value: 120, label: '120 detik' }
               ]}
               size="md"
             />
@@ -539,7 +671,12 @@ function NewSerialModal({
           <Button onClick={onClose} disabled={creating}>
             Batal
           </Button>
-          <Button variant="primary" loading={creating} onClick={() => void handleCreate()}>
+          <Button
+            variant="primary"
+            loading={creating}
+            disabled={isOverOneHour}
+            onClick={() => void handleCreate()}
+          >
             Buat serial
           </Button>
         </div>

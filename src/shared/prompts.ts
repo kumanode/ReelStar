@@ -147,12 +147,15 @@ export function collectReferenceSheets(
 }
 
 function characterLine(c: Character): string {
-  return `${c.name}: ${c.description}`
+  const v = c.profile?.visual
+  const traits = v ? [v.bodyType, v.hair, v.facialFeatures, v.distinctiveFeatures].filter(Boolean).join(', ') : ''
+  return `${c.name}: ${c.description}${traits ? ` (${traits})` : ''}`
 }
 
 /** One line per character for short prompt limits: identity and outfit together, since there is no Wardrobe block. */
 function compactCharacterLine(c: Character, deriv: CharacterDerivative | null): string {
-  return deriv ? `${c.name}: ${c.description}; wears ${deriv.name} (${deriv.promptChange || 'custom outfit'})` : `${c.name}: ${c.description}`
+  const outfit = deriv ? [deriv.name, deriv.costumeKeyphrase || deriv.promptChange].filter(Boolean).join(' - ') : ''
+  return outfit ? `${c.name}: ${c.description}; wears ${outfit}` : `${c.name}: ${c.description}`
 }
 
 /** Drops "<label>:" lines from the storyboard prompt; the compiled prompt writes those from Lorebook data instead. */
@@ -206,19 +209,24 @@ export function compileClipPrompt(opts: CompileClipPromptOptions): string {
   // Emotion line
   const emotionLine = clip.emotion ? `Subject emotion: intense ${clip.emotion} expression.` : ''
 
+  // Expanded Shot Details: Lighting & Blocking
+  const lightingLine = clip.shotDetail?.lighting ? `Lighting: ${clip.shotDetail.lighting}.` : ''
+  const blockingLine = clip.shotDetail?.blocking ? `Blocking & character staging: ${clip.shotDetail.blocking}.` : ''
+
   // Framing line
   const orientation = project.aspectRatio === '9:16' ? 'vertical 9:16 full-bleed' : `${project.aspectRatio} full-bleed`
   const framingLine = `Framing & composition: ${clip.framing || 'medium close-up'}, ${orientation}, shallow depth of field, clear atmospheric lighting.`
 
   // Scene description
-  const sceneBlock = [settingLine, scene, emotionLine, propsLine, framingLine].filter(Boolean).join('\n')
+  const sceneBlock = [settingLine, scene, emotionLine, propsLine, lightingLine, blockingLine, framingLine].filter(Boolean).join('\n')
   parts.push(`Scene:\n${sceneBlock}`)
 
   // Wardrobe & Characters
   if (visibleChars.length > 0) {
     const wardrobeLines = visibleChars.map(({ char, deriv }) => {
       if (deriv) {
-        return `${char.name} wears custom outfit "${deriv.name}": ${deriv.promptChange || 'modified attire'}.`
+        const kp = deriv.costumeKeyphrase ? `. Key costume elements: ${deriv.costumeKeyphrase}` : ''
+        return `${char.name} wears custom outfit "${deriv.name}": ${deriv.promptChange || 'modified attire'}${kp}.`
       }
       return `${char.name} wears default outfit as shown on their reference sheet.`
     })
@@ -269,7 +277,11 @@ export function compileClipVideoPrompt(
   const { scene } = splitAvoid(clip.visualPrompt)
   let baseMotion = clip.videoPrompt.trim()
   if (!baseMotion) {
-    baseMotion = `${scene.replace(/\.$/, '')}. Subtle natural motion of the characters and environment, the camera slowly pushes in. Keep the art style of the first frame.`
+    const cam = clip.shotDetail?.cameraMotion ? `Camera motion: ${clip.shotDetail.cameraMotion}.` : 'The camera slowly pushes in.'
+    baseMotion = `${scene.replace(/\.$/, '')}. Subtle natural motion of the characters and environment, ${cam} Keep the art style of the first frame.`
+  }
+  if (clip.shotDetail?.nonSpeakingReaction) {
+    baseMotion = `${baseMotion} Reaction: ${clip.shotDetail.nonSpeakingReaction}.`
   }
 
   const charMap = new Map(characters.map((c) => [c.id, c]))
@@ -280,7 +292,8 @@ export function compileClipVideoPrompt(
     const speakerName = speaker?.name || 'Character'
     const emotion = clip.emotion ? `with intense ${clip.emotion} expression` : 'with natural expression'
     const voiceStyle = speaker?.voiceStyle ? `, voice style: ${speaker.voiceStyle}` : ''
-    const dialogBlock = `Spoken line: "${clip.narration.trim()}", spoken by ${speakerName} ${emotion}${voiceStyle}. Lip movements naturally sync with the spoken words. ${NO_MUSIC_DIALOG}`
+    const delivery = clip.shotDetail?.speechDelivery ? `, speech delivery: ${clip.shotDetail.speechDelivery}` : ''
+    const dialogBlock = `Spoken line: "${clip.narration.trim()}", spoken by ${speakerName} ${emotion}${voiceStyle}${delivery}. Lip movements naturally sync with the spoken words. ${NO_MUSIC_DIALOG}`
 
     const combined = `${baseMotion}\n\n${dialogBlock}`
     if (combined.length <= maxLen) return combined

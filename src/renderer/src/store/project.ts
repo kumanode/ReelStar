@@ -358,12 +358,14 @@ export const useProject = create<ProjectState>((set, get) => {
     refreshLorebook: async () => {
       const p = get().project
       if (!p) return
-      const [derivatives, locations, props] = await Promise.all([
-        window.api.lorebook.listDerivatives(p.id),
-        window.api.lorebook.listLocations(p.id),
-        window.api.lorebook.listProps(p.id)
-      ])
-      set({ derivatives, locations, props })
+      const bundle = await window.api.projects.get(p.id, get().episode?.id)
+      set({
+        characters: bundle.characters,
+        derivatives: bundle.derivatives ?? [],
+        locations: bundle.locations ?? [],
+        props: bundle.props ?? [],
+        assets: Object.fromEntries(bundle.assets.map((a) => [a.id, a]))
+      })
     },
 
     load: (b, opts) => {
@@ -591,6 +593,8 @@ export const useProject = create<ProjectState>((set, get) => {
         propIds: [],
         framing: '',
         sourceExcerpt: '',
+        shotDetail: {},
+        continueFromPrevious: false,
         motionType: 'camera',
         cameraPreset: 'zoomin',
         motionStrength: 'halus',

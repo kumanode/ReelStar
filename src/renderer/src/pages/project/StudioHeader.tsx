@@ -1,5 +1,21 @@
 import { useState, useMemo, useRef } from 'react'
-import { ArrowLeft, CheckCircle2, AlertCircle, Loader2, Pencil, MoreVertical, Copy, Download, Trash2, Coins, FileText, Clapperboard, SlidersHorizontal } from 'lucide-react'
+import {
+  ArrowLeft,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
+  Pencil,
+  MoreVertical,
+  Copy,
+  Download,
+  Trash2,
+  Coins,
+  FileText,
+  Clapperboard,
+  SlidersHorizontal,
+  Activity,
+  BookOpen
+} from 'lucide-react'
 import { Button, IconButton, Menu, Segmented, confirmDialog, cx } from '../../components/ui'
 import { Select } from '../../components/Select'
 import { Popover } from '../../components/Popover'
@@ -7,6 +23,8 @@ import { ThemeToggle } from '../../components/ThemeToggle'
 import { relativeTime, errorText } from '../../lib/format'
 import { useApp } from '../../store/app'
 import { useProject } from '../../store/project'
+import { TaskCenterModal } from './TaskCenterModal'
+import { SeriesGuidelinesModal } from './SeriesGuidelinesModal'
 
 function SaveStatus() {
   const { saveState, saveError, savedAt, save } = useProject()
@@ -48,11 +66,29 @@ function SaveStatus() {
 }
 
 export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
-  const { project, episode, episodes, switchEpisode, updateProject, flush, assets, activeView, activeTab, setActiveTab } = useProject()
+  const {
+    project,
+    episode,
+    episodes,
+    switchEpisode,
+    updateProject,
+    flush,
+    assets,
+    jobs,
+    activeView,
+    activeTab,
+    setActiveTab
+  } = useProject()
   const { go, toast } = useApp()
   const [editingTitle, setEditingTitle] = useState(false)
   const [creditOpen, setCreditOpen] = useState(false)
+  const [taskCenterOpen, setTaskCenterOpen] = useState(false)
+  const [guidelinesOpen, setGuidelinesOpen] = useState(false)
   const creditAnchor = useRef<HTMLButtonElement | null>(null)
+
+  const activeJobsCount = useMemo(() => {
+    return Object.values(jobs).filter((j) => j.status === 'running' || j.status === 'queued').length
+  }, [jobs])
 
   const episodeOptions = useMemo(() => {
     return episodes.map((ep) => ({
@@ -279,6 +315,21 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
           </Popover>
         </div>
 
+        <Button
+          variant={activeJobsCount > 0 ? 'accent' : 'secondary'}
+          size="sm"
+          icon={activeJobsCount > 0 ? <Loader2 className="size-3.5 animate-spin" /> : <Activity className="size-3.5 text-accent" />}
+          onClick={() => setTaskCenterOpen(true)}
+          title="Pusat Tugas (Task Center) — Pantau dan batalkan pekerjaan AI latar belakang"
+        >
+          <span>Tugas</span>
+          {activeJobsCount > 0 && (
+            <span className="flex size-4 items-center justify-center rounded-full bg-accent text-[10px] font-bold text-white">
+              {activeJobsCount}
+            </span>
+          )}
+        </Button>
+
         <ThemeToggle />
 
         {onOpenExport && (
@@ -301,6 +352,16 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
           )}
           items={[
             {
+              label: 'Arahan & Template Prompt',
+              icon: <BookOpen className="size-4" />,
+              run: () => setGuidelinesOpen(true)
+            },
+            {
+              label: 'Pusat Tugas (Task Center)',
+              icon: <Activity className="size-4" />,
+              run: () => setTaskCenterOpen(true)
+            },
+            {
               label: 'Duplikasi serial',
               icon: <Copy className="size-4" />,
               run: () => void handleDuplicate()
@@ -314,6 +375,16 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
           ]}
         />
       </div>
+
+      <TaskCenterModal
+        open={taskCenterOpen}
+        onClose={() => setTaskCenterOpen(false)}
+      />
+
+      <SeriesGuidelinesModal
+        open={guidelinesOpen}
+        onClose={() => setGuidelinesOpen(false)}
+      />
     </header>
   )
 }

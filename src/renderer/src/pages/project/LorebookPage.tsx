@@ -14,7 +14,14 @@ import {
   Shirt,
   ArrowRight
 } from 'lucide-react'
-import type { Character, Location, Prop, VoiceOption } from '@shared/types'
+import type {
+  Character,
+  Location,
+  Prop,
+  VoiceOption,
+  LorebookExtractionResult,
+  AcceptLorebookCandidatesInput
+} from '@shared/types'
 import {
   getCharacterSheetStatus,
   getDerivativeSheetStatus,
@@ -30,6 +37,7 @@ import { useApp } from '../../store/app'
 import { isRunning, jobFor, useProject } from '../../store/project'
 import { MergeAssetModal } from './MergeAssetModal'
 import { BatchEstimateSheetModal } from './BatchEstimateSheetModal'
+import { CandidateReviewModal } from './CandidateReviewModal'
 
 type LorebookTab = 'character' | 'location' | 'prop'
 
@@ -59,7 +67,8 @@ export function LorebookPage() {
     switchEpisode,
     setActiveView,
     setActiveTab: setProjectActiveTab,
-    flush
+    flush,
+    refreshLorebook
   } = useProject()
   const { toast } = useApp()
 
@@ -67,6 +76,9 @@ export function LorebookPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [batchModalOpen, setBatchModalOpen] = useState(false)
+  const [extracting, setExtracting] = useState(false)
+  const [reviewResult, setReviewResult] = useState<LorebookExtractionResult | null>(null)
+  const [reviewModalOpen, setReviewModalOpen] = useState(false)
 
   // Merge modal state
   const [mergeState, setMergeState] = useState<{
@@ -75,6 +87,44 @@ export function LorebookPage() {
     sourceId: string
     sourceName: string
   }>({ open: false, kind: 'character', sourceId: '', sourceName: '' })
+
+  const handleExtractLorebook = async () => {
+    if (!project) return
+    const hasStory = !!project.sourceText?.trim() || !!project.synopsis?.trim()
+    if (!hasStory) {
+      toast('info', 'Teks cerita atau premis di Episode Hub masih kosong. Isi dulu sebelum ekstraksi.')
+      return
+    }
+    setExtracting(true)
+    try {
+      await flush()
+      const result = await window.api.lorebook.extract(project.id)
+      const count = result.characters.length + result.derivatives.length + result.locations.length + result.props.length
+      if (count === 0) {
+        toast('info', 'Tidak ada entitas baru yang terdeteksi dari cerita.')
+        return
+      }
+      setReviewResult(result)
+      setReviewModalOpen(true)
+    } catch (err) {
+      toast('error', `Gagal mengekstrak Lorebook: ${errorText(err)}`)
+    } finally {
+      setExtracting(false)
+    }
+  }
+
+  const handleAcceptCandidates = async (input: AcceptLorebookCandidatesInput) => {
+    try {
+      const res = await window.api.lorebook.acceptCandidates(input)
+      await refreshLorebook()
+      toast(
+        'success',
+        `Berhasil memasukkan ${res.createdCharacters.length} karakter, ${res.createdDerivatives.length} varian, ${res.createdLocations.length} lokasi, dan ${res.createdProps.length} prop ke Lorebook.`
+      )
+    } catch (err) {
+      toast('error', `Gagal menyimpan aset: ${errorText(err)}`)
+    }
+  }
 
   // Voices list for TTS
   const [voices, setVoices] = useState<VoiceOption[]>([])
@@ -404,6 +454,17 @@ export function LorebookPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            loading={extracting}
+            icon={<Sparkles className="size-3.5 text-accent" />}
+            onClick={handleExtractLorebook}
+            title="Ekstrak otomatis karakter, varian pakaian, lokasi, dan prop dari teks cerita atau premis"
+          >
+            {extracting ? 'Menganalisis cerita...' : 'Ekstrak dari Cerita'}
+          </Button>
+
           <Button
             variant="secondary"
             size="sm"
@@ -884,6 +945,195 @@ export function LorebookPage() {
                 </div>
               </div>
 
+              {/* Character Bible (Visual & Narrative Profiles) */}
+              <div className="flex flex-col gap-3 rounded-xl border border-line bg-paper/60 p-3.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-display text-xs font-bold text-ink">Character Bible (Profil Mendalam)</span>
+                  <Badge tone="info" className="text-[10px]">
+                    Konsistensi Shot & Prompt
+                  </Badge>
+                </div>
+
+                {/* Visual Traits */}
+                <div className="flex flex-col gap-2 pt-1 border-t border-line/60">
+                  <span className="text-[11px] font-semibold text-muted">Profil Visual</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="Usia" className="text-[11px]">
+                      <input
+                        value={selectedCharacter.profile?.visual?.age ?? ''}
+                        onChange={(e) => {
+                          const v = { ...(selectedCharacter.profile?.visual ?? {}), age: e.target.value }
+                          updateCharacter(selectedCharacter.id, {
+                            profile: { ...(selectedCharacter.profile ?? {}), visual: v }
+                          })
+                        }}
+                        placeholder="Contoh: 28 tahun"
+                        className={cx(inputCls, 'h-8 text-xs')}
+                      />
+                    </Field>
+                    <Field label="Gender" className="text-[11px]">
+                      <input
+                        value={selectedCharacter.profile?.visual?.gender ?? ''}
+                        onChange={(e) => {
+                          const v = { ...(selectedCharacter.profile?.visual ?? {}), gender: e.target.value }
+                          updateCharacter(selectedCharacter.id, {
+                            profile: { ...(selectedCharacter.profile ?? {}), visual: v }
+                          })
+                        }}
+                        placeholder="Contoh: Pria / Wanita"
+                        className={cx(inputCls, 'h-8 text-xs')}
+                      />
+                    </Field>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="Bentuk Tubuh" className="text-[11px]">
+                      <input
+                        value={selectedCharacter.profile?.visual?.bodyType ?? selectedCharacter.profile?.visual?.body ?? ''}
+                        onChange={(e) => {
+                          const v = { ...(selectedCharacter.profile?.visual ?? {}), bodyType: e.target.value, body: e.target.value }
+                          updateCharacter(selectedCharacter.id, {
+                            profile: { ...(selectedCharacter.profile ?? {}), visual: v }
+                          })
+                        }}
+                        placeholder="Contoh: Tinggi tegap, atletis"
+                        className={cx(inputCls, 'h-8 text-xs')}
+                      />
+                    </Field>
+                    <Field label="Rambut" className="text-[11px]">
+                      <input
+                        value={selectedCharacter.profile?.visual?.hair ?? ''}
+                        onChange={(e) => {
+                          const v = { ...(selectedCharacter.profile?.visual ?? {}), hair: e.target.value }
+                          updateCharacter(selectedCharacter.id, {
+                            profile: { ...(selectedCharacter.profile ?? {}), visual: v }
+                          })
+                        }}
+                        placeholder="Contoh: Pendek bergelombang hitam"
+                        className={cx(inputCls, 'h-8 text-xs')}
+                      />
+                    </Field>
+                  </div>
+
+                  <Field label="Ciri Wajah" className="text-[11px]">
+                    <input
+                      value={selectedCharacter.profile?.visual?.facialFeatures ?? selectedCharacter.profile?.visual?.face ?? ''}
+                      onChange={(e) => {
+                        const v = { ...(selectedCharacter.profile?.visual ?? {}), facialFeatures: e.target.value, face: e.target.value }
+                        updateCharacter(selectedCharacter.id, {
+                          profile: { ...(selectedCharacter.profile ?? {}), visual: v }
+                        })
+                      }}
+                      placeholder="Contoh: Rahang tegas, mata tajam elang"
+                      className={cx(inputCls, 'h-8 text-xs')}
+                    />
+                  </Field>
+
+                  <Field label="Ciri Unik / Tanda Lahir" className="text-[11px]">
+                    <input
+                      value={selectedCharacter.profile?.visual?.distinctiveFeatures ?? selectedCharacter.profile?.visual?.distinguishingFeatures ?? ''}
+                      onChange={(e) => {
+                        const v = { ...(selectedCharacter.profile?.visual ?? {}), distinctiveFeatures: e.target.value, distinguishingFeatures: e.target.value }
+                        updateCharacter(selectedCharacter.id, {
+                          profile: { ...(selectedCharacter.profile ?? {}), visual: v }
+                        })
+                      }}
+                      placeholder="Contoh: Bekas luka tipis di alis kiri"
+                      className={cx(inputCls, 'h-8 text-xs')}
+                    />
+                  </Field>
+
+                  <Field label="Pakaian Bawaan / Khas" className="text-[11px]">
+                    <input
+                      value={selectedCharacter.profile?.visual?.defaultOutfit ?? ''}
+                      onChange={(e) => {
+                        const v = { ...(selectedCharacter.profile?.visual ?? {}), defaultOutfit: e.target.value }
+                        updateCharacter(selectedCharacter.id, {
+                          profile: { ...(selectedCharacter.profile ?? {}), visual: v }
+                        })
+                      }}
+                      placeholder="Contoh: Jas abu-abu gelap potongan modern"
+                      className={cx(inputCls, 'h-8 text-xs')}
+                    />
+                  </Field>
+                </div>
+
+                {/* Narrative Traits */}
+                <div className="flex flex-col gap-2 pt-2 border-t border-line/60">
+                  <span className="text-[11px] font-semibold text-muted">Profil Naratif</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="Peran" className="text-[11px]">
+                      <input
+                        value={selectedCharacter.profile?.narrative?.role ?? ''}
+                        onChange={(e) => {
+                          const n = { ...(selectedCharacter.profile?.narrative ?? {}), role: e.target.value }
+                          updateCharacter(selectedCharacter.id, {
+                            profile: { ...(selectedCharacter.profile ?? {}), narrative: n }
+                          })
+                        }}
+                        placeholder="Protagonis, Antagonis, Mentor..."
+                        className={cx(inputCls, 'h-8 text-xs')}
+                      />
+                    </Field>
+                    <Field label="Pola Bicara" className="text-[11px]">
+                      <input
+                        value={selectedCharacter.profile?.narrative?.speechPattern ?? ''}
+                        onChange={(e) => {
+                          const n = { ...(selectedCharacter.profile?.narrative ?? {}), speechPattern: e.target.value }
+                          updateCharacter(selectedCharacter.id, {
+                            profile: { ...(selectedCharacter.profile ?? {}), narrative: n }
+                          })
+                        }}
+                        placeholder="Lugas, sinis, berbisik..."
+                        className={cx(inputCls, 'h-8 text-xs')}
+                      />
+                    </Field>
+                  </div>
+
+                  <Field label="Motivasi / Keinginan Utama" className="text-[11px]">
+                    <input
+                      value={selectedCharacter.profile?.narrative?.desire ?? ''}
+                      onChange={(e) => {
+                        const n = { ...(selectedCharacter.profile?.narrative ?? {}), desire: e.target.value }
+                        updateCharacter(selectedCharacter.id, {
+                          profile: { ...(selectedCharacter.profile ?? {}), narrative: n }
+                        })
+                      }}
+                      placeholder="Apa yang paling dia inginkan di cerita ini?"
+                      className={cx(inputCls, 'h-8 text-xs')}
+                    />
+                  </Field>
+
+                  <Field label="Rahasia / Titik Lemah" className="text-[11px]">
+                    <input
+                      value={selectedCharacter.profile?.narrative?.secret ?? ''}
+                      onChange={(e) => {
+                        const n = { ...(selectedCharacter.profile?.narrative ?? {}), secret: e.target.value }
+                        updateCharacter(selectedCharacter.id, {
+                          profile: { ...(selectedCharacter.profile ?? {}), narrative: n }
+                        })
+                      }}
+                      placeholder="Hal yang disembunyikan atau kelemahan emosional"
+                      className={cx(inputCls, 'h-8 text-xs')}
+                    />
+                  </Field>
+
+                  <Field label="Arc Perkembangan Watak" className="text-[11px]">
+                    <input
+                      value={selectedCharacter.profile?.narrative?.arc ?? ''}
+                      onChange={(e) => {
+                        const n = { ...(selectedCharacter.profile?.narrative ?? {}), arc: e.target.value }
+                        updateCharacter(selectedCharacter.id, {
+                          profile: { ...(selectedCharacter.profile ?? {}), narrative: n }
+                        })
+                      }}
+                      placeholder="Dari egois menjadi rela berkorban..."
+                      className={cx(inputCls, 'h-8 text-xs')}
+                    />
+                  </Field>
+                </div>
+              </div>
+
               {/* Costume Variants Section */}
               <div className="flex flex-col gap-2.5 border-t border-line pt-4">
                 <div className="flex items-center justify-between">
@@ -940,6 +1190,16 @@ export function LorebookPage() {
                                 <Trash2 className="size-3.5" />
                               </button>
                             </div>
+                          </div>
+
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[11px] font-semibold text-accent">Frasa Kunci Kostum</label>
+                            <input
+                              defaultValue={variant.costumeKeyphrase ?? ''}
+                              onBlur={(e) => void updateDerivative(variant.id, { costumeKeyphrase: e.target.value })}
+                              placeholder="Misal: gaun merah pesta malam, setelan jas hitam"
+                              className="w-full rounded-lg border border-line-2/70 bg-surface px-2.5 py-1 text-xs text-ink outline-none transition-colors focus:border-ink"
+                            />
                           </div>
 
                           <AutoTextarea
@@ -1136,6 +1396,73 @@ export function LorebookPage() {
                 </div>
               </div>
 
+              {/* Location Profile */}
+              <div className="flex flex-col gap-3 rounded-xl border border-line bg-paper/60 p-3.5">
+                <span className="font-display text-xs font-bold text-ink">Profil Lingkungan Lokasi</span>
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[11px] font-semibold text-muted">Tipe Ruang</span>
+                  <Segmented<'interior' | 'exterior' | 'mixed'>
+                    value={
+                      selectedLocation.profile?.interiorExterior === 'exterior'
+                        ? 'exterior'
+                        : selectedLocation.profile?.interiorExterior === 'mixed'
+                          ? 'mixed'
+                          : 'interior'
+                    }
+                    onChange={(val) => {
+                      updateLocation(selectedLocation.id, {
+                        profile: { ...(selectedLocation.profile ?? {}), interiorExterior: val }
+                      })
+                    }}
+                    options={[
+                      { id: 'interior', label: 'Interior (Dalam)' },
+                      { id: 'exterior', label: 'Eksterior (Luar)' },
+                      { id: 'mixed', label: 'Campuran' }
+                    ]}
+                    size="sm"
+                  />
+                </div>
+
+                <Field label="Waktu & Pencahayaan Khas" className="text-[11px]">
+                  <input
+                    value={selectedLocation.profile?.timeOfDayLighting ?? ''}
+                    onChange={(e) => {
+                      updateLocation(selectedLocation.id, {
+                        profile: { ...(selectedLocation.profile ?? {}), timeOfDayLighting: e.target.value }
+                      })
+                    }}
+                    placeholder="Contoh: Malam hari temaram, lampu neon basah"
+                    className={cx(inputCls, 'h-8 text-xs')}
+                  />
+                </Field>
+
+                <Field label="Gaya Arsitektur / Desain" className="text-[11px]">
+                  <input
+                    value={selectedLocation.profile?.architecturalStyle ?? ''}
+                    onChange={(e) => {
+                      updateLocation(selectedLocation.id, {
+                        profile: { ...(selectedLocation.profile ?? {}), architecturalStyle: e.target.value }
+                      })
+                    }}
+                    placeholder="Contoh: Modern minimalis mewah, lantai marmer"
+                    className={cx(inputCls, 'h-8 text-xs')}
+                  />
+                </Field>
+
+                <Field label="Fitur Utama / Landmark Penting" className="text-[11px]">
+                  <input
+                    value={selectedLocation.profile?.keyFeatures ?? ''}
+                    onChange={(e) => {
+                      updateLocation(selectedLocation.id, {
+                        profile: { ...(selectedLocation.profile ?? {}), keyFeatures: e.target.value }
+                      })
+                    }}
+                    placeholder="Contoh: Jendela kaca besar menghadap gedung pencakar langit"
+                    className={cx(inputCls, 'h-8 text-xs')}
+                  />
+                </Field>
+              </div>
+
               {/* Usage List */}
               <div className="flex flex-col gap-2 border-t border-line pt-4 text-xs">
                 <span className="font-semibold text-ink">Dipakai di Episode:</span>
@@ -1279,6 +1606,49 @@ export function LorebookPage() {
                 </div>
               </div>
 
+              {/* Prop Profile */}
+              <div className="flex flex-col gap-3 rounded-xl border border-line bg-paper/60 p-3.5">
+                <span className="font-display text-xs font-bold text-ink">Profil Prop & Benda</span>
+                <Field label="Kategori Prop" className="text-[11px]">
+                  <input
+                    value={selectedProp.profile?.category ?? ''}
+                    onChange={(e) => {
+                      updateProp(selectedProp.id, {
+                        profile: { ...(selectedProp.profile ?? {}), category: e.target.value }
+                      })
+                    }}
+                    placeholder="Senjata, Dokumen, Perhiasan, Kendaraan, Gadget..."
+                    className={cx(inputCls, 'h-8 text-xs')}
+                  />
+                </Field>
+
+                <Field label="Tampilan Fisik Detail" className="text-[11px]">
+                  <input
+                    value={selectedProp.profile?.appearance ?? ''}
+                    onChange={(e) => {
+                      updateProp(selectedProp.id, {
+                        profile: { ...(selectedProp.profile ?? {}), appearance: e.target.value }
+                      })
+                    }}
+                    placeholder="Bentuk, material, warna dominan, keausan..."
+                    className={cx(inputCls, 'h-8 text-xs')}
+                  />
+                </Field>
+
+                <Field label="Arti Penting / Fungsi Cerita" className="text-[11px]">
+                  <input
+                    value={selectedProp.profile?.significance ?? ''}
+                    onChange={(e) => {
+                      updateProp(selectedProp.id, {
+                        profile: { ...(selectedProp.profile ?? {}), significance: e.target.value }
+                      })
+                    }}
+                    placeholder="Kunci warisan keluarga, bukti pembunuhan..."
+                    className={cx(inputCls, 'h-8 text-xs')}
+                  />
+                </Field>
+              </div>
+
               {/* Usage List */}
               <div className="flex flex-col gap-2 border-t border-line pt-4 text-xs">
                 <span className="font-semibold text-ink">Dipakai di Episode:</span>
@@ -1333,6 +1703,15 @@ export function LorebookPage() {
         onClose={() => setBatchModalOpen(false)}
         projectId={project?.id || ''}
         onStarted={() => {}}
+      />
+
+      {/* Candidate Review Modal */}
+      <CandidateReviewModal
+        open={reviewModalOpen}
+        result={reviewResult}
+        projectId={project?.id || ''}
+        onClose={() => setReviewModalOpen(false)}
+        onAccept={handleAcceptCandidates}
       />
     </div>
   )

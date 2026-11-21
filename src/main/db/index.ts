@@ -241,6 +241,18 @@ const MIGRATIONS: string[] = [
   `,
   `
   ALTER TABLE projects ADD COLUMN target_episode_count INTEGER;
+  `,
+  `
+  ALTER TABLE characters ADD COLUMN profile_json TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE character_derivatives ADD COLUMN costume_keyphrase TEXT NOT NULL DEFAULT '';
+  ALTER TABLE locations ADD COLUMN profile_json TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE props ADD COLUMN profile_json TEXT NOT NULL DEFAULT '{}';
+  `,
+  `
+  ALTER TABLE clips ADD COLUMN shot_detail_json TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE clips ADD COLUMN continue_from_previous INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE projects ADD COLUMN series_guidelines TEXT NOT NULL DEFAULT '';
+  ALTER TABLE projects ADD COLUMN prompt_templates_json TEXT NOT NULL DEFAULT '{}';
   `
 ]
 

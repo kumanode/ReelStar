@@ -103,3 +103,14 @@ export function toYoutubeThumbnail(srcPath: string, destPath: string): Promise<v
     })
   })
 }
+
+/** Extracts the last frame of a video to an image file. */
+export function extractLastFrame(videoAbsPath: string, destImagePath: string): Promise<void> {
+  const args = ['-hide_banner', '-y', '-sseof', '-0.1', '-i', videoAbsPath, '-update', '1', '-q:v', '2', destImagePath]
+  return new Promise((resolve, reject) => {
+    execFile(binPath(ffmpegStatic!), args, { windowsHide: true }, (err, _stdout, stderr) => {
+      if (err) reject(new Error(`Gagal mengekstrak frame terakhir: ${String(stderr).trim().split('\n').pop() ?? err.message}`))
+      else resolve()
+    })
+  })
+}

@@ -18,7 +18,7 @@ import { voiceSpan } from '@shared/timeline'
 import type { Asset, CameraCustomFraming, Clip, WordTiming } from '@shared/types'
 import { Select } from '../../../components/Select'
 import { AutoTextarea } from '../../../components/AutoTextarea'
-import { Button, Segmented, Switch, confirmDialog, cx, inputCls } from '../../../components/ui'
+import { Button, Field, Segmented, Switch, confirmDialog, cx, inputCls } from '../../../components/ui'
 import { clipNumber, errorText, secLabel, timecode } from '../../../lib/format'
 import { useApp } from '../../../store/app'
 import { useNarration } from '../../../lib/useNarration'
@@ -160,6 +160,31 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
             <p className="text-[13px] text-ink-2">Klip ini memakai video dari {video.provider === 'flow2api' ? 'Flow2API' : 'Higgsfield'}.</p>
           ) : (
             <p className="text-[13px] text-ink-2">Video belum dibuat. Sampai video siap, pratinjau memakai gambar diam.</p>
+          )}
+          {clip.sort > 0 && (
+            <div className="flex items-center justify-between rounded-xl border border-line bg-paper px-3 py-2 text-xs">
+              <div>
+                <span className="font-semibold text-ink">Sambung video dari shot sebelumnya</span>
+                <p className="text-[11px] text-muted">Generate awal video dari frame terakhir shot #{clip.sort}.</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={Boolean(clip.continueFromPrevious)}
+                onClick={() => updateClip(clip.id, { continueFromPrevious: !clip.continueFromPrevious })}
+                className={cx(
+                  'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors',
+                  clip.continueFromPrevious ? 'bg-accent' : 'bg-line-2'
+                )}
+              >
+                <span
+                  className={cx(
+                    'inline-block size-4 transform rounded-full bg-white transition-transform',
+                    clip.continueFromPrevious ? 'translate-x-6' : 'translate-x-1'
+                  )}
+                />
+              </button>
+            </div>
           )}
           <div className="flex flex-wrap gap-2">
             <Button
@@ -378,6 +403,58 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
           <p className="text-xs leading-relaxed text-muted">Ganti gerakan atau kekuatannya untuk langsung melihatnya di pratinjau.</p>
         </Section>
       )}
+      <Section title="Sinematografi & Suara Shot">
+        <div className="flex flex-col gap-2.5">
+          <Field label="Gerak Kamera Spesifik" hint="Arahan sinematik kamera (misal: Dolly in perlahan, Pan kanan)">
+            <input
+              value={clip.shotDetail?.cameraMotion ?? ''}
+              onChange={(e) => updateClip(clip.id, { shotDetail: { ...(clip.shotDetail ?? {}), cameraMotion: e.target.value } })}
+              placeholder="Misal: Dolly in lambat menuju wajah"
+              className={cx(inputCls, 'h-9 text-xs')}
+            />
+          </Field>
+          <Field label="Pencahayaan (Lighting)" hint="Suasana cahaya (misal: Neon temaram malam hari, rim light dramatis)">
+            <input
+              value={clip.shotDetail?.lighting ?? ''}
+              onChange={(e) => updateClip(clip.id, { shotDetail: { ...(clip.shotDetail ?? {}), lighting: e.target.value } })}
+              placeholder="Misal: Cahaya redup lampu meja temaram"
+              className={cx(inputCls, 'h-9 text-xs')}
+            />
+          </Field>
+          <Field label="Penataan Posisi (Blocking)" hint="Posisi karakter di bingkai">
+            <input
+              value={clip.shotDetail?.blocking ?? ''}
+              onChange={(e) => updateClip(clip.id, { shotDetail: { ...(clip.shotDetail ?? {}), blocking: e.target.value } })}
+              placeholder="Misal: Berdiri menantang di depan pintu"
+              className={cx(inputCls, 'h-9 text-xs')}
+            />
+          </Field>
+          <Field label="Reaksi Karakter Lain (Non-Speaking)" hint="Reaksi tokoh lawan bicara">
+            <input
+              value={clip.shotDetail?.nonSpeakingReaction ?? ''}
+              onChange={(e) => updateClip(clip.id, { shotDetail: { ...(clip.shotDetail ?? {}), nonSpeakingReaction: e.target.value } })}
+              placeholder="Misal: Mengepalkan tangan menahan amarah"
+              className={cx(inputCls, 'h-9 text-xs')}
+            />
+          </Field>
+          <Field label="Efek Suara (SFX / Ambience)" hint="Suara latar adegan">
+            <input
+              value={clip.shotDetail?.sfxAmbience ?? ''}
+              onChange={(e) => updateClip(clip.id, { shotDetail: { ...(clip.shotDetail ?? {}), sfxAmbience: e.target.value } })}
+              placeholder="Misal: Hujan deras dan gemuruh petir jauh"
+              className={cx(inputCls, 'h-9 text-xs')}
+            />
+          </Field>
+          <Field label="Gaya Artikulasi Dialog" hint="Ekspresi pengucapan suara">
+            <input
+              value={clip.shotDetail?.speechDelivery ?? ''}
+              onChange={(e) => updateClip(clip.id, { shotDetail: { ...(clip.shotDetail ?? {}), speechDelivery: e.target.value } })}
+              placeholder="Misal: Nada berbisik dingin penuh ancaman"
+              className={cx(inputCls, 'h-9 text-xs')}
+            />
+          </Field>
+        </div>
+      </Section>
       <Section title="Color Grading (Suasana)">
         <div className="grid grid-cols-2 gap-2">
           {FILTERS.map((f) => {

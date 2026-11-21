@@ -185,6 +185,8 @@ export interface Project {
   storyPlan: StoryPlan | null
   durationSec: number
   targetEpisodeCount?: number | null
+  seriesGuidelines?: string
+  promptTemplates?: Record<string, string>
   language: string
   aspectRatio: AspectRatio
   styleId: string
@@ -231,6 +233,19 @@ export interface EpisodeScriptDraft {
   createdAt: number
 }
 
+export type DialogueType = 'dialogue' | 'os' | 'vo' | 'narration'
+
+export interface ShotDetail {
+  cameraMotion?: string
+  cameraReason?: string
+  lighting?: string
+  blocking?: string
+  nonSpeakingReaction?: string
+  sfxAmbience?: string
+  speechDelivery?: string
+  dialogueType?: DialogueType
+}
+
 export interface DraftShot {
   title: string
   sourceExcerpt: string
@@ -244,6 +259,8 @@ export interface DraftShot {
   emotion: string
   framing: string
   durationSec: number
+  shotDetail?: ShotDetail
+  continueFromPrevious?: boolean
 }
 
 export interface NewAssetProposal {
@@ -265,12 +282,60 @@ export interface PlanEpisodesInput {
   mode?: 'replace' | 'continue'
 }
 
+export interface CharacterVisualProfile {
+  age?: string
+  gender?: string
+  face?: string
+  facialFeatures?: string
+  hair?: string
+  body?: string
+  bodyType?: string
+  defaultOutfit?: string
+  distinguishingFeatures?: string
+  distinctiveFeatures?: string
+}
+
+export interface CharacterNarrativeProfile {
+  role?: string
+  desire?: string
+  secret?: string
+  arc?: string
+  speechPattern?: string
+}
+
+export interface CharacterProfile {
+  visual?: CharacterVisualProfile
+  narrative?: CharacterNarrativeProfile
+  voiceStyle?: string
+}
+
+export interface LocationProfile {
+  placeType?: string
+  interiorExterior?: string
+  lighting?: string
+  timeOfDayLighting?: string
+  atmosphere?: string
+  architecturalStyle?: string
+  fixedDetails?: string
+  keyFeatures?: string
+}
+
+export interface PropProfile {
+  shape?: string
+  category?: string
+  material?: string
+  appearance?: string
+  status?: string
+  significance?: string
+}
+
 export interface CharacterDerivative {
   id: string
   projectId: string
   characterId: string
   name: string
   promptChange: string
+  costumeKeyphrase?: string
   sheetAssetId: string | null
   sort: number
 }
@@ -281,6 +346,7 @@ export interface Location {
   name: string
   description: string
   aliases: string[]
+  profile?: LocationProfile
   sheetAssetId: string | null
   sort: number
 }
@@ -291,8 +357,58 @@ export interface Prop {
   name: string
   description: string
   aliases: string[]
+  profile?: PropProfile
   sheetAssetId: string | null
   sort: number
+}
+
+export interface CandidateCharacter {
+  tempId: string
+  name: string
+  aliases: string[]
+  description: string
+  profile: CharacterProfile
+  voiceStyle: string
+}
+
+export interface CandidateDerivative {
+  tempId: string
+  characterName: string
+  name: string
+  promptChange: string
+  costumeKeyphrase: string
+  episodeNums?: number[]
+}
+
+export interface CandidateLocation {
+  tempId: string
+  name: string
+  aliases: string[]
+  description: string
+  profile: LocationProfile
+}
+
+export interface CandidateProp {
+  tempId: string
+  name: string
+  aliases: string[]
+  description: string
+  profile: PropProfile
+}
+
+export interface LorebookExtractionResult {
+  characters: CandidateCharacter[]
+  derivatives: CandidateDerivative[]
+  locations: CandidateLocation[]
+  props: CandidateProp[]
+}
+
+export interface AcceptLorebookCandidatesInput {
+  projectId: string
+  acceptedCharacters: CandidateCharacter[]
+  acceptedDerivatives: CandidateDerivative[]
+  acceptedLocations: CandidateLocation[]
+  acceptedProps: CandidateProp[]
 }
 
 export interface AssetUsageSummary {
@@ -374,6 +490,7 @@ export interface Character {
   ttsProvider?: TtsProvider | null
   voiceStyle: string
   aliases: string[]
+  profile?: CharacterProfile
 }
 
 /** A rewritten scene. speakerId null means the narrator voices it; newCharacter is a speaker the revision added. */
@@ -429,6 +546,8 @@ export interface Clip {
   propIds: string[]
   framing: string
   sourceExcerpt: string
+  shotDetail?: ShotDetail
+  continueFromPrevious?: boolean
 }
 
 export type AssetKind = 'image' | 'video' | 'audio' | 'music' | 'sfx' | 'overlay' | 'export'
@@ -517,6 +636,7 @@ export interface ProjectSummary {
   aspectRatio: AspectRatio
   episodeCount: number
   exportedCount: number
+  seriesGuidelines?: string
 }
 
 /** What the renderer sends on save. Asset links are owned by the main process and never overwritten by a save. */
@@ -532,6 +652,11 @@ export interface NewProjectInput {
   title?: string
   synopsis?: string
   durationSec?: number
+  targetEpisodeCount?: number | null
+  seriesGuidelines?: string
+  promptTemplates?: Record<string, string>
+  sourceText?: string
+  sourceKind?: SourceKind
   language?: string
   aspectRatio?: AspectRatio
   styleId?: string
@@ -539,6 +664,93 @@ export interface NewProjectInput {
   dialogAudio?: DialogAudio
   imageModel?: string
   videoModel?: string
+}
+
+export type ScriptDoctorSeverity = 'error' | 'warning' | 'info'
+
+export interface ScriptDoctorIssue {
+  code: string
+  severity: ScriptDoctorSeverity
+  shotIndex?: number
+  title: string
+  description: string
+  suggestion?: string
+}
+
+export type PromptTemplateKey =
+  | 'episode_planner'
+  | 'script_draft'
+  | 'lorebook_extract'
+  | 'character_sheet'
+  | 'derivative_sheet'
+  | 'location_sheet'
+  | 'prop_sheet'
+  | 'visual_prompt'
+  | 'video_prompt'
+  | 'script_doctor'
+
+export interface PromptTemplateDef {
+  name: string
+  description: string
+  template: string
+  placeholders?: string[]
+}
+
+export const DEFAULT_PROMPT_TEMPLATES: Record<PromptTemplateKey, PromptTemplateDef> = {
+  episode_planner: {
+    name: 'Perencana Episode',
+    description: 'Instruksi sistem untuk memecah teks cerita sumber menjadi episode terstruktur.',
+    template: 'You are an elite showrunner and director for viral vertical short drama series (9:16 format). Adapt the story into tightly paced episodes with opening hook, story beats, and cliffhanger.'
+  },
+  script_draft: {
+    name: 'Penyusun Naskah Shot',
+    description: 'Instruksi sistem untuk menyusun detail naskah shot-by-shot beserta proposal aset baru.',
+    template: 'You are a master vertical short drama scriptwriter and director. Plan shot-by-shot scripts with intense expressions, strict character continuity, framing, blocking, lighting, and audio delivery.'
+  },
+  lorebook_extract: {
+    name: 'Ekstraksi Lorebook',
+    description: 'Instruksi sistem untuk mengekstrak tokoh, varian pakaian, latar lokasi, dan prop penting.',
+    template: 'You are an expert story analyst and visual director specializing in worldbuilding bibles. Extract all recurring characters with visual and narrative profiles, costume variants, key locations, and memorable props.'
+  },
+  character_sheet: {
+    name: 'Lembar Karakter',
+    description: 'Prompt untuk lembar referensi karakter 3-sudut (depan, 3/4, samping).',
+    template: 'Character reference sheet for "{name}": {description}. Show the SAME character three times side by side: front view, three-quarter view and side view, full body, neutral standing pose, on a plain light neutral background.',
+    placeholders: ['name', 'description']
+  },
+  derivative_sheet: {
+    name: 'Lembar Kostum Varian',
+    description: 'Prompt untuk varian kostum atau dandanan karakter.',
+    template: 'Character reference sheet variant for "{name}" ({variantName}). Base appearance: {description}. Costume change: {costumeChange}. Consistent face, hair, and costume in all three views matching the modification.',
+    placeholders: ['name', 'variantName', 'description', 'costumeChange']
+  },
+  location_sheet: {
+    name: 'Lembar Lokasi',
+    description: 'Prompt untuk pemandangan lingkungan arsitektur / lanskap tanpa orang.',
+    template: 'Location environment reference for "{name}": {description}. Clean architectural or landscape establishing shot, cinematic composition, NO people, NO characters, empty scenery, high detail, clear lighting.',
+    placeholders: ['name', 'description']
+  },
+  prop_sheet: {
+    name: 'Lembar Prop',
+    description: 'Prompt untuk objek atau benda terisolasi studio.',
+    template: 'Prop reference sheet for "{name}": {description}. Isolated studio shot of the single object, clean light neutral background, high detail, centered, NO people, NO hands holding it.',
+    placeholders: ['name', 'description']
+  },
+  visual_prompt: {
+    name: 'Prompt Gambar Shot',
+    description: 'Template prompt gambar adegan per shot.',
+    template: 'Structured scene prompt with setting, characters, wardrobe, props, framing, and art style.'
+  },
+  video_prompt: {
+    name: 'Prompt Video Shot',
+    description: 'Template prompt gerak video dan sinkronisasi dialog bibir.',
+    template: 'Subject motion, camera movement, object interaction, and dialogue lip-sync.'
+  },
+  script_doctor: {
+    name: 'Dokter Naskah',
+    description: 'Pemeriksaan ritme, hook, cliffhanger, kontinuitas kostum, dan aturan drama pendek.',
+    template: 'Analyze script draft for hook strength, cliffhanger payoff, talking-head monotony, and wardrobe continuity.'
+  }
 }
 
 export interface KeyStatus {

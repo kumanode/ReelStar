@@ -18,15 +18,24 @@ import {
   Shirt,
   CheckCircle2,
   HelpCircle,
-  Loader2
+  Loader2,
+  Activity,
+  ChevronDown,
+  ChevronRight,
+  Film,
+  Volume2,
+  Sun,
+  Link
 } from 'lucide-react'
 import type {
+  DialogueType,
   DraftShot,
   EpisodeScriptDraft,
   NewAssetProposal,
   ProjectBundle
 } from '@shared/types'
-import { Badge, Button, IconButton, confirmDialog, cx } from '../../components/ui'
+import { checkScriptDoctor, computeEpisodeRhythm } from '@shared/validation'
+import { Badge, Button, IconButton, confirmDialog, cx, inputCls } from '../../components/ui'
 import { Popover } from '../../components/Popover'
 import { Select } from '../../components/Select'
 import { AutoTextarea } from '../../components/AutoTextarea'
@@ -53,6 +62,13 @@ const EMOTION_OPTIONS = [
   { value: 'lembut', label: 'Lembut / Tersipu' }
 ]
 
+const DIALOGUE_TYPE_OPTIONS: { value: DialogueType; label: string }[] = [
+  { value: 'dialogue', label: 'Dialog (Diucapkan langsung/Lip-sync)' },
+  { value: 'os', label: 'Off-Screen (OS - Di luar bingkai kamera)' },
+  { value: 'vo', label: 'Voiceover (VO - Narasi latar)' },
+  { value: 'narration', label: 'Narasi' }
+]
+
 /** Problems that would make confirming fail or produce a wrong clip; long lines are only advice. */
 const isBlocking = (i: { type: string }): boolean => i.type.startsWith('unmapped_') || i.type === 'speaker_hidden'
 
@@ -77,10 +93,33 @@ export function PlanStep() {
   const [isPlanning, setIsPlanning] = useState(false)
   const [isConfirming, setIsConfirming] = useState(false)
   const [planMessage, setPlanMessage] = useState<string | null>(null)
+  const [expandedDetails, setExpandedDetails] = useState<Set<number>>(() => new Set())
+  const [doctorCardCollapsed, setDoctorCardCollapsed] = useState(false)
+
   const hookAnchor = useRef<HTMLButtonElement>(null)
   const [hookOpen, setHookOpen] = useState(false)
   const costumeAnchor = useRef<HTMLButtonElement>(null)
   const [costumeOpen, setCostumeOpen] = useState(false)
+
+  const toggleDetails = (idx: number) => {
+    setExpandedDetails((prev) => {
+      const next = new Set(prev)
+      if (next.has(idx)) next.delete(idx)
+      else next.add(idx)
+      return next
+    })
+  }
+
+  const scrollToShot = (idx: number) => {
+    const el = document.getElementById(`draft-shot-${idx}`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.classList.add('ring-2', 'ring-accent')
+      setTimeout(() => {
+        el.classList.remove('ring-2', 'ring-accent')
+      }, 1500)
+    }
+  }
 
   // Keep local draft in sync if episode changes
   useEffect(() => {
@@ -282,6 +321,21 @@ export function PlanStep() {
       return acc + curr.issues.filter(isBlocking).length
     }, 0)
   }, [shotIssues])
+
+  const scriptDoctorIssues = useMemo(() => {
+    if (!draft || !episode) return []
+    return checkScriptDoctor(draft, episode, {
+      characters,
+      locations,
+      props,
+      derivatives
+    })
+  }, [draft, episode, characters, locations, props, derivatives])
+
+  const rhythmSegments = useMemo(() => {
+    if (!draft) return []
+    return computeEpisodeRhythm(draft)
+  }, [draft])
 
   if (!project || !episode) return null
 
@@ -696,6 +750,124 @@ export function PlanStep() {
                 )}
               </div>
 
+              {/* Rhythm Indicator Bar */}
+              <div className="flex flex-col gap-2 rounded-2xl border border-line bg-surface p-4">
+                <div className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-1.5 font-display font-bold text-ink">
+                    <Activity className="size-4 text-accent" />
+                    <span>Indikator Ritme Episode</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-[11px] text-muted">
+                    <span className="flex items-center gap-1">
+                      <span className="size-2 rounded-full bg-bad" /> Cepat (Fast)
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="size-2 rounded-full bg-accent" /> Normal
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="size-2 rounded-full bg-sand-dark" /> Lambat
+                    </span>
+                  </div>
+                </div>
+
+                {/* Timeline segmented bar */}
+                <div className="flex h-6 w-full overflow-hidden rounded-xl border border-line bg-sand/30 p-0.5">
+                  {rhythmSegments.map((seg) => {
+                    const widthPct = Math.max(3, (seg.durationSec / Math.max(1, totalDurationSec)) * 100)
+                    const colorCls =
+                      seg.pacing === 'fast'
+                        ? 'bg-bad text-white'
+                        : seg.pacing === 'moderate'
+                          ? 'bg-accent text-white'
+                          : 'bg-sand-dark text-ink'
+                    return (
+                      <button
+                        key={seg.shotIndex}
+                        type="button"
+                        onClick={() => scrollToShot(seg.shotIndex)}
+                        style={{ width: `${widthPct}%` }}
+                        title={`Shot ${seg.shotIndex + 1} (~${seg.durationSec}s) | ${seg.type.toUpperCase()} | Pacing: ${seg.pacing} | Emosi: ${seg.emotionIntensity}`}
+                        className={cx(
+                          'flex h-full items-center justify-center font-mono text-[10px] font-bold transition-transform hover:scale-y-110 hover:brightness-110 active:opacity-80 border-r border-paper/20 last:border-none',
+                          colorCls
+                        )}
+                      >
+                        {seg.shotIndex + 1}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Script Doctor Issues Box */}
+              {scriptDoctorIssues.length > 0 && (
+                <div className="flex flex-col gap-2.5 rounded-2xl border border-line bg-surface p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="size-4 text-sun" />
+                      <span className="font-display text-xs font-bold text-ink">
+                        Dokter Naskah Episode ({scriptDoctorIssues.length} Temuan)
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setDoctorCardCollapsed((v) => !v)}
+                      className="text-xs text-muted hover:text-ink font-medium"
+                    >
+                      {doctorCardCollapsed ? 'Buka Analisis ▸' : 'Tutup ▾'}
+                    </button>
+                  </div>
+
+                  {!doctorCardCollapsed && (
+                    <div className="flex flex-col gap-2 pt-1">
+                      {scriptDoctorIssues.map((issue, idx) => (
+                        <div
+                          key={`${issue.code}-${idx}`}
+                          className={cx(
+                            'flex items-start justify-between gap-3 rounded-xl border p-2.5 text-xs',
+                            issue.severity === 'error'
+                              ? 'border-bad/40 bg-bad-soft/30 text-bad-ink'
+                              : issue.severity === 'warning'
+                                ? 'border-sun/40 bg-sun-soft/30 text-sun-ink'
+                                : 'border-info/30 bg-info-soft/30 text-info-ink'
+                          )}
+                        >
+                          <div className="flex items-start gap-2">
+                            <span className="mt-0.5 shrink-0">
+                              {issue.severity === 'error' ? (
+                                <AlertCircle className="size-3.5 text-bad" />
+                              ) : issue.severity === 'warning' ? (
+                                <AlertTriangle className="size-3.5 text-sun" />
+                              ) : (
+                                <HelpCircle className="size-3.5 text-info" />
+                              )}
+                            </span>
+                            <div className="space-y-0.5">
+                              <p className="font-medium">
+                                <span className="font-semibold">{issue.title}:</span> {issue.description}
+                              </p>
+                              {issue.suggestion && (
+                                <p className="text-[11px] opacity-80">{issue.suggestion}</p>
+                              )}
+                            </div>
+                          </div>
+
+                          {issue.shotIndex !== undefined && (
+                            <button
+                              type="button"
+                              onClick={() => scrollToShot(issue.shotIndex!)}
+                              className="shrink-0 rounded-lg border border-current/30 px-2 py-0.5 text-[11px] font-semibold hover:bg-black/5"
+                            >
+                              Lompat ke Shot {issue.shotIndex + 1}
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Shot Cards */}
               <div className="flex flex-col gap-4">
                 {draft.shots.map((shot, idx) => {
@@ -703,6 +875,7 @@ export function PlanStep() {
                   return (
                     <div
                       key={idx}
+                      id={`draft-shot-${idx}`}
                       className={cx(
                         'flex flex-col gap-3 rounded-2xl border bg-surface p-4 transition-all',
                         issues.some(isBlocking)
@@ -946,6 +1119,172 @@ export function PlanStep() {
                             </button>
                           </div>
                         </div>
+                      </div>
+
+                      {/* Continue From Previous Shot Toggle */}
+                      {idx > 0 && (
+                        <div className="flex items-center justify-between rounded-xl border border-line bg-paper/60 px-3 py-2 text-xs">
+                          <div className="flex items-center gap-2">
+                            <Link className="size-3.5 text-accent" />
+                            <div>
+                              <span className="font-semibold text-ink">Sambung Video dari Shot Sebelumnya</span>
+                              <p className="text-[11px] text-muted">
+                                Generate visual video shot ini langsung dari frame terakhir video Shot {idx}.
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => updateShot(idx, { continueFromPrevious: !shot.continueFromPrevious })}
+                            className={cx(
+                              'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+                              shot.continueFromPrevious ? 'bg-accent' : 'bg-line-2'
+                            )}
+                          >
+                            <span
+                              className={cx(
+                                'inline-block size-4 transform rounded-full bg-white transition-transform',
+                                shot.continueFromPrevious ? 'translate-x-6' : 'translate-x-1'
+                              )}
+                            />
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Collapsible Cinematography & Audio Details */}
+                      <div className="flex flex-col gap-2 rounded-xl border border-line bg-paper/40 p-2.5">
+                        <button
+                          type="button"
+                          onClick={() => toggleDetails(idx)}
+                          className="flex items-center justify-between text-xs font-semibold text-ink hover:text-accent transition-colors"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <Film className="size-3.5 text-accent" />
+                            <span>Detail Sinematografi & Pengucapan Shot</span>
+                            {(shot.shotDetail?.cameraMotion || shot.shotDetail?.lighting || shot.shotDetail?.speechDelivery) && (
+                              <Badge tone="ok" className="text-[10px]">
+                                Terisi
+                              </Badge>
+                            )}
+                          </div>
+                          {expandedDetails.has(idx) ? (
+                            <ChevronDown className="size-4 text-muted" />
+                          ) : (
+                            <ChevronRight className="size-4 text-muted" />
+                          )}
+                        </button>
+
+                        {expandedDetails.has(idx) && (
+                          <div className="grid grid-cols-1 gap-2.5 pt-2 sm:grid-cols-2 border-t border-line/60">
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[11px] font-semibold text-muted flex items-center gap-1">
+                                <Film className="size-3 text-accent" /> Gerak Kamera Lanjutan
+                              </label>
+                              <input
+                                value={shot.shotDetail?.cameraMotion ?? ''}
+                                onChange={(e) => {
+                                  const d = { ...(shot.shotDetail ?? {}), cameraMotion: e.target.value }
+                                  updateShot(idx, { shotDetail: d })
+                                }}
+                                placeholder="Misal: Dolly in lambat menuju wajah"
+                                className={cx(inputCls, 'h-8 text-xs')}
+                              />
+                            </div>
+
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[11px] font-semibold text-muted flex items-center gap-1">
+                                <Sun className="size-3 text-sun" /> Pencahayaan (Lighting)
+                              </label>
+                              <input
+                                value={shot.shotDetail?.lighting ?? ''}
+                                onChange={(e) => {
+                                  const d = { ...(shot.shotDetail ?? {}), lighting: e.target.value }
+                                  updateShot(idx, { shotDetail: d })
+                                }}
+                                placeholder="Misal: Cahaya redup lampu meja temaram"
+                                className={cx(inputCls, 'h-8 text-xs')}
+                              />
+                            </div>
+
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[11px] font-semibold text-muted">
+                                Penataan Posisi Karakter (Blocking)
+                              </label>
+                              <input
+                                value={shot.shotDetail?.blocking ?? ''}
+                                onChange={(e) => {
+                                  const d = { ...(shot.shotDetail ?? {}), blocking: e.target.value }
+                                  updateShot(idx, { shotDetail: d })
+                                }}
+                                placeholder="Misal: Berdiri menantang di depan pintu"
+                                className={cx(inputCls, 'h-8 text-xs')}
+                              />
+                            </div>
+
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[11px] font-semibold text-muted">
+                                Reaksi Tokoh yang Tidak Bicara
+                              </label>
+                              <input
+                                value={shot.shotDetail?.nonSpeakingReaction ?? ''}
+                                onChange={(e) => {
+                                  const d = { ...(shot.shotDetail ?? {}), nonSpeakingReaction: e.target.value }
+                                  updateShot(idx, { shotDetail: d })
+                                }}
+                                placeholder="Misal: Mengepalkan tangan menahan amarah"
+                                className={cx(inputCls, 'h-8 text-xs')}
+                              />
+                            </div>
+
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[11px] font-semibold text-muted flex items-center gap-1">
+                                <Volume2 className="size-3 text-accent" /> Efek Suara Latar (SFX/Ambience)
+                              </label>
+                              <input
+                                value={shot.shotDetail?.sfxAmbience ?? ''}
+                                onChange={(e) => {
+                                  const d = { ...(shot.shotDetail ?? {}), sfxAmbience: e.target.value }
+                                  updateShot(idx, { shotDetail: d })
+                                }}
+                                placeholder="Misal: Hujan deras dan gemuruh petir jauh"
+                                className={cx(inputCls, 'h-8 text-xs')}
+                              />
+                            </div>
+
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[11px] font-semibold text-muted">
+                                Gaya Pengucapan Dialog (Delivery)
+                              </label>
+                              <input
+                                value={shot.shotDetail?.speechDelivery ?? ''}
+                                onChange={(e) => {
+                                  const d = { ...(shot.shotDetail ?? {}), speechDelivery: e.target.value }
+                                  updateShot(idx, { shotDetail: d })
+                                }}
+                                placeholder="Misal: Nada berbisik dingin penuh ancaman"
+                                className={cx(inputCls, 'h-8 text-xs')}
+                              />
+                            </div>
+
+                            <div className="flex flex-col gap-1 sm:col-span-2">
+                              <label className="text-[11px] font-semibold text-muted">
+                                Tipe Dialog
+                              </label>
+                              <div className="w-64">
+                                <Select
+                                  label="Tipe dialog"
+                                  value={shot.shotDetail?.dialogueType ?? 'spoken'}
+                                  options={DIALOGUE_TYPE_OPTIONS}
+                                  onChange={(val) => {
+                                    const d = { ...(shot.shotDetail ?? {}), dialogueType: val as DialogueType }
+                                    updateShot(idx, { shotDetail: d })
+                                  }}
+                                  size="sm"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )

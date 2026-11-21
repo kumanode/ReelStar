@@ -2,12 +2,14 @@ import { randomUUID } from 'node:crypto'
 import { cpSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type {
+  AcceptLorebookCandidatesInput,
   Asset,
   AssetKind,
   AssetMeta,
   AssetUsageSummary,
   Character,
   CharacterDerivative,
+  CharacterProfile,
   DraftShot,
   Clip,
   EditorSettings,
@@ -18,6 +20,7 @@ import type {
   JobKind,
   JobStatus,
   Location,
+  LocationProfile,
   MergeAssetInput,
   NewProjectInput,
   Project,
@@ -25,6 +28,7 @@ import type {
   ProjectSnapshot,
   ProjectSummary,
   Prop,
+  PropProfile,
   StoryPlan
 } from '@shared/types'
 import { isDefaultCostume, isNarratorName, visualSourceOf } from '@shared/script'
@@ -80,6 +84,8 @@ const toProject = (r: Row): Project => ({
   storyPlan: r.story_plan_json ? JSON.parse(r.story_plan_json) : null,
   durationSec: r.duration_sec,
   targetEpisodeCount: r.target_episode_count ?? null,
+  seriesGuidelines: r.series_guidelines ?? '',
+  promptTemplates: r.prompt_templates_json ? JSON.parse(r.prompt_templates_json) : {},
   language: r.language,
   aspectRatio: r.aspect_ratio,
   styleId: r.style_id,
@@ -127,7 +133,8 @@ const toCharacter = (r: Row): Character => ({
   ttsVoice: r.tts_voice ?? null,
   ttsProvider: r.tts_provider ?? null,
   voiceStyle: r.voice_style ?? '',
-  aliases: JSON.parse(r.aliases_json || '[]')
+  aliases: JSON.parse(r.aliases_json || '[]'),
+  profile: r.profile_json ? JSON.parse(r.profile_json) : undefined
 })
 
 const toCharacterDerivative = (r: Row): CharacterDerivative => ({
@@ -136,6 +143,7 @@ const toCharacterDerivative = (r: Row): CharacterDerivative => ({
   characterId: r.character_id,
   name: r.name,
   promptChange: r.prompt_change,
+  costumeKeyphrase: r.costume_keyphrase ?? '',
   sheetAssetId: r.sheet_asset_id ?? null,
   sort: r.sort
 })
@@ -146,6 +154,7 @@ const toLocation = (r: Row): Location => ({
   name: r.name,
   description: r.description,
   aliases: JSON.parse(r.aliases_json || '[]'),
+  profile: r.profile_json ? JSON.parse(r.profile_json) : undefined,
   sheetAssetId: r.sheet_asset_id ?? null,
   sort: r.sort
 })
@@ -156,6 +165,7 @@ const toProp = (r: Row): Prop => ({
   name: r.name,
   description: r.description,
   aliases: JSON.parse(r.aliases_json || '[]'),
+  profile: r.profile_json ? JSON.parse(r.profile_json) : undefined,
   sheetAssetId: r.sheet_asset_id ?? null,
   sort: r.sort
 })
@@ -195,7 +205,9 @@ const toClip = (r: Row): Clip => ({
   locationId: r.location_id ?? null,
   propIds: JSON.parse(r.prop_ids || '[]'),
   framing: r.framing ?? '',
-  sourceExcerpt: r.source_excerpt ?? ''
+  sourceExcerpt: r.source_excerpt ?? '',
+  shotDetail: r.shot_detail_json ? JSON.parse(r.shot_detail_json) : {},
+  continueFromPrevious: Boolean(r.continue_from_previous)
 })
 
 export const toAsset = (r: Row): Asset => ({
@@ -450,14 +462,17 @@ export function createProject(input: NewProjectInput): Project {
   const db = getDb()
   db.transaction(() => {
     db.prepare(
-      `INSERT INTO projects (id, title, synopsis, duration_sec, language, aspect_ratio, style_id, tts_provider, tts_voice,
+      `INSERT INTO projects (id, title, synopsis, duration_sec, target_episode_count, series_guidelines, prompt_templates_json, language, aspect_ratio, style_id, tts_provider, tts_voice,
         image_model, video_model, status, step, editor_json, source_text, source_kind, dialog_audio, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 1, ?, '', 'novel', ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 1, ?, ?, ?, ?, ?, ?)`
     ).run(
       id,
       input.title?.trim() || 'Serial Baru',
       input.synopsis ?? '',
       input.durationSec ?? 60,
+      input.targetEpisodeCount !== undefined ? input.targetEpisodeCount : 3,
+      input.seriesGuidelines ?? '',
+      JSON.stringify(input.promptTemplates ?? {}),
       input.language ?? s.defaultLanguage,
       aspect,
       input.styleId ?? 'premium_drama',
@@ -466,6 +481,8 @@ export function createProject(input: NewProjectInput): Project {
       imgModel,
       vidModel,
       JSON.stringify(DEFAULT_EDITOR),
+      input.sourceText ?? '',
+      input.sourceKind ?? 'novel',
       dialogAudio,
       now,
       now
@@ -549,7 +566,7 @@ export function saveSnapshot(snap: ProjectSnapshot): number {
   const epId = snap.episodeId
   db.transaction(() => {
     db.prepare(
-      `UPDATE projects SET title = @title, synopsis = @synopsis, story_plan_json = @storyPlan, duration_sec = @durationSec, target_episode_count = @targetEpisodeCount, language = @language,
+      `UPDATE projects SET title = @title, synopsis = @synopsis, story_plan_json = @storyPlan, duration_sec = @durationSec, target_episode_count = @targetEpisodeCount, series_guidelines = @seriesGuidelines, prompt_templates_json = @promptTemplates, language = @language,
         aspect_ratio = @aspectRatio, style_id = @styleId, tts_provider = @ttsProvider, tts_voice = @ttsVoice,
         image_model = @imageModel, video_model = @videoModel, video_resolution = @videoResolution, status = @status, step = @step, editor_json = @editor,
         source_text = @sourceText, source_kind = @sourceKind, dialog_audio = @dialogAudio, updated_at = @now
@@ -557,6 +574,8 @@ export function saveSnapshot(snap: ProjectSnapshot): number {
     ).run({
       ...p,
       targetEpisodeCount: p.targetEpisodeCount ?? null,
+      seriesGuidelines: p.seriesGuidelines ?? '',
+      promptTemplates: JSON.stringify(p.promptTemplates ?? {}),
       storyPlan: p.storyPlan ? JSON.stringify(p.storyPlan) : null,
       editor: JSON.stringify(p.editor),
       sourceText: p.sourceText ?? '',
@@ -576,10 +595,11 @@ export function saveSnapshot(snap: ProjectSnapshot): number {
       `DELETE FROM characters WHERE project_id = ? AND id NOT IN (${charIds.map(() => '?').join(',') || "''"})`
     ).run(p.id, ...charIds)
     const upChar = db.prepare(
-      `INSERT INTO characters (id, project_id, name, description, sort, tts_voice, tts_provider, voice_style, aliases_json)
-       VALUES (@id, @projectId, @name, @description, @sort, @ttsVoice, @ttsProvider, @voiceStyle, @aliasesJson)
+      `INSERT INTO characters (id, project_id, name, description, sort, tts_voice, tts_provider, voice_style, aliases_json, profile_json)
+       VALUES (@id, @projectId, @name, @description, @sort, @ttsVoice, @ttsProvider, @voiceStyle, @aliasesJson, @profileJson)
        ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, sort = excluded.sort,
-         tts_voice = excluded.tts_voice, tts_provider = excluded.tts_provider, voice_style = excluded.voice_style, aliases_json = excluded.aliases_json`
+         tts_voice = excluded.tts_voice, tts_provider = excluded.tts_provider, voice_style = excluded.voice_style, aliases_json = excluded.aliases_json,
+         profile_json = excluded.profile_json`
     )
     for (const c of snap.characters) {
       upChar.run({
@@ -588,7 +608,8 @@ export function saveSnapshot(snap: ProjectSnapshot): number {
         ttsVoice: c.ttsVoice ?? null,
         ttsProvider: c.ttsProvider ?? null,
         voiceStyle: c.voiceStyle ?? '',
-        aliasesJson: JSON.stringify(c.aliases ?? [])
+        aliasesJson: JSON.stringify(c.aliases ?? []),
+        profileJson: JSON.stringify(c.profile ?? {})
       })
     }
 
@@ -608,10 +629,12 @@ export function saveSnapshot(snap: ProjectSnapshot): number {
     const upClip = db.prepare(
       `INSERT INTO clips (id, project_id, episode_id, sort, title, story, visual_prompt, narration, duration_ms, character_ids, motion_type,
          camera_preset, motion_strength, video_prompt, transition, video_camera, video_strength, transition_ms, voice_gain_db,
-         media_in_ms, voice_in_ms, voice_out_ms, voice_start_ms, filter, speaker_id, emotion, costume_ids, location_id, prop_ids, framing, source_excerpt)
+         media_in_ms, voice_in_ms, voice_out_ms, voice_start_ms, filter, speaker_id, emotion, costume_ids, location_id, prop_ids, framing, source_excerpt,
+         shot_detail_json, continue_from_previous)
        VALUES (@id, @projectId, @episodeId, @sort, @title, @story, @visualPrompt, @narration, @durationMs, @characterIds, @motionType,
          @cameraPreset, @motionStrength, @videoPrompt, @transition, @videoCamera, @videoStrength, @transitionMs, @voiceGainDb,
-         @mediaInMs, @voiceInMs, @voiceOutMs, @voiceStartMs, @filter, @speakerId, @emotion, @costumeIds, @locationId, @propIds, @framing, @sourceExcerpt)
+         @mediaInMs, @voiceInMs, @voiceOutMs, @voiceStartMs, @filter, @speakerId, @emotion, @costumeIds, @locationId, @propIds, @framing, @sourceExcerpt,
+         @shotDetailJson, @continueFromPrevious)
        ON CONFLICT(id) DO UPDATE SET episode_id = excluded.episode_id, sort = excluded.sort, title = excluded.title, story = excluded.story, visual_prompt = excluded.visual_prompt,
          narration = excluded.narration, duration_ms = excluded.duration_ms, character_ids = excluded.character_ids,
          motion_type = excluded.motion_type, camera_preset = excluded.camera_preset, motion_strength = excluded.motion_strength,
@@ -620,7 +643,8 @@ export function saveSnapshot(snap: ProjectSnapshot): number {
          media_in_ms = excluded.media_in_ms, voice_in_ms = excluded.voice_in_ms, voice_out_ms = excluded.voice_out_ms,
          voice_start_ms = excluded.voice_start_ms, filter = excluded.filter, speaker_id = excluded.speaker_id,
          emotion = excluded.emotion, costume_ids = excluded.costume_ids, location_id = excluded.location_id, prop_ids = excluded.prop_ids,
-         framing = excluded.framing, source_excerpt = excluded.source_excerpt`
+         framing = excluded.framing, source_excerpt = excluded.source_excerpt, shot_detail_json = excluded.shot_detail_json,
+         continue_from_previous = excluded.continue_from_previous`
     )
     for (const c of snap.clips)
       upClip.run({
@@ -643,7 +667,9 @@ export function saveSnapshot(snap: ProjectSnapshot): number {
         locationId: c.locationId ?? null,
         propIds: JSON.stringify(c.propIds || []),
         framing: c.framing ?? '',
-        sourceExcerpt: c.sourceExcerpt ?? ''
+        sourceExcerpt: c.sourceExcerpt ?? '',
+        shotDetailJson: JSON.stringify(c.shotDetail || {}),
+        continueFromPrevious: c.continueFromPrevious ? 1 : 0
       })
   })()
   return now
@@ -694,9 +720,9 @@ export function duplicateProject(id: string): ProjectSummary {
   db.transaction(() => {
     const projectEditor = copyEditor({ ...DEFAULT_EDITOR, ...JSON.parse(p.editor_json || '{}') })
     db.prepare(
-      `INSERT INTO projects (id, title, synopsis, story_plan_json, duration_sec, target_episode_count, language, aspect_ratio, style_id, tts_provider, tts_voice,
+      `INSERT INTO projects (id, title, synopsis, story_plan_json, duration_sec, target_episode_count, series_guidelines, prompt_templates_json, language, aspect_ratio, style_id, tts_provider, tts_voice,
          image_model, video_model, video_resolution, status, step, cover_asset_id, editor_json, source_text, source_kind, dialog_audio, created_at, updated_at)
-       SELECT @newId, @title, synopsis, story_plan_json, duration_sec, target_episode_count, language, aspect_ratio, style_id, tts_provider, tts_voice,
+       SELECT @newId, @title, synopsis, story_plan_json, duration_sec, target_episode_count, series_guidelines, prompt_templates_json, language, aspect_ratio, style_id, tts_provider, tts_voice,
          image_model, video_model, video_resolution, status, step, @cover, @editorJson, source_text, source_kind, dialog_audio, @now, @now
        FROM projects WHERE id = @id`
     ).run({
@@ -737,8 +763,8 @@ export function duplicateProject(id: string): ProjectSummary {
 
     for (const c of allCharacters) {
       db.prepare(
-        `INSERT INTO characters (id, project_id, name, description, sheet_asset_id, sort, tts_voice, tts_provider, voice_style, aliases_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO characters (id, project_id, name, description, sheet_asset_id, sort, tts_voice, tts_provider, voice_style, aliases_json, profile_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         mapId(c.id),
         newId,
@@ -749,20 +775,22 @@ export function duplicateProject(id: string): ProjectSummary {
         c.ttsVoice ?? null,
         c.ttsProvider ?? null,
         c.voiceStyle ?? '',
-        JSON.stringify(c.aliases || [])
+        JSON.stringify(c.aliases || []),
+        JSON.stringify(c.profile || {})
       )
     }
 
     for (const d of allDerivatives) {
       db.prepare(
-        `INSERT INTO character_derivatives (id, project_id, character_id, name, prompt_change, sheet_asset_id, sort)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO character_derivatives (id, project_id, character_id, name, prompt_change, costume_keyphrase, sheet_asset_id, sort)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         mapId(d.id),
         newId,
         mapId(d.characterId),
         d.name,
         d.promptChange,
+        d.costumeKeyphrase ?? '',
         mapId(d.sheetAssetId),
         d.sort
       )
@@ -770,14 +798,15 @@ export function duplicateProject(id: string): ProjectSummary {
 
     for (const l of allLocations) {
       db.prepare(
-        `INSERT INTO locations (id, project_id, name, description, aliases_json, sheet_asset_id, sort)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO locations (id, project_id, name, description, aliases_json, profile_json, sheet_asset_id, sort)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         mapId(l.id),
         newId,
         l.name,
         l.description,
         JSON.stringify(l.aliases || []),
+        JSON.stringify(l.profile || {}),
         mapId(l.sheetAssetId),
         l.sort
       )
@@ -785,14 +814,15 @@ export function duplicateProject(id: string): ProjectSummary {
 
     for (const pr of allProps) {
       db.prepare(
-        `INSERT INTO props (id, project_id, name, description, aliases_json, sheet_asset_id, sort)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO props (id, project_id, name, description, aliases_json, profile_json, sheet_asset_id, sort)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         mapId(pr.id),
         newId,
         pr.name,
         pr.description,
         JSON.stringify(pr.aliases || []),
+        JSON.stringify(pr.profile || {}),
         mapId(pr.sheetAssetId),
         pr.sort
       )
@@ -838,8 +868,8 @@ export function duplicateProject(id: string): ProjectSummary {
         `INSERT INTO clips (id, project_id, episode_id, sort, title, story, visual_prompt, visual_source, narration, duration_ms, character_ids,
            motion_type, camera_preset, motion_strength, video_prompt, transition, image_asset_id, video_asset_id, audio_asset_id,
            video_camera, video_strength, transition_ms, voice_gain_db, media_in_ms, voice_in_ms, voice_out_ms, voice_start_ms, filter, speaker_id,
-           emotion, costume_ids, location_id, prop_ids, framing, source_excerpt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           emotion, costume_ids, location_id, prop_ids, framing, source_excerpt, shot_detail_json, continue_from_previous)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         mapId(c.id),
         newId,
@@ -875,7 +905,9 @@ export function duplicateProject(id: string): ProjectSummary {
         mapId(c.locationId),
         JSON.stringify((c.propIds || []).map((x) => mapId(x)).filter(Boolean)),
         c.framing ?? '',
-        c.sourceExcerpt ?? ''
+        c.sourceExcerpt ?? '',
+        JSON.stringify(c.shotDetail || {}),
+        c.continueFromPrevious ? 1 : 0
       )
     }
   })()
@@ -1274,12 +1306,12 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
         id, project_id, episode_id, sort, title, visual_prompt, narration,
         duration_ms, character_ids, motion_type, camera_preset, motion_strength,
         video_prompt, transition, speaker_id, emotion, costume_ids, location_id,
-        prop_ids, framing, source_excerpt, story
+        prop_ids, framing, source_excerpt, story, shot_detail_json, continue_from_previous
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?
       )
     `)
 
@@ -1322,7 +1354,9 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
         JSON.stringify(propIds),
         shot.framing || 'medium shot',
         shot.sourceExcerpt || '',
-        shot.visualAction || ''
+        shot.visualAction || '',
+        JSON.stringify(shot.shotDetail || {}),
+        shot.continueFromPrevious ? 1 : 0
       )
     }
 
@@ -1459,7 +1493,9 @@ const CLIP_COLS: Partial<Record<keyof Clip, string>> = {
   locationId: 'location_id',
   propIds: 'prop_ids',
   framing: 'framing',
-  sourceExcerpt: 'source_excerpt'
+  sourceExcerpt: 'source_excerpt',
+  shotDetail: 'shot_detail_json',
+  continueFromPrevious: 'continue_from_previous'
 }
 
 export function patchClip(id: string, patch: Partial<Clip>): void {
@@ -1468,8 +1504,14 @@ export function patchClip(id: string, patch: Partial<Clip>): void {
   const sets = entries.map(([k]) => `${CLIP_COLS[k as keyof Clip]} = ?`).join(', ')
   getDb()
     .prepare(`UPDATE clips SET ${sets} WHERE id = ?`)
-    // costumeIds and propIds are stored as JSON text; SQLite cannot bind objects or arrays directly.
-    .run(...entries.map(([, v]) => (v !== null && typeof v === 'object' ? JSON.stringify(v) : v)), id)
+    // costumeIds, propIds, shotDetail are stored as JSON text; boolean as 0/1.
+    .run(
+      ...entries.map(([k, v]) => {
+        if (k === 'continueFromPrevious') return v ? 1 : 0
+        return v !== null && typeof v === 'object' ? JSON.stringify(v) : v
+      }),
+      id
+    )
 }
 
 /** Puts a new clip right after another one (used when the editor splits a clip). */
@@ -1483,11 +1525,11 @@ export function insertClipAfter(afterId: string, c: Clip): void {
       `INSERT INTO clips (id, project_id, episode_id, sort, title, story, visual_prompt, visual_source, narration, duration_ms, character_ids,
          motion_type, camera_preset, motion_strength, video_prompt, transition, image_asset_id, video_asset_id, audio_asset_id,
          video_camera, video_strength, transition_ms, voice_gain_db, media_in_ms, voice_in_ms, voice_out_ms, voice_start_ms, filter, speaker_id,
-         emotion, costume_ids, location_id, prop_ids, framing, source_excerpt)
+         emotion, costume_ids, location_id, prop_ids, framing, source_excerpt, shot_detail_json, continue_from_previous)
        VALUES (@id, @projectId, @episodeId, @sort, @title, @story, @visualPrompt, @visualSource, @narration, @durationMs, @characterIds,
          @motionType, @cameraPreset, @motionStrength, @videoPrompt, @transition, @imageAssetId, @videoAssetId, @audioAssetId,
          @videoCamera, @videoStrength, @transitionMs, @voiceGainDb, @mediaInMs, @voiceInMs, @voiceOutMs, @voiceStartMs, @filter, @speakerId,
-         @emotion, @costumeIds, @locationId, @propIds, @framing, @sourceExcerpt)`
+         @emotion, @costumeIds, @locationId, @propIds, @framing, @sourceExcerpt, @shotDetailJson, @continueFromPrevious)`
     ).run({
       ...c,
       projectId: after.projectId,
@@ -1501,7 +1543,9 @@ export function insertClipAfter(afterId: string, c: Clip): void {
       locationId: c.locationId ?? null,
       propIds: JSON.stringify(c.propIds || []),
       framing: c.framing ?? '',
-      sourceExcerpt: c.sourceExcerpt ?? ''
+      sourceExcerpt: c.sourceExcerpt ?? '',
+      shotDetailJson: JSON.stringify(c.shotDetail || {}),
+      continueFromPrevious: c.continueFromPrevious ? 1 : 0
     })
   })()
 }
@@ -1526,13 +1570,14 @@ export function createCharacter(input: {
   ttsProvider?: Character['ttsProvider']
   voiceStyle?: string
   aliases?: string[]
+  profile?: CharacterProfile
 }): Character {
   const db = getDb()
   const id = randomUUID()
   const sort = (db.prepare('SELECT COUNT(*) AS n FROM characters WHERE project_id = ?').get(input.projectId) as Row).n as number
   db.prepare(
-    `INSERT INTO characters (id, project_id, name, description, sort, tts_voice, tts_provider, voice_style, aliases_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO characters (id, project_id, name, description, sort, tts_voice, tts_provider, voice_style, aliases_json, profile_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     input.projectId,
@@ -1542,7 +1587,8 @@ export function createCharacter(input: {
     input.ttsVoice ?? null,
     input.ttsProvider ?? null,
     input.voiceStyle?.trim() ?? '',
-    JSON.stringify(input.aliases ?? [])
+    JSON.stringify(input.aliases ?? []),
+    JSON.stringify(input.profile ?? {})
   )
   return getCharacter(id)
 }
@@ -1575,6 +1621,10 @@ export function updateCharacter(id: string, patch: Partial<Character>): Characte
   if (patch.aliases !== undefined) {
     cols.push('aliases_json = ?')
     vals.push(JSON.stringify(patch.aliases))
+  }
+  if (patch.profile !== undefined) {
+    cols.push('profile_json = ?')
+    vals.push(JSON.stringify(patch.profile))
   }
   if (patch.sort !== undefined) {
     cols.push('sort = ?')
@@ -1619,14 +1669,28 @@ export function getDerivative(id: string): CharacterDerivative | undefined {
   return r ? toCharacterDerivative(r) : undefined
 }
 
-export function createDerivative(input: { projectId: string; characterId: string; name: string; promptChange?: string }): CharacterDerivative {
+export function createDerivative(input: {
+  projectId: string
+  characterId: string
+  name: string
+  promptChange?: string
+  costumeKeyphrase?: string
+}): CharacterDerivative {
   const db = getDb()
   const id = randomUUID()
   const maxSort = (db.prepare('SELECT COALESCE(MAX(sort), -1) AS m FROM character_derivatives WHERE character_id = ?').get(input.characterId) as Row).m as number
   db.prepare(
-    `INSERT INTO character_derivatives (id, project_id, character_id, name, prompt_change, sheet_asset_id, sort)
-     VALUES (?, ?, ?, ?, ?, null, ?)`
-  ).run(id, input.projectId, input.characterId, input.name.trim(), input.promptChange?.trim() ?? '', maxSort + 1)
+    `INSERT INTO character_derivatives (id, project_id, character_id, name, prompt_change, costume_keyphrase, sheet_asset_id, sort)
+     VALUES (?, ?, ?, ?, ?, ?, null, ?)`
+  ).run(
+    id,
+    input.projectId,
+    input.characterId,
+    input.name.trim(),
+    input.promptChange?.trim() ?? '',
+    input.costumeKeyphrase?.trim() ?? '',
+    maxSort + 1
+  )
   return getDerivative(id)!
 }
 
@@ -1642,6 +1706,10 @@ export function updateDerivative(id: string, patch: Partial<CharacterDerivative>
   if (patch.promptChange !== undefined) {
     cols.push('prompt_change = ?')
     vals.push(patch.promptChange.trim())
+  }
+  if (patch.costumeKeyphrase !== undefined) {
+    cols.push('costume_keyphrase = ?')
+    vals.push(patch.costumeKeyphrase.trim())
   }
   if (patch.sheetAssetId !== undefined) {
     cols.push('sheet_asset_id = ?')
@@ -1678,14 +1746,28 @@ export function getLocation(id: string): Location | undefined {
   return r ? toLocation(r) : undefined
 }
 
-export function createLocation(input: { projectId: string; name: string; description?: string; aliases?: string[] }): Location {
+export function createLocation(input: {
+  projectId: string
+  name: string
+  description?: string
+  aliases?: string[]
+  profile?: LocationProfile
+}): Location {
   const db = getDb()
   const id = randomUUID()
   const maxSort = (db.prepare('SELECT COALESCE(MAX(sort), -1) AS m FROM locations WHERE project_id = ?').get(input.projectId) as Row).m as number
   db.prepare(
-    `INSERT INTO locations (id, project_id, name, description, aliases_json, sheet_asset_id, sort)
-     VALUES (?, ?, ?, ?, ?, null, ?)`
-  ).run(id, input.projectId, input.name.trim(), input.description?.trim() ?? '', JSON.stringify(input.aliases ?? []), maxSort + 1)
+    `INSERT INTO locations (id, project_id, name, description, aliases_json, profile_json, sheet_asset_id, sort)
+     VALUES (?, ?, ?, ?, ?, ?, null, ?)`
+  ).run(
+    id,
+    input.projectId,
+    input.name.trim(),
+    input.description?.trim() ?? '',
+    JSON.stringify(input.aliases ?? []),
+    JSON.stringify(input.profile ?? {}),
+    maxSort + 1
+  )
   return getLocation(id)!
 }
 
@@ -1705,6 +1787,10 @@ export function updateLocation(id: string, patch: Partial<Location>): Location {
   if (patch.aliases !== undefined) {
     cols.push('aliases_json = ?')
     vals.push(JSON.stringify(patch.aliases))
+  }
+  if (patch.profile !== undefined) {
+    cols.push('profile_json = ?')
+    vals.push(JSON.stringify(patch.profile))
   }
   if (patch.sheetAssetId !== undefined) {
     cols.push('sheet_asset_id = ?')
@@ -1741,14 +1827,28 @@ export function getProp(id: string): Prop | undefined {
   return r ? toProp(r) : undefined
 }
 
-export function createProp(input: { projectId: string; name: string; description?: string; aliases?: string[] }): Prop {
+export function createProp(input: {
+  projectId: string
+  name: string
+  description?: string
+  aliases?: string[]
+  profile?: PropProfile
+}): Prop {
   const db = getDb()
   const id = randomUUID()
   const maxSort = (db.prepare('SELECT COALESCE(MAX(sort), -1) AS m FROM props WHERE project_id = ?').get(input.projectId) as Row).m as number
   db.prepare(
-    `INSERT INTO props (id, project_id, name, description, aliases_json, sheet_asset_id, sort)
-     VALUES (?, ?, ?, ?, ?, null, ?)`
-  ).run(id, input.projectId, input.name.trim(), input.description?.trim() ?? '', JSON.stringify(input.aliases ?? []), maxSort + 1)
+    `INSERT INTO props (id, project_id, name, description, aliases_json, profile_json, sheet_asset_id, sort)
+     VALUES (?, ?, ?, ?, ?, ?, null, ?)`
+  ).run(
+    id,
+    input.projectId,
+    input.name.trim(),
+    input.description?.trim() ?? '',
+    JSON.stringify(input.aliases ?? []),
+    JSON.stringify(input.profile ?? {}),
+    maxSort + 1
+  )
   return getProp(id)!
 }
 
@@ -1768,6 +1868,10 @@ export function updateProp(id: string, patch: Partial<Prop>): Prop {
   if (patch.aliases !== undefined) {
     cols.push('aliases_json = ?')
     vals.push(JSON.stringify(patch.aliases))
+  }
+  if (patch.profile !== undefined) {
+    cols.push('profile_json = ?')
+    vals.push(JSON.stringify(patch.profile))
   }
   if (patch.sheetAssetId !== undefined) {
     cols.push('sheet_asset_id = ?')
@@ -1791,6 +1895,142 @@ export function removeProp(id: string): void {
 
 export function setPropSheet(id: string, assetId: string | null): void {
   getDb().prepare('UPDATE props SET sheet_asset_id = ? WHERE id = ?').run(assetId, id)
+}
+
+export function acceptLorebookCandidates(input: AcceptLorebookCandidatesInput): {
+  createdCharacters: Character[]
+  createdDerivatives: CharacterDerivative[]
+  createdLocations: Location[]
+  createdProps: Prop[]
+} {
+  const db = getDb()
+  return db.transaction(() => {
+    const existingChars = charactersOf(input.projectId)
+    const existingLocs = locationsOf(input.projectId)
+    const existingProps = propsOf(input.projectId)
+
+    const findChar = (name: string): Character | undefined => {
+      const q = name.trim().toLowerCase()
+      return existingChars.find((c) => c.name.toLowerCase() === q || c.aliases.some((a) => a.toLowerCase() === q))
+    }
+    const findLoc = (name: string): Location | undefined => {
+      const q = name.trim().toLowerCase()
+      return existingLocs.find((l) => l.name.toLowerCase() === q || l.aliases.some((a) => a.toLowerCase() === q))
+    }
+    const findProp = (name: string): Prop | undefined => {
+      const q = name.trim().toLowerCase()
+      return existingProps.find((p) => p.name.toLowerCase() === q || p.aliases.some((a) => a.toLowerCase() === q))
+    }
+
+    const createdCharacters: Character[] = []
+    const charMapByName = new Map<string, string>()
+
+    for (const c of existingChars) {
+      charMapByName.set(c.name.trim().toLowerCase(), c.id)
+    }
+
+    for (const cand of input.acceptedCharacters) {
+      const found = findChar(cand.name)
+      if (found) {
+        const newAliases = [...new Set([...found.aliases, ...cand.aliases])]
+        const updated = updateCharacter(found.id, {
+          aliases: newAliases,
+          description: found.description || cand.description,
+          profile: found.profile || cand.profile,
+          voiceStyle: found.voiceStyle || cand.voiceStyle
+        })
+        charMapByName.set(cand.name.trim().toLowerCase(), updated.id)
+      } else {
+        const created = createCharacter({
+          projectId: input.projectId,
+          name: cand.name,
+          description: cand.description,
+          voiceStyle: cand.voiceStyle,
+          aliases: cand.aliases,
+          profile: cand.profile
+        })
+        existingChars.push(created)
+        charMapByName.set(cand.name.trim().toLowerCase(), created.id)
+        createdCharacters.push(created)
+      }
+    }
+
+    const createdLocations: Location[] = []
+    for (const cand of input.acceptedLocations) {
+      const found = findLoc(cand.name)
+      if (found) {
+        const newAliases = [...new Set([...found.aliases, ...cand.aliases])]
+        updateLocation(found.id, {
+          aliases: newAliases,
+          description: found.description || cand.description,
+          profile: found.profile || cand.profile
+        })
+      } else {
+        const created = createLocation({
+          projectId: input.projectId,
+          name: cand.name,
+          description: cand.description,
+          aliases: cand.aliases,
+          profile: cand.profile
+        })
+        existingLocs.push(created)
+        createdLocations.push(created)
+      }
+    }
+
+    const createdProps: Prop[] = []
+    for (const cand of input.acceptedProps) {
+      const found = findProp(cand.name)
+      if (found) {
+        const newAliases = [...new Set([...found.aliases, ...cand.aliases])]
+        updateProp(found.id, {
+          aliases: newAliases,
+          description: found.description || cand.description,
+          profile: found.profile || cand.profile
+        })
+      } else {
+        const created = createProp({
+          projectId: input.projectId,
+          name: cand.name,
+          description: cand.description,
+          aliases: cand.aliases,
+          profile: cand.profile
+        })
+        existingProps.push(created)
+        createdProps.push(created)
+      }
+    }
+
+    const createdDerivatives: CharacterDerivative[] = []
+    for (const cand of input.acceptedDerivatives) {
+      const charId = charMapByName.get(cand.characterName.trim().toLowerCase()) || findChar(cand.characterName)?.id
+      if (!charId) continue
+      const existingDerivs = derivativesOf(input.projectId, charId)
+      const found = existingDerivs.find((d) => d.name.toLowerCase() === cand.name.trim().toLowerCase())
+      if (found) {
+        updateDerivative(found.id, {
+          promptChange: found.promptChange || cand.promptChange,
+          costumeKeyphrase: found.costumeKeyphrase || cand.costumeKeyphrase
+        })
+      } else {
+        const created = createDerivative({
+          projectId: input.projectId,
+          characterId: charId,
+          name: cand.name,
+          promptChange: cand.promptChange,
+          costumeKeyphrase: cand.costumeKeyphrase
+        })
+        createdDerivatives.push(created)
+      }
+    }
+
+    return {
+      createdCharacters,
+      createdDerivatives,
+      createdLocations,
+      createdProps
+    }
+  })()
 }
 
 // --- Asset usage and merge ---

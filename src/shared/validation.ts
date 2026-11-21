@@ -11,11 +11,41 @@ import {
   computePropSheetBasisHash
 } from './hash'
 import { estimateNarrationMs } from './script'
-import type { Asset, Character, CharacterDerivative, Clip, Job, Location, Project, Prop, SheetGenerationStatus } from './types'
+import type {
+  Asset,
+  Character,
+  CharacterDerivative,
+  Clip,
+  Episode,
+  EpisodeScriptDraft,
+  Job,
+  Location,
+  Project,
+  Prop,
+  ScriptDoctorIssue,
+  SheetGenerationStatus
+} from './types'
 
 export const MIN_EPISODE_DURATION_SEC = 30
 export const MAX_EPISODE_DURATION_SEC = 180
 export const MAX_SERIES_DURATION_SEC = 3600 // 1 jam
+export const DEFAULT_TARGET_EPISODE_COUNT = 3
+export const MIN_TARGET_EPISODES = 1
+export const MAX_TARGET_EPISODES = 20
+
+export function calculateSeriesDuration(
+  targetEpisodeCount: number | null | undefined,
+  durationSec: number
+): { totalEstimatedSec: number | null; isOverOneHour: boolean } {
+  if (targetEpisodeCount == null || targetEpisodeCount <= 0) {
+    return { totalEstimatedSec: null, isOverOneHour: false }
+  }
+  const totalEstimatedSec = targetEpisodeCount * durationSec
+  return {
+    totalEstimatedSec,
+    isOverOneHour: totalEstimatedSec > MAX_SERIES_DURATION_SEC
+  }
+}
 
 export const EPISODE_DURATION_OPTIONS = [
   { value: 45, label: '45 detik' },
@@ -35,6 +65,7 @@ export interface GenerationPrerequisitesContext {
   locations: Location[]
   props: Prop[]
   assets: Asset[] | Record<string, Asset>
+  clips?: Clip[]
   activeJobs?: Job[]
   isFlow2Api?: boolean
   /** Flow2API image model from the app settings, used when the project names a Higgsfield model. */
@@ -173,7 +204,23 @@ export function checkClipImagePrerequisites(clip: Clip, project: Project, ctx: G
 export function checkClipVideoPrerequisites(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): PrerequisitesCheckResult {
   const blockers: string[] = []
 
-  if (!clip.imageAssetId || !findAsset(ctx.assets, clip.imageAssetId)) {
+  if (clip.continueFromPrevious) {
+    if (ctx.clips && ctx.clips.length > 0) {
+      const sorted = [...ctx.clips].sort((a, b) => a.sort - b.sort)
+      const idx = sorted.findIndex((c) => c.id === clip.id)
+      if (idx <= 0) {
+        blockers.push('Shot pertama tidak bisa menyambung dari shot sebelumnya.')
+      } else {
+        const prev = sorted[idx - 1]
+        const prevAssetId = prev.videoAssetId || prev.imageAssetId || null
+        if (!prevAssetId || !findAsset(ctx.assets, prevAssetId)) {
+          blockers.push('Shot sebelumnya belum memiliki video atau gambar untuk disambung.')
+        }
+      }
+    } else if (!clip.imageAssetId || !findAsset(ctx.assets, clip.imageAssetId)) {
+      blockers.push('Klip belum punya gambar storyboard. Buat gambarnya dulu.')
+    }
+  } else if (!clip.imageAssetId || !findAsset(ctx.assets, clip.imageAssetId)) {
     blockers.push('Klip belum punya gambar storyboard. Buat gambarnya dulu.')
   }
 
@@ -250,7 +297,22 @@ export function getClipImageStatus(clip: Clip, project: Project, ctx: Generation
 
 /** Status of a clip video (§6.J). */
 export function getClipVideoStatus(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): ClipStatusResult {
-  const basisHash = computeClipVideoBasisHash({ project, clip, characters: ctx.characters, seconds: videoSecondsFor(project, clip, ctx).seconds })
+  let prevAssetId: string | null = null
+  if (clip.continueFromPrevious && ctx.clips) {
+    const sorted = [...ctx.clips].sort((a, b) => a.sort - b.sort)
+    const idx = sorted.findIndex((c) => c.id === clip.id)
+    if (idx > 0) {
+      const prev = sorted[idx - 1]
+      prevAssetId = prev.videoAssetId || prev.imageAssetId || null
+    }
+  }
+  const basisHash = computeClipVideoBasisHash({
+    project,
+    clip,
+    characters: ctx.characters,
+    seconds: videoSecondsFor(project, clip, ctx).seconds,
+    prevAssetId
+  })
   return resultStatus(ctx.assets, clip.videoAssetId, basisHash, checkClipVideoPrerequisites(clip, project, ctx))
 }
 
@@ -314,7 +376,8 @@ export function getCharacterSheetStatus(
     name: character.name,
     description: character.description,
     styleId: project.styleId,
-    imageModel: project.imageModel
+    imageModel: project.imageModel,
+    profile: character.profile
   })
   const asset = findAsset(assets, character.sheetAssetId)
   if (asset) {
@@ -346,7 +409,8 @@ export function getDerivativeSheetStatus(
   const basisHash = computeDerivativeSheetBasisHash({
     baseSheetAssetId: character?.sheetAssetId ?? null,
     promptChange: derivative.promptChange,
-    imageModel: project.imageModel
+    imageModel: project.imageModel,
+    costumeKeyphrase: derivative.costumeKeyphrase
   })
   const asset = findAsset(assets, derivative.sheetAssetId)
   if (asset) {
@@ -378,7 +442,8 @@ export function getLocationSheetStatus(
     name: location.name,
     description: location.description,
     styleId: project.styleId,
-    imageModel: project.imageModel
+    imageModel: project.imageModel,
+    profile: location.profile
   })
   const asset = findAsset(assets, location.sheetAssetId)
   if (asset) {
@@ -405,7 +470,8 @@ export function getPropSheetStatus(
     name: prop.name,
     description: prop.description,
     styleId: project.styleId,
-    imageModel: project.imageModel
+    imageModel: project.imageModel,
+    profile: prop.profile
   })
   const asset = findAsset(assets, prop.sheetAssetId)
   if (asset) {
@@ -425,4 +491,235 @@ export function planBatchSheets<T extends { status: SheetStatusResult }>(items: 
   const targets = items.filter((i) => i.status.status === 'missing' || (includeStale && i.status.status === 'stale'))
   const blocking = items.filter((i) => i.status.status === 'blocked' && (!i.status.hasResult || includeStale))
   return { targets, blocking }
+}
+
+// ---------- Phase 7: Speech Duration, Script Doctor & Rhythm Indicator ----------
+
+export const WORDS_PER_SECOND_MAX = 3.2
+export const WORDS_PER_SECOND_RECOMMENDED = 2.6
+
+export function validateSpeechDuration(text: string, durationSec: number): {
+  valid: boolean
+  wordCount: number
+  maxRecommendedWords: number
+  wordsPerSecond: number
+} {
+  const words = text.trim().split(/\s+/).filter(Boolean)
+  const wordCount = words.length
+  const wordsPerSecond = durationSec > 0 ? wordCount / durationSec : wordCount
+  const maxRecommendedWords = Math.floor(durationSec * WORDS_PER_SECOND_MAX)
+  return {
+    valid: wordsPerSecond <= WORDS_PER_SECOND_MAX,
+    wordCount,
+    maxRecommendedWords,
+    wordsPerSecond: Math.round(wordsPerSecond * 10) / 10
+  }
+}
+
+export function checkScriptDoctor(
+  draft: EpisodeScriptDraft,
+  episode: Episode,
+  registered: {
+    characters: Character[]
+    locations: Location[]
+    props: Prop[]
+    derivatives?: CharacterDerivative[]
+  }
+): ScriptDoctorIssue[] {
+  const issues: ScriptDoctorIssue[] = []
+  const shots = draft.shots || []
+  if (!shots.length) {
+    issues.push({
+      code: 'EMPTY_SHOTS',
+      severity: 'error',
+      title: 'Naskah Belum Memiliki Shot',
+      description: 'Episode ini belum memiliki daftar shot yang tersusun.'
+    })
+    return issues
+  }
+
+  // 1. Hook on First Shot
+  const firstShot = shots[0]
+  if (firstShot) {
+    const hasVisualTension = Boolean(firstShot.visualAction && firstShot.visualAction.length > 10)
+    const hasEmotion = Boolean(firstShot.emotion && firstShot.emotion.trim())
+    const hasSpeech = Boolean(firstShot.text && firstShot.text.trim())
+    if (!hasVisualTension && !hasEmotion && !hasSpeech) {
+      issues.push({
+        code: 'WEAK_HOOK',
+        severity: 'warning',
+        shotIndex: 0,
+        title: 'Hook Pembuka Kurang Menggigit',
+        description: 'Shot 1 membuka episode, namun belum memiliki aksi visual dramatis, emosi kuat, atau dialog pembuka.',
+        suggestion: 'Mulai dengan konfrontasi langsung, pertanyaan misterius, atau ekspresi dramatis.'
+      })
+    }
+  }
+
+  // 2. Cliffhanger on Last Shot
+  const lastShot = shots[shots.length - 1]
+  if (lastShot && shots.length > 1) {
+    const hasEmotion = Boolean(lastShot.emotion && lastShot.emotion.trim())
+    const hasText = Boolean(lastShot.text && lastShot.text.trim())
+    if (!hasEmotion && !hasText) {
+      issues.push({
+        code: 'WEAK_CLIFFHANGER',
+        severity: 'warning',
+        shotIndex: shots.length - 1,
+        title: 'Penutup Kurang Menggantung (Cliffhanger Lemah)',
+        description: 'Shot penutup episode tidak memiliki punchline emosional atau momen gantung.',
+        suggestion: 'Akhiri dengan reaksi terkejut, tatapan ancaman, atau kalimat menggantung.'
+      })
+    }
+  }
+
+  // 3. Talking head monotony: >= 4 consecutive shots with closeup framing and dialogue
+  let consecutiveDialogueCloseups = 0
+  for (let i = 0; i < shots.length; i++) {
+    const s = shots[i]
+    const isCloseup = /close|cu/i.test(s.framing || '')
+    const hasDialogue = Boolean(s.text && s.speaker)
+    if (isCloseup && hasDialogue) {
+      consecutiveDialogueCloseups++
+      if (consecutiveDialogueCloseups >= 4) {
+        issues.push({
+          code: 'TALKING_HEAD_MONOTONY',
+          severity: 'warning',
+          shotIndex: i,
+          title: 'Monotoni Percakapan (Talking Head)',
+          description: `Ada ${consecutiveDialogueCloseups} shot close-up dialog berurutan. Penonton drama vertikal mudah bosan.`,
+          suggestion: 'Sisipkan shot reaksi pendengar (reaction shot), shot gerak tangan/benda, atau variasi sudut kamera.'
+        })
+        consecutiveDialogueCloseups = 0
+      }
+    } else {
+      consecutiveDialogueCloseups = 0
+    }
+  }
+
+  // 4. Speech duration overflow
+  for (let i = 0; i < shots.length; i++) {
+    const s = shots[i]
+    if (s.text && s.text.trim()) {
+      const check = validateSpeechDuration(s.text, s.durationSec)
+      if (!check.valid) {
+        issues.push({
+          code: 'SPEECH_DURATION_OVERFLOW',
+          severity: 'error',
+          shotIndex: i,
+          title: `Teks Terlalu Panjang untuk Durasi (${check.wordsPerSecond} kata/dtk)`,
+          description: `Shot ${i + 1} memiliki ${check.wordCount} kata untuk durasi ${s.durationSec}s. Rekomendasi maksimal ${check.maxRecommendedWords} kata agar tidak terpotong.`,
+          suggestion: `Perpanjang durasi shot menjadi minimal ${Math.ceil(check.wordCount / 2.6)} detik atau persingkat kalimat dialog.`
+        })
+      }
+    }
+  }
+
+  // 5. Unregistered entities check
+  const knownChars = new Set([
+    ...registered.characters.map((c) => c.name.toLowerCase()),
+    ...registered.characters.flatMap((c) => c.aliases.map((a) => a.toLowerCase())),
+    ...(draft.newAssets || []).filter((a) => a.kind === 'character').map((a) => a.name.toLowerCase())
+  ])
+  const knownLocs = new Set([
+    ...registered.locations.map((l) => l.name.toLowerCase()),
+    ...registered.locations.flatMap((l) => l.aliases.map((a) => a.toLowerCase())),
+    ...(draft.newAssets || []).filter((a) => a.kind === 'location').map((a) => a.name.toLowerCase())
+  ])
+
+  for (let i = 0; i < shots.length; i++) {
+    const s = shots[i]
+    if (s.speaker && !knownChars.has(s.speaker.toLowerCase())) {
+      issues.push({
+        code: 'UNREGISTERED_SPEAKER',
+        severity: 'warning',
+        shotIndex: i,
+        title: `Pembicara "${s.speaker}" Belum Terdaftar`,
+        description: `Karakter "${s.speaker}" di Shot ${i + 1} tidak ditemukan di Lorebook maupun usulan aset baru.`,
+        suggestion: `Daftarkan "${s.speaker}" di Lorebook atau tambahkan ke usulan aset baru.`
+      })
+    }
+    if (s.location && s.location.trim() && !knownLocs.has(s.location.trim().toLowerCase())) {
+      issues.push({
+        code: 'UNREGISTERED_LOCATION',
+        severity: 'info',
+        shotIndex: i,
+        title: `Lokasi "${s.location}" Belum Terdaftar`,
+        description: `Lokasi "${s.location}" di Shot ${i + 1} belum terdaftar di Lorebook.`,
+        suggestion: 'Daftarkan lokasi di Lorebook untuk menjaga konsistensi arsitektur dan pencahayaan.'
+      })
+    }
+  }
+
+  // 6. Wardrobe continuity check
+  for (let i = 0; i < shots.length - 1; i++) {
+    const curr = shots[i]
+    const next = shots[i + 1]
+    for (const charName of curr.characters || []) {
+      if ((next.characters || []).includes(charName)) {
+        const currCostume = curr.costumes?.[charName] || 'default'
+        const nextCostume = next.costumes?.[charName] || 'default'
+        if (currCostume !== nextCostume && curr.location === next.location) {
+          issues.push({
+            code: 'UNEXPLAINED_WARDROBE_CHANGE',
+            severity: 'warning',
+            shotIndex: i + 1,
+            title: `Perubahan Pakaian Mendadak (${charName})`,
+            description: `Di Shot ${i + 2}, ${charName} berganti dari "${currCostume}" ke "${nextCostume}" di lokasi yang sama tanpa jeda waktu.`,
+            suggestion: 'Pastikan kostum konsisten sepanjang adegan, kecuali cerita memang memuat adegan ganti pakaian.'
+          })
+        }
+      }
+    }
+  }
+
+  // 7. Episode duration vs target duration delta
+  const totalDurationSec = shots.reduce((acc, s) => acc + (s.durationSec || 5), 0)
+  const targetSec = episode.durationSec || 60
+  const delta = Math.abs(totalDurationSec - targetSec)
+  if (delta > 20) {
+    issues.push({
+      code: 'DURATION_DELTA_LARGE',
+      severity: 'info',
+      title: `Durasi Total (${totalDurationSec}s) Berbeda dari Target (${targetSec}s)`,
+      description: `Total durasi ${shots.length} shot adalah ${totalDurationSec} detik (selisih ${totalDurationSec > targetSec ? '+' : '-'}${delta}s dari target ${targetSec}s).`,
+      suggestion: 'Sesuaikan durasi shot atau jumlah shot jika ingin pas dengan target penayangan.'
+    })
+  }
+
+  return issues
+}
+
+export interface ShotRhythmSegment {
+  shotIndex: number
+  title: string
+  durationSec: number
+  pacing: 'fast' | 'moderate' | 'slow'
+  type: 'action' | 'dialogue' | 'reaction' | 'silent'
+  emotionIntensity: 'low' | 'medium' | 'high'
+}
+
+export function computeEpisodeRhythm(draft: EpisodeScriptDraft): ShotRhythmSegment[] {
+  return (draft.shots || []).map((s, idx) => {
+    const dur = s.durationSec || 5
+    const pacing: 'fast' | 'moderate' | 'slow' = dur <= 3 ? 'fast' : dur <= 6 ? 'moderate' : 'slow'
+    let type: 'action' | 'dialogue' | 'reaction' | 'silent' = 'action'
+    if (s.text && s.speaker) type = 'dialogue'
+    else if (s.shotDetail?.nonSpeakingReaction || s.emotion?.toLowerCase().includes('reaksi')) type = 'reaction'
+    else if (!s.text) type = 'silent'
+
+    const em = (s.emotion || '').toLowerCase()
+    const highWords = ['marah', 'histeris', 'menjerit', 'menampar', 'teriak', 'panik', 'syok', 'climax', 'intense', 'benci', 'ancam']
+    const isHigh = highWords.some((w) => em.includes(w))
+    const emotionIntensity: 'low' | 'medium' | 'high' = isHigh ? 'high' : em.length > 0 ? 'medium' : 'low'
+
+    return {
+      shotIndex: idx,
+      title: s.title || `Shot ${idx + 1}`,
+      durationSec: dur,
+      pacing,
+      type,
+      emotionIntensity
+    }
+  })
 }

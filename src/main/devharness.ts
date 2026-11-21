@@ -22,13 +22,17 @@ import {
   planBatch,
   planBatchSheets,
   referenceLimit,
-  videoSecondsFor
+  videoSecondsFor,
+  checkScriptDoctor,
+  computeEpisodeRhythm,
+  validateSpeechDuration
 } from '@shared/validation'
 import { startExport } from './exporter'
 import { assetAbsPath, binPath } from './paths'
 import { extractAudio, probeDurationMs, probeHasAudio } from './services/audio'
 import { parts } from './narration'
 import {
+  acceptLorebookCandidates,
   confirmEpisodeScriptRepo,
   createEpisode,
   createProject,
@@ -52,7 +56,7 @@ import { getSettings, setSettings } from './settings'
 import { needsScriptDraft, planEpisodes, splitEpisodeTarget, writePrompts } from './story'
 import { batchEstimate, batchEstimateSheets, derivativeWaveBlocker, extractVideoDialogueAudio, generateMissingImages, seriesProgress, setActiveAsset } from './generation'
 import { recordCheck, setSecret } from './secrets'
-import type { ApiProvider, Asset, Character, Clip, EpisodeScriptDraft, ExportOptions } from '@shared/types'
+import type { ApiProvider, Asset, Character, Clip, DraftShot, EpisodeScriptDraft, ExportOptions } from '@shared/types'
 
 /**
  * Real speech for the demo clips (Windows' built-in English voice) with estimated caption timings, so
@@ -920,6 +924,355 @@ export async function checkPhase6(projectId: string): Promise<boolean> {
   return true
 }
 
+export async function checkPhase7(projectId: string): Promise<boolean> {
+  // 1. Ensure Phase 6 baseline is met
+  await checkPhase6(projectId)
+  console.log('[checkPhase7] Prasyarat Fase 6 terpenuhi')
+
+  // Create a clean test episode since checkPhase6 tested removeAllEpisodes
+  const testEpisode = createEpisode(projectId, { title: 'Episode 1: Kebangkitan' })
+
+  // 2. Lorebook Candidate Acceptance & Profile Persistence
+  const acceptedResult = acceptLorebookCandidates({
+    projectId,
+    acceptedCharacters: [
+      {
+        tempId: 'temp_c1',
+        name: 'Arjuna Wardhana',
+        aliases: ['Arjun', 'Bung Arjuna'],
+        description: 'Pemuda karismatik berwajah tegas',
+        voiceStyle: 'baritone tegas',
+        profile: {
+          visual: {
+            age: '28',
+            gender: 'pria',
+            hair: 'hitam rapi belah samping',
+            defaultOutfit: 'kemeja putih digulung dan celana chino abu-abu'
+          },
+          narrative: {
+            role: 'protagonist',
+            desire: 'membersihkan nama baik keluarga',
+            secret: 'tahu rahasia korupsi sindikat'
+          }
+        }
+      }
+    ],
+    acceptedDerivatives: [
+      {
+        tempId: 'temp_d1',
+        characterName: 'Arjuna Wardhana',
+        name: 'Jas Pesta Mewah',
+        promptChange: 'jas tuksedo hitam beludru dengan dasi kupu-kupu sutra',
+        costumeKeyphrase: 'tuksedo beludru hitam dasi kupu-kupu'
+      }
+    ],
+    acceptedLocations: [
+      {
+        tempId: 'temp_l1',
+        name: 'Gedung Kesenian Tua',
+        aliases: ['Gedung Tua', 'Teater Lama'],
+        description: 'Gedung pertunjukan kolonial bergaya neo-klasik',
+        profile: {
+          placeType: 'teater pertunjukan',
+          interiorExterior: 'interior',
+          lighting: 'sorotan lampu panggung temaram'
+        }
+      }
+    ],
+    acceptedProps: [
+      {
+        tempId: 'temp_p1',
+        name: 'Kotak Musik Antik',
+        aliases: ['Kotak Emas'],
+        description: 'Kotak musik berukir motif teratai emas',
+        profile: {
+          category: 'pusaka',
+          appearance: 'logam kuningan bersepuh emas dengan kristal di tengah',
+          significance: 'berisi gulungan mikrofilm rahasia'
+        }
+      }
+    ]
+  })
+
+  if (acceptedResult.createdCharacters.length !== 1 || acceptedResult.createdDerivatives.length !== 1 || acceptedResult.createdLocations.length !== 1 || acceptedResult.createdProps.length !== 1) {
+    throw new Error('acceptLorebookCandidates gagal mengembalikan entitas yang baru dibuat')
+  }
+
+  // Verify persistence in bundle
+  const bLore = getBundle(projectId)
+  const savedChar = bLore.characters.find((c) => c.name === 'Arjuna Wardhana')
+  if (!savedChar || savedChar.profile?.visual?.hair !== 'hitam rapi belah samping' || savedChar.profile?.narrative?.role !== 'protagonist') {
+    throw new Error('Profil karakter (visual & narasi) gagal disimpan atau diambil dari basis data')
+  }
+
+  const savedDeriv = bLore.derivatives.find((d) => d.name === 'Jas Pesta Mewah')
+  if (!savedDeriv || savedDeriv.costumeKeyphrase !== 'tuksedo beludru hitam dasi kupu-kupu') {
+    throw new Error('Costume keyphrase varian kostum gagal disimpan ke basis data')
+  }
+
+  const savedLoc = bLore.locations.find((l) => l.name === 'Gedung Kesenian Tua')
+  if (!savedLoc || savedLoc.profile?.interiorExterior !== 'interior') {
+    throw new Error('Profil lokasi gagal disimpan ke basis data')
+  }
+
+  const savedProp = bLore.props.find((p) => p.name === 'Kotak Musik Antik')
+  if (!savedProp || savedProp.profile?.category !== 'pusaka') {
+    throw new Error('Profil prop gagal disimpan ke basis data')
+  }
+
+  // 3. Series Guidelines & Prompt Templates Persistence
+  bLore.project.seriesGuidelines = 'Suasana noir penuh intrik balas dendam keluarga konglomerat.'
+  bLore.project.promptTemplates = {
+    episode_planner: 'Custom showrunner instructions for noir thriller series.'
+  }
+  saveSnapshot({
+    project: bLore.project,
+    episodeId: testEpisode.id,
+    characters: bLore.characters,
+    clips: []
+  })
+
+  const bTemplates = getBundle(projectId)
+  if (bTemplates.project.seriesGuidelines !== 'Suasana noir penuh intrik balas dendam keluarga konglomerat.') {
+    throw new Error('series_guidelines gagal disimpan di proyek')
+  }
+  if (bTemplates.project.promptTemplates?.episode_planner !== 'Custom showrunner instructions for noir thriller series.') {
+    throw new Error('prompt_templates_json gagal disimpan di proyek')
+  }
+
+  // 4. Speech Pacing Validation (Tugas 38)
+  const normalSpeech = validateSpeechDuration('Halo semua, selamat datang di acara ini.', 5)
+  if (!normalSpeech.valid) {
+    throw new Error('Teks bicara wajar untuk durasi 5 detik seharusnya valid')
+  }
+  const overlyLongSpeech = validateSpeechDuration(
+    'Ini adalah dialog yang sangat amat panjang sekali dan tidak mungkin bisa diucapkan dalam waktu dua detik saja tanpa terpotong atau terburu-buru secara tidak wajar bagi telinga pendengar.',
+    2
+  )
+  if (overlyLongSpeech.valid) {
+    throw new Error('Teks bicara terlalu panjang untuk durasi 2 detik seharusnya tidak valid')
+  }
+  if (overlyLongSpeech.maxRecommendedWords >= overlyLongSpeech.wordCount) {
+    throw new Error('maxRecommendedWords harus lebih kecil dari wordCount ketika teks melebihi batas')
+  }
+
+  // 5. Script Doctor & Episode Rhythm (Tugas 39)
+  const testShots: DraftShot[] = [
+    {
+      title: 'Shot 1 - Pembuka',
+      sourceExcerpt: 'Adegan 1',
+      visualAction: 'Arjuna menatap gedung tua di tengah hujan lebat',
+      characters: ['Arjuna Wardhana'],
+      costumes: {},
+      location: 'Gedung Kesenian Tua',
+      props: [],
+      speaker: null,
+      text: '',
+      emotion: 'tegang',
+      framing: 'wide shot',
+      durationSec: 4,
+      shotDetail: {
+        cameraMotion: 'slow push-in tracking shot',
+        cameraReason: 'membangun atmosfer misteri',
+        lighting: 'dramatic blue moody rim lighting'
+      }
+    },
+    {
+      title: 'Shot 2 - Dialog',
+      sourceExcerpt: 'Adegan 2',
+      visualAction: 'Arjuna berbisik ke mikrofon tersembunyi',
+      characters: ['Arjuna Wardhana'],
+      costumes: {},
+      location: 'Gedung Kesenian Tua',
+      props: ['Kotak Musik Antik'],
+      speaker: 'Arjuna Wardhana',
+      text: 'Target sudah terlihat di lantai dua.',
+      emotion: 'waspada',
+      framing: 'close up',
+      durationSec: 3,
+      shotDetail: {
+        cameraMotion: 'handheld slight shake',
+        speechDelivery: 'berbisik lirih penuh desakan',
+        dialogueType: 'dialogue'
+      }
+    },
+    {
+      title: 'Shot 3 - Penutup',
+      sourceExcerpt: 'Adegan 3',
+      visualAction: 'Sebuah tembakan meletus, lampu seketika padam total',
+      characters: [],
+      costumes: {},
+      location: 'Gedung Kesenian Tua',
+      props: [],
+      speaker: null,
+      text: '',
+      emotion: 'panik',
+      framing: 'extreme close up',
+      durationSec: 3,
+      shotDetail: {
+        cameraMotion: 'rapid zoom-out Dutch angle',
+        sfxAmbience: 'bunyi tembakan menggelegar dan teriakan penonton'
+      }
+    }
+  ]
+
+  const testDraft: EpisodeScriptDraft = {
+    createdAt: Date.now(),
+    shots: testShots,
+    newAssets: []
+  }
+
+  const scriptIssues = checkScriptDoctor(testDraft, testEpisode, {
+    characters: bLore.characters,
+    locations: bLore.locations,
+    props: bLore.props,
+    derivatives: bLore.derivatives
+  })
+  if (!Array.isArray(scriptIssues)) {
+    throw new Error('checkScriptDoctor harus mengembalikan daftar issue array')
+  }
+
+  const rhythm = computeEpisodeRhythm(testDraft)
+  if (rhythm.length !== 3) {
+    throw new Error(`computeEpisodeRhythm harus menghasilkan 3 segmen, didapat: ${rhythm.length}`)
+  }
+  if (!rhythm[0].pacing || !rhythm[2].pacing) {
+    throw new Error('Segmen ritme harus memiliki penilaian pacing')
+  }
+
+  // 6. Connected Shots & Cinematography (Tugas 38 & 43)
+  const draftWithConnection: EpisodeScriptDraft = {
+    createdAt: Date.now(),
+    shots: [
+      {
+        title: 'Shot A',
+        sourceExcerpt: 'A',
+        visualAction: 'Karakter melangkah maju',
+        characters: ['Arjuna Wardhana'],
+        costumes: {},
+        location: null,
+        props: [],
+        speaker: null,
+        text: '',
+        emotion: 'netral',
+        framing: 'medium',
+        durationSec: 4,
+        shotDetail: {
+          cameraMotion: 'forward dolly',
+          lighting: 'high key'
+        }
+      },
+      {
+        title: 'Shot B (Connected)',
+        sourceExcerpt: 'B',
+        visualAction: 'Karakter meraih gagang pintu',
+        characters: ['Arjuna Wardhana'],
+        costumes: {},
+        location: null,
+        props: [],
+        speaker: null,
+        text: '',
+        emotion: 'fokus',
+        framing: 'close up',
+        durationSec: 4,
+        continueFromPrevious: true,
+        shotDetail: {
+          cameraMotion: 'handheld tracking',
+          lighting: 'ambient'
+        }
+      }
+    ],
+    newAssets: []
+  }
+
+  confirmEpisodeScriptRepo(projectId, testEpisode.id, draftWithConnection)
+  const bAfterConfirm = getBundle(projectId, testEpisode.id)
+  const clipA = bAfterConfirm.clips[0]!
+  const clipB = bAfterConfirm.clips[1]!
+
+  if (!clipB.continueFromPrevious) {
+    throw new Error('continueFromPrevious pada DraftShot harus tersimpan ke Clip setelah confirmEpisodeScriptRepo')
+  }
+  if (!clipA.shotDetail || clipA.shotDetail.cameraMotion !== 'forward dolly') {
+    throw new Error('shotDetail pada Clip harus tersimpan dari DraftShot')
+  }
+
+  // Clip B connected requires Clip A to have video asset
+  const prereqBeforeVideo = checkClipVideoPrerequisites(clipB, bAfterConfirm.project, {
+    assets: bAfterConfirm.assets,
+    clips: bAfterConfirm.clips,
+    characters: bAfterConfirm.characters,
+    derivatives: bAfterConfirm.derivatives,
+    locations: bAfterConfirm.locations,
+    props: bAfterConfirm.props
+  })
+  if (prereqBeforeVideo.ok || !prereqBeforeVideo.blockers.some((b) => b.includes('video atau gambar'))) {
+    throw new Error('Clip B dengan continueFromPrevious: true harus diblokir jika clip A belum memiliki video/gambar')
+  }
+
+  // Mock video for Clip A
+  const mockVideoAsset = insertAsset({
+    projectId,
+    clipId: clipA.id,
+    kind: 'video',
+    provider: 'demo',
+    localPath: 'videos/mock-clip-a.mp4',
+    durationMs: 4000
+  })
+  patchClip(clipA.id, { videoAssetId: mockVideoAsset.id })
+
+  const freshBundleWithVideo = getBundle(projectId, testEpisode.id)
+  const prereqAfterVideo = checkClipVideoPrerequisites(freshBundleWithVideo.clips[1]!, freshBundleWithVideo.project, {
+    assets: freshBundleWithVideo.assets,
+    clips: freshBundleWithVideo.clips,
+    characters: freshBundleWithVideo.characters,
+    derivatives: freshBundleWithVideo.derivatives,
+    locations: freshBundleWithVideo.locations,
+    props: freshBundleWithVideo.props
+  })
+  if (!prereqAfterVideo.ok) {
+    throw new Error(`Clip B seharusnya siap setelah clip A memiliki video, tapi: ${prereqAfterVideo.blockers.join(', ')}`)
+  }
+
+  // Verify hash basis sensitivity to connected shots
+  const hashStandalone = computeClipVideoBasisHash({
+    clip: { ...clipB, continueFromPrevious: false },
+    project: freshBundleWithVideo.project,
+    characters: freshBundleWithVideo.characters,
+    seconds: 4,
+    prevAssetId: null
+  })
+  const hashConnected = computeClipVideoBasisHash({
+    clip: clipB,
+    project: freshBundleWithVideo.project,
+    characters: freshBundleWithVideo.characters,
+    seconds: 4,
+    prevAssetId: mockVideoAsset.id
+  })
+  if (hashStandalone === hashConnected) {
+    throw new Error('computeClipVideoBasisHash harus berbeda antara shot mandiri vs shot tersambung dari klip sebelumnya')
+  }
+
+  // Verify prompt compilation incorporates visual profile and shot detail
+  const compiledPrompt = compileClipPrompt({
+    project: freshBundleWithVideo.project,
+    clip: clipA,
+    characters: freshBundleWithVideo.characters,
+    derivatives: freshBundleWithVideo.derivatives,
+    locations: freshBundleWithVideo.locations,
+    props: freshBundleWithVideo.props
+  })
+  if (!compiledPrompt.includes('hitam rapi belah samping')) {
+    throw new Error(`compileClipPrompt harus menyertakan profil visual karakter: ${compiledPrompt}`)
+  }
+  if (!compiledPrompt.includes('high key')) {
+    throw new Error(`compileClipPrompt harus menyertakan lighting dari shotDetail: ${compiledPrompt}`)
+  }
+
+  console.log('[checkPhase7] Semua pengujian backend Fase 7 BERHASIL!')
+  return true
+}
+
 /**
  * For harness runs: keep painting and timers going while the test window sits behind other windows, so
  * screenshots show the current state. Must run before the app is ready.
@@ -950,7 +1303,7 @@ export function attachDevHarness(win: BrowserWindow): void {
   const planPath = process.env.STUDIO_CAPTURE_PLAN
   if (!planPath) return
   let plan: {
-    main?: 'seed' | 'seedEpisodes' | 'checkIsolation' | 'checkPhase3' | 'checkPhase4' | 'checkPhase6' | 'export' | 'key' | 'overlays' | 'speech' | 'videos'
+    main?: 'seed' | 'seedEpisodes' | 'checkIsolation' | 'checkPhase3' | 'checkPhase4' | 'checkPhase6' | 'checkPhase7' | 'export' | 'key' | 'overlays' | 'speech' | 'videos'
     openProject?: boolean
     exportTo?: string
     encoder?: ExportOptions['encoder']
@@ -989,6 +1342,7 @@ export function attachDevHarness(win: BrowserWindow): void {
         if (step.main === 'checkPhase3' && (step.projectId ?? demoId)) await checkPhase3((step.projectId ?? demoId)!)
         if (step.main === 'checkPhase4' && (step.projectId ?? demoId)) await checkPhase4((step.projectId ?? demoId)!)
         if (step.main === 'checkPhase6' && (step.projectId ?? demoId)) await checkPhase6((step.projectId ?? demoId)!)
+        if (step.main === 'checkPhase7' && (step.projectId ?? demoId)) await checkPhase7((step.projectId ?? demoId)!)
         if (step.openProject && demoId) {
           await win.webContents.executeJavaScript(`(() => { window.useApp?.getState().go({ name: 'project', id: ${JSON.stringify(demoId)} }); })()`)
         }
