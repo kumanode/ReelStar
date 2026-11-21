@@ -445,10 +445,11 @@ mengarahkan gaya AI tanpa menulis ulang prompt di setiap layar.
   dokter naskah, template rusak ditolak, dan basi akibat arahan/template/frame sebelumnya; screenshot modal Home,
   Hub, Lorebook (tinjau kandidat), Rencana & Tinjau, dan Pusat tugas di 1180×720 terang dan gelap.
 
-## Fase 8 — Kontinuitas, referensi per shot, dan pengiriman
+## Fase 8 — Kontinuitas, referensi per shot, pengiriman, dan pengaturan global
 
 Tujuan: wajah, kostum, dan prop tetap sama antar-shot dan antar-episode; kreator bisa melihat dan mengatur referensi
-setiap shot; hasil ekspor siap diunggah ke platform tujuan tanpa diolah ulang.
+setiap shot; hasil ekspor siap diunggah ke platform tujuan tanpa diolah ulang; penyedia dan model AI diatur sekali
+di Pengaturan dan berlaku untuk semua proyek.
 
 - Dasar: [rencana referensi drama short](../docs/superpowers/plans/2026-11-21-referensi-drama-short.md)
   (huobao-drama, drama-skills, awesome-short-drama-skills, dramaclaw, LocalMiniDrama, dramaxis,
@@ -457,8 +458,12 @@ setiap shot; hasil ekspor siap diunggah ke platform tujuan tanpa diolah ulang.
   Naskah dan strip ritme (Tugas 39), pusat tugas dan coba ulang yang gagal (Tugas 41). Sisa dan bug dari dua tugas
   pertama dikumpulkan di Tugas 44.
 - Dikerjakan di branch sendiri (mis. `fase-8-kontinuitas`) setelah fase 7 di-merge.
-- Urutan: **44 → 45 → 46 → 47 → 48**. Tugas 49–52 tidak saling bergantung dan boleh dikerjakan kapan saja setelah
-  44. Tugas 49 menyentuh ekspor, jadi diuji paling akhir.
+- Pengaturan global (Tugas 53–58) dirinci di [setting.md](setting.md); di sini hanya ringkasan dan kriteria.
+- Urutan: **44 → 54 → 45 → 46 → 47 → 48**, lalu 55 → 56 → 57 → 58. Tugas 54 (resolver penyedia/model) dikerjakan
+  sebelum 45 dan 48 karena ketiganya mengubah `shared/hash.ts` dan `generation.ts`; dengan begitu hash hasil hanya
+  berubah polanya sekali dan lock/referensi langsung memakai model dari resolver. Tugas 53 murni tampilan dan boleh
+  dikerjakan kapan saja. Tugas 49–52 tidak saling bergantung dan boleh dikerjakan kapan saja setelah 44. Tugas 49
+  menyentuh ekspor, jadi diuji paling akhir.
 - Setiap input baru yang memengaruhi prompt harus ikut mengubah hash basis. Uji wajibnya: mengubah input itu membuat
   hasil lama menjadi `stale`, bukan tetap `current`.
 
@@ -583,10 +588,62 @@ setiap shot; hasil ekspor siap diunggah ke platform tujuan tanpa diolah ulang.
 - Berkas utama: modul baru `src/main/package.ts`, `ExportDialog.tsx`.
 - Kriteria selesai: zip berisi MP4, manifest, dan checksum yang cocok dengan file.
 
+### Tugas 53 — Pengaturan: kerangka tiga kolom
+- Pecah `pages/Settings.tsx` (821 baris) menjadi `pages/settings/`: shell + sidebar berkelompok (Penyedia, Aktif,
+  Sistem), rail penyedia per peran dengan status, dan panel detail. `KeyForm` dipindah tanpa mengubah perilaku.
+- `Route` settings mendapat `section` dan `provider`. Data model belum berubah.
+- Pola dari ArcReel (AGPL-3.0) hanya ditiru idenya, kodenya tidak disalin.
+- Kriteria selesai: simpan/tes/hapus kunci tetap berfungsi; tidak terpotong di 1180×720.
+- Rincian: [setting.md, Tugas 1](setting.md#tugas-1--kerangka-tiga-kolom-tanpa-mengubah-data-model).
+
+### Tugas 54 — Katalog penyedia dan resolver global
+- `shared/providers.ts`: `ProviderDef` (dengan `protocol`), `PRESET_PROVIDERS`, dan `resolveActive(settings,
+  purpose)` sebagai **satu-satunya** penentu penyedia/model, dipakai main dan renderer.
+- Semua setting penyedia dan model menjadi global. `projects.tts_provider`, `image_model`, `video_model` dibiarkan di
+  skema tetapi tidak dibaca lagi (tanpa migrasi). Suara narator dan suara tokoh tetap per proyek/tokoh; suara milik
+  penyedia lain dilewati dan dipakai suara bawaan.
+- Hapus tebakan `includes('/')` di `generation.ts` dan semua pemakaian `defaultVisualProvider` (main dan renderer).
+  Hash basis gambar/video/lembar memakai model dari `resolveActive`.
+- Normalisasi setting lama di `getSettings()`; endpoint `custom` lama menjadi entri penyedia custom dengan id sama.
+- Kriteria selesai: salinan database lama memuat kunci dan pilihan yang sama; mengganti model gambar global
+  menandai gambar proyek lama `stale`; `includes('/')` dan `defaultVisualProvider` tidak ada lagi di `src/`.
+- Rincian: [setting.md, Tugas 2](setting.md#tugas-2--katalog-penyedia-di-shared).
+
+### Tugas 55 — Penyedia custom (LLM)
+- Tambah, ubah, dan hapus penyedia custom berprotokol OpenAI-compatible. Suara/gambar/video custom ditunda karena
+  belum ada protokolnya.
+- IPC baru di tiga tempat; validasi id unik (slug `custom` dipesan), URL `http`/`https`; hapus penyedia ikut
+  menghapus kunci dan memindahkan penyedia aktif bila perlu.
+- Kriteria selesai: dua penyedia custom bertahan setelah restart; menghapus tidak menyisakan kunci atau id
+  menggantung.
+- Rincian: [setting.md, Tugas 3](setting.md#tugas-3--penyedia-custom-llm-bisa-ditambah-dan-dihapus).
+
+### Tugas 56 — Halaman Model aktif
+- Penyedia + model aktif untuk Cerita, Suara, serta Gambar & video (slot gambar dan video), disimpan per penyedia.
+- Mengganti penyedia/model gambar atau video meminta konfirmasi: hasil di semua serial ditandai basi, tidak dibuat
+  ulang.
+- `ModelSection.tsx` di proyek menjadi ringkasan baca-saja dengan tautan "Ubah di Pengaturan". Daftar suara narator
+  dan tokoh mengikuti penyedia TTS aktif; tokoh yang suaranya milik penyedia lain diberi tanda.
+- Kriteria selesai: perubahan berlaku di semua proyek; berpindah penyedia lalu kembali memulihkan model sebelumnya.
+- Rincian: [setting.md, Tugas 4](setting.md#tugas-4--halaman-model-aktif).
+
+### Tugas 57 — Status dan penanda masalah di Pengaturan
+- Sidebar menandai peran tanpa penyedia terhubung; badge rail dan detail memakai `KeyStatus` yang sama dan berubah
+  langsung setelah tes atau kunci dicabut.
+- Rincian: [setting.md, Tugas 5](setting.md#tugas-5--status-dan-penanda-masalah).
+
+### Tugas 58 — Dokumentasi pengaturan
+- Perbarui `docs/konvensi.md` (aturan dropdown penyedia diganti), `docs/layanan-ai.md`, `docs/keputusan-teknis.md`
+  (setting global dan alasannya), `docs/data-model.md` (kolom yang tidak dipakai), dan peta kode `AGENTS.md`. Salin
+  mockup dari folder Temp ke `docs/mockup/settings.html`.
+- Rincian: [setting.md, Tugas 6](setting.md#tugas-6--dokumentasi-dan-aturan).
+
 - **Checkpoint 8** — typecheck/build bersih; dev harness (`STUDIO_USER_DATA` sementara) menguji: hasil menjadi basi
-  saat lock atau referensi diubah, aturan Dokter Naskah tanpa false positive untuk narator/O.S./V.O., migrasi pada
-  salinan database lama, dan ekspor preset diperiksa dengan `ffprobe`; screenshot Lorebook (kunci, kontinuitas),
-  Rencana & Tinjau, Storyboard (chip referensi, mode pilih), dan dialog ekspor di 1180×720 terang dan gelap.
+  saat lock, referensi, atau model aktif diubah, aturan Dokter Naskah tanpa false positive untuk narator/O.S./V.O.,
+  migrasi dan normalisasi setting pada salinan database lama, penyedia custom bertahan setelah restart, dan ekspor
+  preset diperiksa dengan `ffprobe`; screenshot Lorebook (kunci, kontinuitas), Rencana & Tinjau, Storyboard (chip
+  referensi, mode pilih), dialog ekspor, dan Pengaturan (rail, detail, penyedia baru, Model aktif) di 1180×720
+  terang dan gelap.
 
 ## Risiko
 
@@ -606,3 +663,5 @@ setiap shot; hasil ekspor siap diunggah ke platform tujuan tanpa diolah ulang.
 | Prompt terpotong di model dengan `promptLimit` kecil | Identitas/kostum hilang, wajah melenceng | Jalur trim mempertahankan identitas, kostum, dan lock; lock yang terpotong ditandai |
 | Aturan Dokter Naskah berbasis tebakan teks | Peringatan palsu membuat kreator mengabaikan semuanya | Aturan tak pasti mulai sebagai `info`; four-beat memakai label `beat` dari planner |
 | Preset ekspor dengan rasio berbeda | Pratinjau ≠ ekspor | Fase 8 hanya preset rasio sama; crop/pad/matte ditulis di `shared/` sebagai tugas terpisah |
+| Model aktif global diganti di tengah produksi | Satu serial tercampur model, banyak hasil basi sekaligus | Konfirmasi sebelum menyimpan dengan jumlah serial terdampak; hasil hanya ditandai basi, tidak dibuat ulang |
+| Normalisasi setting lama salah memetakan penyedia/kunci | Kunci pengguna seolah hilang | Id penyedia tidak berubah (termasuk `custom`); uji salinan database lama di Checkpoint 8 |

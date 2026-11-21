@@ -40,6 +40,7 @@ src/
     align.ts, cuts.ts  cocokkan kata naskah ke hasil Whisper; pilih titik potong antar-adegan
     editing.ts     potong (split) klip, lepas suara klip
     exporter.ts    render MP4 dengan FFmpeg
+    package.ts     ekspor paket pengiriman siap kirim (.zip, manifest, checksums, SRT, aset)
     fontMetrics.ts lebar teks dari file TTF (untuk kotak caption di ekspor)
     jobs.ts, events.ts  antrean job + event ke renderer
     secrets.ts     kunci API terenkripsi (safeStorage/DPAPI)
@@ -50,11 +51,15 @@ src/
     filters.ts    preset filter warna untuk pratinjau dan ekspor
     sfx.ts        katalog efek suara bawaan
     prompts.ts    prompt gambar/video berlabel dan urutan lembar referensi
+    lock.ts       kata kunci kontinuitas (lock words) dan pemeriksaan kepatuhan prompt
+    providers.ts  katalog penyedia AI, resolusi model aktif (resolveActive)
+    exportPresets.ts preset platform video (TikTok, Reels, Shorts, YouTube) & validasi durasi
     validation.ts syarat generate, status hasil (terkini/basi/belum ada/terblokir), durasi video, batch
     hash.ts       hash basis hasil generate
     styles.ts, legacyStyles.ts  katalog gaya visual; gaya lama tetap terbaca untuk proyek lama
   renderer/src/    tampilan React + Tailwind v4 + Zustand
     pages/project/  Episode Hub, Lorebook, Rencana & Tinjau, Storyboard, Editor, Header, Sidebar
+    pages/settings/ Model Aktif, Penyedia & Kunci, Penyedia Custom, Umum, Whisper
     pages/project/editor/  pratinjau (Player), Timeline, Inspector (panel kanan), engine pemutaran
 resources/         font caption, SFX bawaan, whisper-cli.exe + DLL, file lisensi
 build/             ikon aplikasi untuk installer (icon.ico, icon.png), dibuat dari logo di components/Logo.tsx

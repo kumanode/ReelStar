@@ -1,4 +1,5 @@
 import type { KeyTestResult, LlmProvider, ModelList, ModelOption, ModelSource } from '@shared/types'
+import { providerById, resolveActive } from '@shared/providers'
 import { getSecret, PROVIDER_NAMES } from '../secrets'
 import { getSettings, readCache, writeCache } from '../settings'
 import * as eleven from './elevenlabs'
@@ -9,7 +10,7 @@ import { extractJson } from './json'
 const STALE_MS = 24 * 60 * 60 * 1000
 const GENERATE_TIMEOUT_MS = 4 * 60 * 1000
 
-type CompatProvider = Exclude<LlmProvider, 'gemini'>
+type CompatProvider = string
 
 interface Compat {
   provider: CompatProvider
@@ -35,13 +36,16 @@ function compat(provider: CompatProvider, keyOverride?: string | null, baseOverr
     return { provider, base: 'https://openrouter.ai/api/v1', key, headers: { 'X-OpenRouter-Title': 'ReelStar', 'X-Title': 'ReelStar' } }
   }
   if (provider === 'groq') return { provider, base: 'https://api.groq.com/openai/v1', key, headers: {} }
-  const base = (baseOverride ?? getSettings().customBaseUrl).trim().replace(/\/+$/, '')
-  if (!base) throw new LlmError('Alamat endpoint custom belum diisi. Buka Pengaturan untuk menambahkannya.')
+  const settings = getSettings()
+  const p = providerById(provider, settings.customProviders)
+  const base = (baseOverride ?? p?.baseUrl ?? (provider === 'custom' ? (settings.customBaseUrl ?? '') : '')).trim().replace(/\/+$/, '')
+  if (!base) throw new LlmError(`Alamat endpoint ${p?.name || provider} belum diisi. Buka Pengaturan untuk menambahkannya.`)
   return { provider, base, key, headers: {} }
 }
 
 function requireKey(c: Compat): void {
-  if (c.provider !== 'custom' && !c.key)
+  const p = providerById(c.provider, getSettings().customProviders)
+  if (!p?.keyOptional && c.provider !== 'custom' && !c.key)
     throw new LlmError(`Kunci API ${PROVIDER_NAMES[c.provider]} belum diatur. Buka Pengaturan untuk menambahkannya.`)
 }
 
@@ -144,8 +148,8 @@ async function groqModels(): Promise<ModelOption[]> {
     .sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true }))
 }
 
-async function customModels(): Promise<ModelOption[]> {
-  const c = compat('custom')
+async function customModels(providerId = 'custom', baseUrlOverride?: string): Promise<ModelOption[]> {
+  const c = compat(providerId, undefined, baseUrlOverride)
   const r = await call<{ data?: { id: string; owned_by?: string }[]; models?: { name?: string; model?: string; id?: string }[] }>(c, '/models')
   const list = r.data ?? r.models?.map((m) => ({ id: m.id ?? m.model ?? m.name ?? '', owned_by: undefined })) ?? []
   return list
@@ -165,13 +169,15 @@ async function fetchModels(source: ModelSource): Promise<ModelOption[]> {
       return openRouterModels()
     case 'groq':
       return groqModels()
-    case 'custom':
-      return customModels()
+    default:
+      return customModels(source)
   }
 }
 
 function cacheKey(source: ModelSource): string {
-  return source === 'custom' ? `models:custom:${getSettings().customBaseUrl.trim()}` : `models:${source}`
+  const p = providerById(source, getSettings().customProviders)
+  if (p?.baseUrl) return `models:${source}:${p.baseUrl.trim()}`
+  return source === 'custom' ? `models:custom:${(getSettings().customBaseUrl ?? '').trim()}` : `models:${source}`
 }
 
 export async function listModels(source: ModelSource, refresh = false): Promise<ModelList> {
@@ -202,7 +208,7 @@ export async function testLlm(provider: LlmProvider, key?: string | null, baseUr
       return { ok: true, message: parts.join(' · ') }
     }
     // Groq and OpenAI-compatible servers have no key-info endpoint; listing models proves the key works.
-    const models = provider === 'groq' ? await groqModels() : await customModels()
+    const models = provider === 'groq' ? await groqModels() : await customModels(provider, baseUrl)
     return { ok: true, message: `Terhubung · ${models.length} model tersedia` }
   } catch (e) {
     return { ok: false, message: (e as Error).message }
@@ -296,8 +302,8 @@ export interface ActiveLlm {
 }
 
 export function activeLlm(): ActiveLlm {
-  const s = getSettings()
-  return { provider: s.llmProvider, model: s.llmModels[s.llmProvider]?.trim() ?? '' }
+  const active = resolveActive(getSettings(), 'llm')
+  return { provider: active.provider.id, model: active.model }
 }
 
 /** Generates a JSON object that follows `schema` with whichever LLM the user made active. */

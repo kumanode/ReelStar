@@ -26,14 +26,16 @@ Pengguna memasukkan kuncinya sendiri di **Pengaturan › Layanan AI dan kunci**.
 
 ## LLM (`services/llm.ts`, `services/gemini.ts`)
 
-- `generateJson({ system, prompt, schema, name })` memanggil penyedia aktif (`settings.llmProvider` +
-  `llmModels[provider]`).
+- `generateJson({ system, prompt, schema, name })` memanggil penyedia aktif yang ditentukan oleh
+  `resolveActive(settings, 'story')` di `src/shared/providers.ts`.
   - Gemini: `@google/genai` dengan `responseJsonSchema` (dan cadangan: skema ditulis di system instruction).
   - Lainnya: `/chat/completions`, dicoba berurutan `json_schema` (strict) → `json_object` → teks biasa, lalu JSON
     diambil dari teks (`extractJson`) untuk model yang tidak mendukung structured output.
 - `listModels(source)`: daftar model live dari penyedia, dicache di tabel `cache` dan disegarkan saat basi.
-- **Menambah penyedia LLM baru** yang kompatibel OpenAI: tambahkan ke `LlmProvider` dan `ApiProvider`
-  (`types.ts`), `LLM_PROVIDERS` (`shared/models.ts`), konfigurasi base URL di `llm.ts`, dan `DEFAULT_SETTINGS.llmModels`.
+- **Penyedia LLM Custom**: Pengguna dapat menambahkan, mengubah, dan menghapus penyedia custom kompatibel OpenAI
+  langsung dari halaman Pengaturan (disimpan di `settings.customProviders`).
+- **Resolver Global (`resolveActive`)**: Semua pemilihan model AI (cerita, suara, gambar, video) bersifat global
+  dan diselesaikan secara seragam melalui `resolveActive` (`src/shared/providers.ts`), baik di proses utama maupun renderer.
 
 ## TTS
 

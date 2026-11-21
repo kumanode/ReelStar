@@ -97,7 +97,7 @@ export async function generateJson(model: string, system: string, prompt: string
 export async function speak(text: string, voice: string, languageCode: string, signal?: AbortSignal): Promise<Buffer> {
   try {
     const res = await client().models.generateContent({
-      model: getSettings().geminiTtsModel,
+      model: getSettings().geminiTtsModel || 'gemini-3.8-flash-tts',
       contents: [
         {
           role: 'user',

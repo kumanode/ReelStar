@@ -12,7 +12,14 @@ import {
   Trash2,
   X,
   Shirt,
-  ArrowRight
+  ArrowRight,
+  Lock,
+  RefreshCw,
+  GitBranch,
+  CheckCircle2,
+  Clock,
+  Flame,
+  AlertTriangle
 } from 'lucide-react'
 import type {
   Character,
@@ -20,8 +27,14 @@ import type {
   Prop,
   VoiceOption,
   LorebookExtractionResult,
-  AcceptLorebookCandidatesInput
+  AcceptLorebookCandidatesInput,
+  LockWord,
+  ContinuityItem,
+  ContinuityKind,
+  ContinuityStatus,
+  ContinuityTier
 } from '@shared/types'
+import { buildLockWords } from '@shared/lock'
 import {
   getCharacterSheetStatus,
   getDerivativeSheetStatus,
@@ -29,7 +42,7 @@ import {
   getPropSheetStatus
 } from '@shared/validation'
 import { geminiVoiceGender } from '@shared/models'
-import { Badge, Button, Field, IconButton, Menu, Segmented, Spinner, confirmDialog, cx, inputCls } from '../../components/ui'
+import { Badge, Button, Field, IconButton, Menu, Modal, Segmented, Spinner, confirmDialog, cx, inputCls } from '../../components/ui'
 import { AutoTextarea } from '../../components/AutoTextarea'
 import { Select } from '../../components/Select'
 import { errorText } from '../../lib/format'
@@ -39,7 +52,7 @@ import { MergeAssetModal } from './MergeAssetModal'
 import { BatchEstimateSheetModal } from './BatchEstimateSheetModal'
 import { CandidateReviewModal } from './CandidateReviewModal'
 
-type LorebookTab = 'character' | 'location' | 'prop'
+type LorebookTab = 'character' | 'location' | 'prop' | 'lock' | 'continuity'
 
 export function LorebookPage() {
   const {
@@ -64,6 +77,11 @@ export function LorebookPage() {
     addProp,
     updateProp,
     removeProp,
+    continuityItems,
+    addContinuityItem,
+    updateContinuityItem,
+    removeContinuityItem,
+    updateProject,
     switchEpisode,
     setActiveView,
     setActiveTab: setProjectActiveTab,
@@ -75,6 +93,8 @@ export function LorebookPage() {
   const [activeTab, setActiveTab] = useState<LorebookTab>('character')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [newLockLabel, setNewLockLabel] = useState('')
+  const [newLockText, setNewLockText] = useState('')
   const [batchModalOpen, setBatchModalOpen] = useState(false)
   const [extracting, setExtracting] = useState(false)
   const [reviewResult, setReviewResult] = useState<LorebookExtractionResult | null>(null)
@@ -87,6 +107,67 @@ export function LorebookPage() {
     sourceId: string
     sourceName: string
   }>({ open: false, kind: 'character', sourceId: '', sourceName: '' })
+
+  // Continuity state
+  const [continuityFilter, setContinuityFilter] = useState<'all' | 'open' | 'paid' | 'dropped'>('all')
+  const [continuityModalOpen, setContinuityModalOpen] = useState(false)
+  const [newContKind, setNewContKind] = useState<ContinuityKind>('foreshadow')
+  const [newContTier, setNewContTier] = useState<ContinuityTier>('hot')
+  const [newContName, setNewContName] = useState('')
+  const [newContDetail, setNewContDetail] = useState('')
+  const [newContPlantedEp, setNewContPlantedEp] = useState('')
+
+  const handleCreateContinuity = async () => {
+    if (!newContName.trim()) {
+      toast('info', 'Nama benang cerita tidak boleh kosong.')
+      return
+    }
+    const epId = newContPlantedEp || episodes[0]?.id || ''
+    try {
+      await addContinuityItem({
+        kind: newContKind,
+        tier: newContTier,
+        name: newContName.trim(),
+        detail: newContDetail.trim(),
+        plantedEpisodeId: epId,
+        status: 'open'
+      })
+      toast('success', 'Benang cerita berhasil ditambahkan.')
+      setNewContName('')
+      setNewContDetail('')
+      setContinuityModalOpen(false)
+    } catch (err) {
+      toast('error', `Gagal menambahkan: ${errorText(err)}`)
+    }
+  }
+
+  const handleToggleContinuityStatus = async (item: ContinuityItem, newStatus: ContinuityStatus, payoffEpId?: string) => {
+    try {
+      await updateContinuityItem(item.id, {
+        status: newStatus,
+        payoffEpisodeId: newStatus === 'paid' ? (payoffEpId ?? episodes[0]?.id ?? null) : null
+      })
+      toast('success', newStatus === 'paid' ? 'Benang cerita ditandai lunas.' : newStatus === 'dropped' ? 'Benang cerita diabaikan.' : 'Benang cerita dibuka kembali.')
+    } catch (err) {
+      toast('error', `Gagal mengubah status: ${errorText(err)}`)
+    }
+  }
+
+  const handleRemoveContinuity = async (item: ContinuityItem) => {
+    const ok = await confirmDialog({
+      title: 'Hapus Benang Cerita',
+      body: `Hapus catatan "${item.name}"? Tindakan ini tidak dapat dibatalkan.`,
+      confirm: 'Hapus',
+      danger: true
+    })
+    if (!ok) return
+    try {
+      await removeContinuityItem(item.id)
+      toast('info', 'Benang cerita dihapus.')
+    } catch (err) {
+      toast('error', `Gagal menghapus: ${errorText(err)}`)
+    }
+  }
 
   const handleExtractLorebook = async () => {
     if (!project) return
@@ -125,6 +206,48 @@ export function LorebookPage() {
       toast('error', `Gagal menyimpan aset: ${errorText(err)}`)
     }
   }
+
+  const seriesLocks = project?.seriesLock || []
+
+  const handleSyncLocks = () => {
+    if (!project) return
+    const updated = buildLockWords({ characters, derivatives, locations, props, existing: seriesLocks })
+    updateProject({ seriesLock: updated })
+    toast('success', 'Kunci kontinuitas berhasil disinkronkan dari Lorebook.')
+  }
+
+  const handleToggleLock = (id: string) => {
+    if (!project) return
+    const updated = seriesLocks.map((l) => (l.id === id ? { ...l, enabled: !l.enabled } : l))
+    updateProject({ seriesLock: updated })
+  }
+
+  const handleAddManualLock = () => {
+    if (!project || !newLockText.trim()) return
+    const newLock: LockWord = {
+      id: `manual-${Date.now()}`,
+      label: newLockLabel.trim() || 'Kunci Manual',
+      text: newLockText.trim(),
+      source: 'manual',
+      enabled: true
+    }
+    updateProject({ seriesLock: [...seriesLocks, newLock] })
+    setNewLockLabel('')
+    setNewLockText('')
+    toast('success', 'Kunci manual berhasil ditambahkan.')
+  }
+
+  const handleRemoveManualLock = (id: string) => {
+    if (!project) return
+    const updated = seriesLocks.filter((l) => l.id !== id)
+    updateProject({ seriesLock: updated })
+  }
+
+  const filteredLocks = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return seriesLocks
+    return seriesLocks.filter((l) => l.label.toLowerCase().includes(q) || l.text.toLowerCase().includes(q))
+  }, [seriesLocks, searchQuery])
 
   // Voices list for TTS
   const [voices, setVoices] = useState<VoiceOption[]>([])
@@ -169,6 +292,19 @@ export function LorebookPage() {
       (p) => p.name.toLowerCase().includes(q) || (p.aliases ?? []).some((a) => a.toLowerCase().includes(q))
     )
   }, [props, searchQuery])
+
+  const filteredContinuity = useMemo(() => {
+    return continuityItems.filter((item) => {
+      if (continuityFilter !== 'all' && item.status !== continuityFilter) return false
+      if (!searchQuery.trim()) return true
+      const q = searchQuery.toLowerCase()
+      return (
+        item.name.toLowerCase().includes(q) ||
+        item.detail.toLowerCase().includes(q) ||
+        item.kind.toLowerCase().includes(q)
+      )
+    })
+  }, [continuityItems, continuityFilter, searchQuery])
 
   // Compute usage counts for all assets across episodes
   const characterUsageMap = useMemo(() => {
@@ -437,7 +573,9 @@ export function LorebookPage() {
             options={[
               { id: 'character', label: <span className="flex items-center gap-1.5"><Users className="size-3.5" /> Karakter</span> },
               { id: 'location', label: <span className="flex items-center gap-1.5"><MapPin className="size-3.5" /> Lokasi</span> },
-              { id: 'prop', label: <span className="flex items-center gap-1.5"><Package className="size-3.5" /> Prop</span> }
+              { id: 'prop', label: <span className="flex items-center gap-1.5"><Package className="size-3.5" /> Prop</span> },
+              { id: 'lock', label: <span className="flex items-center gap-1.5"><Lock className="size-3.5" /> Kunci Serial</span> },
+              { id: 'continuity', label: <span className="flex items-center gap-1.5"><GitBranch className="size-3.5" /> Kontinuitas</span> }
             ]}
             size="sm"
           />
@@ -447,32 +585,47 @@ export function LorebookPage() {
             <input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={`Cari ${activeTab === 'character' ? 'karakter' : activeTab === 'location' ? 'lokasi' : 'prop'} atau alias...`}
+              placeholder={activeTab === 'lock' ? 'Cari kunci kontinuitas...' : activeTab === 'continuity' ? 'Cari benang cerita...' : `Cari ${activeTab === 'character' ? 'karakter' : activeTab === 'location' ? 'lokasi' : 'prop'} atau alias...`}
               className="h-8 w-56 rounded-lg border border-line-2 bg-paper pl-8 pr-2.5 text-xs text-ink outline-none transition-colors focus:border-ink"
             />
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            loading={extracting}
-            icon={<Sparkles className="size-3.5 text-accent" />}
-            onClick={handleExtractLorebook}
-            title="Ekstrak otomatis karakter, varian pakaian, lokasi, dan prop dari teks cerita atau premis"
-          >
-            {extracting ? 'Menganalisis cerita...' : 'Ekstrak dari Cerita'}
-          </Button>
+          {activeTab !== 'lock' && activeTab !== 'continuity' && (
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={extracting}
+                icon={<Sparkles className="size-3.5 text-accent" />}
+                onClick={handleExtractLorebook}
+                title="Ekstrak otomatis karakter, varian pakaian, lokasi, dan prop dari teks cerita atau premis"
+              >
+                {extracting ? 'Menganalisis cerita...' : 'Ekstrak dari Cerita'}
+              </Button>
 
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<Sparkles className="size-3.5" />}
-            onClick={() => setBatchModalOpen(true)}
-          >
-            Buat semua lembar
-          </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<Sparkles className="size-3.5" />}
+                onClick={() => setBatchModalOpen(true)}
+              >
+                Buat semua lembar
+              </Button>
+            </>
+          )}
+
+          {activeTab === 'continuity' && (
+            <Button
+              variant="primary"
+              size="sm"
+              icon={<Plus className="size-3.5" />}
+              onClick={() => setContinuityModalOpen(true)}
+            >
+              Tambah Benang Cerita
+            </Button>
+          )}
 
           <Button
             variant="secondary"
@@ -493,18 +646,20 @@ export function LorebookPage() {
             Lanjut ke Naskah
           </Button>
 
-          <Button
-            variant="primary"
-            size="sm"
-            icon={<Plus className="size-3.5" />}
-            onClick={() => {
-              if (activeTab === 'character') handleAddCharacter()
-              else if (activeTab === 'location') handleAddLocation()
-              else handleAddProp()
-            }}
-          >
-            {activeTab === 'character' ? 'Tambah Karakter' : activeTab === 'location' ? 'Tambah Lokasi' : 'Tambah Prop'}
-          </Button>
+          {activeTab !== 'lock' && activeTab !== 'continuity' && (
+            <Button
+              variant="primary"
+              size="sm"
+              icon={<Plus className="size-3.5" />}
+              onClick={() => {
+                if (activeTab === 'character') handleAddCharacter()
+                else if (activeTab === 'location') handleAddLocation()
+                else handleAddProp()
+              }}
+            >
+              {activeTab === 'character' ? 'Tambah Karakter' : activeTab === 'location' ? 'Tambah Lokasi' : 'Tambah Prop'}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -779,6 +934,333 @@ export function LorebookPage() {
                   </div>
                 )
               })}
+            </div>
+          )}
+
+          {/* Series Lock Words Tab */}
+          {activeTab === 'lock' && (
+            <div className="flex max-w-4xl flex-col gap-6">
+              <div className="rounded-2xl border border-line bg-surface p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className="font-display text-base font-bold text-ink">
+                      Kunci Kontinuitas Serial (Lock Words)
+                    </h3>
+                    <p className="mt-1 text-xs text-muted leading-relaxed">
+                      Frasa identitas yang ditempel <strong>apa adanya (verbatim)</strong> ke setiap prompt gambar dan video agar konsistensi visual tokoh, kostum, lokasi, dan prop terjaga di seluruh episode. Frasa otomatis bisa dinonaktifkan, dan frasa kustom manual bisa ditambahkan.
+                    </p>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={<RefreshCw className="size-3.5" />}
+                    onClick={handleSyncLocks}
+                  >
+                    Sinkronkan dari Lorebook
+                  </Button>
+                </div>
+
+                {/* Add Manual Lock Word Form */}
+                <div className="mt-5 rounded-xl border border-line bg-paper p-4">
+                  <h4 className="text-xs font-semibold text-ink">Tambah Kunci Manual Baru</h4>
+                  <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <input
+                      value={newLockLabel}
+                      onChange={(e) => setNewLockLabel(e.target.value)}
+                      placeholder="Label (mis. Tahi lalat bawah mata kiri)"
+                      className="h-8 rounded-lg border border-line-2 bg-surface px-3 text-xs text-ink outline-none focus:border-ink"
+                    />
+                    <input
+                      value={newLockText}
+                      onChange={(e) => setNewLockText(e.target.value)}
+                      placeholder="Teks Verbatim (mis. Small dark beauty mark below left eye)"
+                      className="h-8 rounded-lg border border-line-2 bg-surface px-3 text-xs text-ink outline-none focus:border-ink sm:col-span-2"
+                    />
+                  </div>
+                  <div className="mt-3 flex justify-end">
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      icon={<Plus className="size-3.5" />}
+                      onClick={handleAddManualLock}
+                      disabled={!newLockText.trim()}
+                    >
+                      Tambah Kunci
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Lock Words List */}
+              <div className="flex flex-col gap-2.5">
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-xs font-semibold text-ink">
+                    Daftar Kunci ({filteredLocks.filter((l) => l.enabled).length} aktif / {filteredLocks.length} total)
+                  </span>
+                </div>
+
+                {filteredLocks.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-line p-8 text-center">
+                    <Lock className="size-8 text-muted/50" />
+                    <p className="mt-2 text-xs font-medium text-ink">Belum ada kunci kontinuitas.</p>
+                    <p className="text-[11px] text-muted">Klik &ldquo;Sinkronkan dari Lorebook&rdquo; untuk membuat kunci otomatis dari karakter, lokasi, dan prop.</p>
+                  </div>
+                ) : (
+                  filteredLocks.map((lock) => (
+                    <div
+                      key={lock.id}
+                      className={cx(
+                        'flex items-start justify-between gap-4 rounded-xl border p-3.5 transition-colors',
+                        lock.enabled
+                          ? 'border-line bg-surface text-ink'
+                          : 'border-line/60 bg-sand/30 opacity-60'
+                      )}
+                    >
+                      <div className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={lock.enabled}
+                          onChange={() => handleToggleLock(lock.id)}
+                          className="mt-0.5 size-4 rounded border-line text-ink focus:ring-0"
+                        />
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-display text-xs font-bold">{lock.label}</span>
+                            <span className="rounded bg-sand px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted">
+                              {lock.source}
+                            </span>
+                          </div>
+                          <p className="rounded bg-sand/60 px-2 py-1 font-mono text-xs text-ink/90">
+                            {lock.text}
+                          </p>
+                        </div>
+                      </div>
+
+                      {lock.source === 'manual' && (
+                        <IconButton
+                          label="Hapus kunci manual"
+                          onClick={() => handleRemoveManualLock(lock.id)}
+                          className="text-bad hover:text-bad/80"
+                          size={28}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </IconButton>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Continuity Items Tab */}
+          {activeTab === 'continuity' && (
+            <div className="flex max-w-4xl flex-col gap-6">
+              <div className="rounded-2xl border border-line bg-surface p-5">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h3 className="font-display text-base font-bold text-ink">
+                      Benang Cerita & Kontinuitas Antar-Episode
+                    </h3>
+                    <p className="mt-1 text-xs text-muted leading-relaxed">
+                      Lacak petunjuk awal (foreshadow), barang kunci (prop), aturan dunia, dan dinamika hubungan yang ditanam di episode tertentu agar dibayar dan diselesaikan tepat waktu tanpa ada plot hole.
+                    </p>
+                  </div>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon={<Plus className="size-3.5" />}
+                    onClick={() => setContinuityModalOpen(true)}
+                  >
+                    Tambah Benang Cerita
+                  </Button>
+                </div>
+
+                {/* Filter Pills */}
+                <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-4">
+                  <Segmented<'all' | 'open' | 'paid' | 'dropped'>
+                    value={continuityFilter}
+                    onChange={setContinuityFilter}
+                    options={[
+                      { id: 'all', label: `Semua (${continuityItems.length})` },
+                      { id: 'open', label: `Aktif (${continuityItems.filter((i) => i.status === 'open').length})` },
+                      { id: 'paid', label: `Lunas (${continuityItems.filter((i) => i.status === 'paid').length})` },
+                      { id: 'dropped', label: `Diabaikan (${continuityItems.filter((i) => i.status === 'dropped').length})` }
+                    ]}
+                    size="sm"
+                  />
+                </div>
+              </div>
+
+              {/* Continuity Items List */}
+              <div className="flex flex-col gap-3">
+                {filteredContinuity.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-line bg-surface/50 p-12 text-center">
+                    <GitBranch className="size-8 text-muted" />
+                    <p className="mt-3 text-sm font-medium text-ink">Belum ada benang cerita</p>
+                    <p className="mt-1 text-xs text-muted">
+                      {searchQuery
+                        ? 'Tidak ada hasil yang cocok dengan pencarianmu.'
+                        : 'Catat petunjuk awal atau rahasia cerita yang ditanam agar Script Doctor mengingatkanmu membayarnya.'}
+                    </p>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="mt-4"
+                      icon={<Plus className="size-3.5" />}
+                      onClick={() => setContinuityModalOpen(true)}
+                    >
+                      Tambah Catatan Pertama
+                    </Button>
+                  </div>
+                ) : (
+                  filteredContinuity.map((item) => {
+                    const plantedEp = episodes.find((e) => e.id === item.plantedEpisodeId)
+                    const payoffEp = item.payoffEpisodeId ? episodes.find((e) => e.id === item.payoffEpisodeId) : null
+                    const plantedIdx = episodes.findIndex((e) => e.id === item.plantedEpisodeId)
+                    const ageInEpisodes = plantedIdx !== -1 ? Math.max(0, episodes.length - 1 - plantedIdx) : 0
+                    const isHotAlert = item.status === 'open' && item.tier === 'hot' && ageInEpisodes >= 3
+
+                    const kindLabels: Record<ContinuityKind, string> = {
+                      foreshadow: 'Petunjuk / Rahasia',
+                      prop: 'Barang Kunci',
+                      rule: 'Aturan Dunia',
+                      relationship: 'Hubungan Tokoh'
+                    }
+
+                    return (
+                      <div
+                        key={item.id}
+                        className={cx(
+                          'flex flex-col gap-3 rounded-2xl border p-4.5 transition-colors',
+                          isHotAlert
+                            ? 'border-amber-500/40 bg-amber-500/5'
+                            : item.status === 'open'
+                            ? 'border-line bg-surface'
+                            : 'border-line/60 bg-surface/50 opacity-80'
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex flex-1 flex-col gap-1.5">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-display text-sm font-bold text-ink">
+                                {item.name}
+                              </span>
+                              <Badge tone={item.tier === 'hot' ? 'bad' : 'draft'}>
+                                {item.tier === 'hot' ? (
+                                  <span className="flex items-center gap-1 font-semibold text-bad">
+                                    <Flame className="size-3" /> HOT
+                                  </span>
+                                ) : (
+                                  <span className="flex items-center gap-1 text-muted">
+                                    <Clock className="size-3" /> COLD
+                                  </span>
+                                )}
+                              </Badge>
+                              <Badge tone="draft">
+                                {kindLabels[item.kind] ?? item.kind}
+                              </Badge>
+                              <Badge
+                                tone={
+                                  item.status === 'open'
+                                    ? 'ok'
+                                    : item.status === 'paid'
+                                    ? 'info'
+                                    : 'draft'
+                                }
+                              >
+                                {item.status === 'open'
+                                  ? 'Aktif'
+                                  : item.status === 'paid'
+                                  ? 'Lunas'
+                                  : 'Diabaikan'}
+                              </Badge>
+                            </div>
+
+                            {item.detail && (
+                              <p className="text-xs text-ink/80 leading-relaxed whitespace-pre-wrap">
+                                {item.detail}
+                              </p>
+                            )}
+
+                            <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-muted">
+                              <span>
+                                Ditanam di:{' '}
+                                <strong className="text-ink">
+                                  {plantedEp ? `Episode ${plantedEp.episodeNum} (${plantedEp.title})` : 'Episode awal'}
+                                </strong>
+                              </span>
+                              {item.status === 'open' && ageInEpisodes > 0 && (
+                                <span className={isHotAlert ? 'font-semibold text-amber-600' : ''}>
+                                  • {ageInEpisodes} episode lalu
+                                </span>
+                              )}
+                              {payoffEp && (
+                                <span>
+                                  • Dibayar di:{' '}
+                                  <strong className="text-ink">
+                                    Episode {payoffEp.episodeNum} ({payoffEp.title})
+                                  </strong>
+                                </span>
+                              )}
+                            </div>
+
+                            {isHotAlert && (
+                              <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600">
+                                <AlertTriangle className="size-3.5 shrink-0" />
+                                <span>
+                                  Perhatian: Benang cerita HOT ini sudah terbuka lebih dari 3 episode tanpa dibayar!
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            {item.status === 'open' ? (
+                              <>
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  icon={<CheckCircle2 className="size-3.5 text-good" />}
+                                  onClick={() => handleToggleContinuityStatus(item, 'paid')}
+                                  title="Tandai telah dibayar / diselesaikan"
+                                >
+                                  Tandai Lunas
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleToggleContinuityStatus(item, 'dropped')}
+                                  title="Abaikan benang cerita ini"
+                                >
+                                  Abaikan
+                                </Button>
+                              </>
+                            ) : (
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => handleToggleContinuityStatus(item, 'open')}
+                                title="Buka kembali benang cerita ini"
+                              >
+                                Buka Kembali
+                              </Button>
+                            )}
+                            <IconButton
+                              label="Hapus benang cerita"
+                              onClick={() => handleRemoveContinuity(item)}
+                              className="text-bad hover:text-bad/80"
+                              size={28}
+                            >
+                              <Trash2 className="size-3.5" />
+                            </IconButton>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -1713,6 +2195,88 @@ export function LorebookPage() {
         onClose={() => setReviewModalOpen(false)}
         onAccept={handleAcceptCandidates}
       />
+
+      {/* Continuity Item Modal */}
+      <Modal
+        open={continuityModalOpen}
+        onClose={() => setContinuityModalOpen(false)}
+        title="Tambah Benang Cerita"
+        subtitle="Catat petunjuk awal, rahasia, barang kunci, atau dinamika cerita antar-episode."
+        width={520}
+      >
+        <div className="flex flex-col gap-4">
+          <Field label="Nama Benang Cerita" hint="Petunjuk atau plot point yang ingin dilacak">
+            <input
+              value={newContName}
+              onChange={(e) => setNewContName(e.target.value)}
+              placeholder="Mis. Rahasia liontin giok merah / Utang darah keluarga"
+              className={inputCls}
+            />
+          </Field>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Kategori">
+              <Select<ContinuityKind>
+                label="Kategori"
+                value={newContKind}
+                onChange={setNewContKind}
+                options={[
+                  { value: 'foreshadow', label: 'Petunjuk Awal (Foreshadow)' },
+                  { value: 'prop', label: 'Barang Kunci (Key Prop)' },
+                  { value: 'rule', label: 'Aturan Dunia (World Rule)' },
+                  { value: 'relationship', label: 'Dinamika Hubungan' }
+                ]}
+              />
+            </Field>
+
+            <Field label="Prioritas">
+              <Select<ContinuityTier>
+                label="Prioritas"
+                value={newContTier}
+                onChange={setNewContTier}
+                options={[
+                  { value: 'hot', label: 'HOT (Harus dibayar segera)' },
+                  { value: 'cold', label: 'COLD (Slow-burn / Jangka panjang)' }
+                ]}
+              />
+            </Field>
+          </div>
+
+          <Field label="Ditanam di Episode">
+            <Select<string>
+              label="Episode"
+              value={newContPlantedEp || episodes[0]?.id || ''}
+              onChange={setNewContPlantedEp}
+              options={episodes.map((e) => ({
+                value: e.id,
+                label: `Episode ${e.episodeNum}: ${e.title}`
+              }))}
+            />
+          </Field>
+
+          <Field label="Detail / Catatan Cerita" hint="Jelaskan bagaimana unsur ini ditanam dan rencananya diselesaikan">
+            <AutoTextarea
+              value={newContDetail}
+              onChange={(e) => setNewContDetail(e.target.value)}
+              placeholder="Mis. Protagonis menemukan liontin tersembunyi di bawah bantal. Di episode selanjutnya, musuh utama mengenali liontin ini sebagai milik klan yang dibantai."
+              minRows={3}
+            />
+          </Field>
+
+          <div className="mt-2 flex items-center justify-end gap-2 border-t border-line pt-4">
+            <Button variant="secondary" onClick={() => setContinuityModalOpen(false)}>
+              Batal
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleCreateContinuity}
+              disabled={!newContName.trim()}
+            >
+              Simpan Benang Cerita
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

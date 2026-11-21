@@ -1,5 +1,5 @@
 import { compileClipPrompt, compileClipVideoPrompt } from './prompts'
-import type { AspectRatio, Character, CharacterDerivative, Clip, DialogAudio, Location, Prop } from './types'
+import type { AspectRatio, Character, CharacterDerivative, Clip, DialogAudio, Location, Prop, LockWord } from './types'
 
 /**
  * 64-bit FNV-1a hash implementation in pure TypeScript.
@@ -23,7 +23,7 @@ export interface ClipImageBasisParams {
     id: string
     styleId: string
     aspectRatio: AspectRatio
-    imageModel: string | null
+    imageModel?: string | null
   }
   clip: Clip
   characters: Character[]
@@ -31,6 +31,8 @@ export interface ClipImageBasisParams {
   locations: Location[]
   props: Prop[]
   refSheetAssetIds: string[]
+  lockWords?: LockWord[]
+  imageModel?: string | null
 }
 
 /**
@@ -38,20 +40,22 @@ export interface ClipImageBasisParams {
  * compiled prompt, ordered reference sheet asset IDs, model, and aspect ratio.
  */
 export function computeClipImageBasisHash(params: ClipImageBasisParams): string {
-  const { project, clip, characters, derivatives, locations, props, refSheetAssetIds } = params
+  const { project, clip, characters, derivatives, locations, props, refSheetAssetIds, lockWords } = params
+  const activeImageModel = params.imageModel || project.imageModel || 'default'
   const compiledPrompt = compileClipPrompt({
-    project,
+    project: { id: project.id, styleId: project.styleId, aspectRatio: project.aspectRatio },
     clip,
     characters,
     derivatives,
     locations,
-    props
+    props,
+    lockWords
   })
 
   return fnv1a(
     JSON.stringify([
       'image',
-      project.imageModel || 'default',
+      activeImageModel,
       project.aspectRatio,
       compiledPrompt,
       refSheetAssetIds
@@ -63,7 +67,7 @@ export interface ClipVideoBasisParams {
   project: {
     styleId: string
     aspectRatio: AspectRatio
-    videoModel: string | null
+    videoModel?: string | null
     dialogAudio?: DialogAudio
   }
   clip: Clip
@@ -72,6 +76,8 @@ export interface ClipVideoBasisParams {
    *  video's length afterwards, and that must not make the same video look stale. */
   seconds: number
   prevAssetId?: string | null
+  lockWords?: LockWord[]
+  videoModel?: string | null
 }
 
 /**
@@ -79,14 +85,15 @@ export interface ClipVideoBasisParams {
  * compiled video prompt, initial image asset id, clip duration, model, and speech dialogue.
  */
 export function computeClipVideoBasisHash(params: ClipVideoBasisParams): string {
-  const { project, clip, characters, seconds, prevAssetId } = params
-  const compiledVideoPrompt = compileClipVideoPrompt(project, clip, characters)
+  const { project, clip, characters, seconds, prevAssetId, lockWords } = params
+  const activeVideoModel = params.videoModel || project.videoModel || 'default'
+  const compiledVideoPrompt = compileClipVideoPrompt(project, clip, characters, lockWords || [])
   const durationSec = seconds
 
   return fnv1a(
     JSON.stringify([
       'video',
-      project.videoModel || 'default',
+      activeVideoModel,
       clip.continueFromPrevious ? `prev:${prevAssetId || 'none'}` : clip.imageAssetId || null,
       durationSec,
       compiledVideoPrompt,

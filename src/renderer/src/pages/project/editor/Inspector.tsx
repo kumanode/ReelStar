@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { dialogVoiceNote } from '@shared/validation'
-import { AudioLines, Check, Clapperboard, Copy, ExternalLink, Film, FolderOpen, Layers, Mic, Move, Music, Play, Sparkles, Type, Volume2, X } from 'lucide-react'
+import { AudioLines, Check, Clapperboard, Copy, ExternalLink, Film, FolderOpen, Layers, Mic, Move, Music, Play, Sparkles, Type, Upload, Volume2, X } from 'lucide-react'
+import { collectReferenceSheets } from '@shared/prompts'
 import {
   CAPTION_FONTS,
   CAPTION_POSITIONS,
@@ -71,13 +72,36 @@ const historyGestureHandlers = {
 }
 
 function ClipTab({ clip, index }: { clip: Clip; index: number }) {
-  const { project, characters, assets, jobs, updateClip, updateClips, updateEditor, flush } = useProject()
+  const {
+    project,
+    characters,
+    derivatives,
+    locations,
+    props,
+    assets,
+    jobs,
+    updateClip,
+    updateClips,
+    updateEditor,
+    flush
+  } = useProject()
   const { toast } = useApp()
   const image = clip.imageAssetId ? assets[clip.imageAssetId] : null
   const video = clip.videoAssetId ? assets[clip.videoAssetId] : null
   const videoJob = jobFor(jobs, 'video', { clipId: clip.id })
   const videoCamera = clip.videoCamera ?? 'static'
   const [cancelingVideo, setCancelingVideo] = useState(false)
+
+  const refItems = useMemo(() => {
+    return collectReferenceSheets(
+      clip,
+      characters,
+      derivatives ?? [],
+      locations ?? [],
+      props ?? [],
+      4
+    )
+  }, [clip, characters, derivatives, locations, props])
   // A camera change plays the clip in the preview at once, without moving the playhead.
   const audition = (): void => useAudition.getState().start({ kind: 'clip', clipId: clip.id })
   const setCamera = (patch: Partial<Clip>): void => {
@@ -139,6 +163,75 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
           Ganti Media Lokal
         </Button>
       </div>
+      <Section title="Lembar Referensi Gambar">
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted">
+              {Array.isArray(clip.referenceAssetIds) ? 'Override Manual' : 'Otomatis dari Tokoh/Lokasi'} ({refItems.length})
+            </span>
+            {Array.isArray(clip.referenceAssetIds) && (
+              <button
+                type="button"
+                onClick={() => updateClip(clip.id, { referenceAssetIds: null })}
+                className="text-[11px] font-medium text-accent-dark hover:underline"
+              >
+                Reset Otomatis
+              </button>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {refItems.length === 0 ? (
+              <span className="text-xs text-muted italic">Tidak ada lembar referensi.</span>
+            ) : (
+              refItems.map((ref) => {
+                const sheet = assets[ref.sheetAssetId]
+                return (
+                  <div
+                    key={ref.sheetAssetId}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-line-2 bg-paper py-0.5 pl-1 pr-2 text-xs"
+                  >
+                    {sheet?.url ? (
+                      <img src={sheet.url} alt={ref.name} className="size-4 rounded-full object-cover" />
+                    ) : (
+                      <span className="text-[10px]">📷</span>
+                    )}
+                    <span className="max-w-[100px] truncate font-medium text-ink">{ref.name}</span>
+                    <button
+                      type="button"
+                      title="Lepas referensi"
+                      onClick={() => {
+                        const nextIds = refItems.map((r) => r.sheetAssetId).filter((id) => id !== ref.sheetAssetId)
+                        updateClip(clip.id, { referenceAssetIds: nextIds })
+                      }}
+                      className="text-muted hover:text-bad"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                )
+              })
+            )}
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<Upload className="size-3" />}
+              onClick={async () => {
+                try {
+                  const asset = await window.api.assets.pickReference(project!.id, clip.id)
+                  if (!asset) return
+                  const currentIds = refItems.map((r) => r.sheetAssetId)
+                  updateClip(clip.id, { referenceAssetIds: [...currentIds, asset.id] })
+                  toast('success', 'Referensi kustom ditambahkan ke klip.')
+                } catch (err) {
+                  toast('error', `Gagal menambahkan referensi: ${errorText(err)}`)
+                }
+              }}
+            >
+              + Unggah
+            </Button>
+          </div>
+        </div>
+      </Section>
       {video?.durationMs != null && video.durationMs < clip.durationMs && (
         <p className="border-b border-sun-ink/20 bg-sun-soft px-[18px] py-2 text-xs leading-relaxed text-sun-ink">
           Video sumber lebih pendek dari klip ({(video.durationMs / 1000).toFixed(1)} dtk vs {(clip.durationMs / 1000).toFixed(1)} dtk). Ekspor akan menahan frame terakhir.

@@ -257,3 +257,39 @@ Untuk adegan yang merupakan kelanjutan aksi langsung dari adegan sebelumnya, ops
 
 ### Pusat Tugas (Task Center), Arahan Serial, & Pipeline "Lanjutkan Semua"
 Pusat Tugas (Task Center Modal) melacak seluruh antrean tugas produksi AI lintas episode (gambar, video, TTS, narasi, lembar Lorebook, dan render ekspor) dengan kapabilitas pembatalan tugas individu, pembatalan massal, eksekusi ulang tugas yang gagal, dan navigasi langsung ke shot asal. Arahan serial (`series_guidelines`) dan kustomisasi template prompt AI (`prompt_templates_json`) tersimpan per proyek dengan opsi pengembalian ke template bawaan. Pipeline "Lanjutkan Semua" menyatukan seluruh siklus produksi drama dari naskah, tinjauan, lembar Lorebook, gambar storyboard, hingga video gerak dalam satu alur terarah dengan transparansi estimasi biaya sebelum langkah berbayar dijalankan.
+
+### Kontinuitas Lintas Episode (Continuity Items Tracker) & Aturan Hot/Cold Tiers
+Untuk menjaga janji naratif serial multi-episode, `continuity_items` melacak janji plot, luka/status karakter, prop krusial, dan lore dunia cerita:
+- **Tiers**: Item berprioritas `hot` harus diselesaikan (status `paid` atau `dropped`) dalam 3 episode sejak dimunculkan (`plantedEpisodeId`). Script Doctor memicu aturan `CONTINUITY_OPEN_TOO_LONG` jika item `hot` terabaikan selama 3 episode berturut-turut. Item `cold` diperuntukkan bagi misteri jangka panjang atau busur serial penuh.
+- **Injeksi Konteks ke Planner**: Item kontinuitas yang masih aktif (`open`) otomatis dirangkum dan disuntikkan ke prompt penyusun draf naskah AI (`planEpisodeScript`), sehingga AI mengintegrasikan item-item tersebut ke dalam ketukan cerita episode berjalan.
+- **Lorebook Dashboard**: Tab khusus Kontinuitas di Lorebook memungkinkan kreator memfilter berdasarkan kategori (`plot_thread`, `character_state`, `prop`, `lore`) dan tier, mencatat umur kemunculan item dalam episode, serta menyelesaikan item dengan tombol "Bayar Janji (Payoff)" satu klik.
+
+### Kata Kunci Pengunci Kontinuitas (Lock Words) & Pemeriksaan Kepatuhan Prompt
+Fitur lock words menyusun frasa kunci wajib yang tidak boleh diubah atau disimpangkan pada prompt visual dan prompt video AI:
+- Frasa wajah dan rambut karakter diambil dari profil visual Lorebook (`c.profile.visual`).
+- Frasa kostum diambil dari `costumeKeyphrase` varian kostum.
+- Frasa lokasi dan prop diambil dari profil tetap masing-masing.
+- Kreator dapat menambahkan kata kunci manual di tingkat serial (`seriesLock`) atau per episode (`lockWords`).
+- `checkLockCompliance()` memvalidasi apakah prompt visual memuat frasa wajib (`compliant: true/false`, mengembalikan daftar `missing`). Peringatan visual ditampilkan jika ada frasa jangkar kontinuitas yang terhapus saat kreator mengedit prompt secara manual.
+
+### Override Lembar Referensi per Shot & Aset Kustom
+Secara bawaan, generator gambar mengumpulkan hingga 4 lembar referensi otomatis (karakter, varian kostum, lokasi, prop). Fitur override (`Clip.referenceAssetIds`):
+- Memungkinkan kreator melepas lembar bawaan tertentu per shot atau mengunggah gambar referensi kustom melalui dialog pemilih file (`assets.pickReference`).
+- Gambar kustom otomatis didaftarkan sebagai aset proyek bertag `customReference: true` dan diletakkan di slot prioritas terdepan pada `collectReferenceSheets()`.
+- Hash basis gambar (`computeClipImageBasisHash`) sensitif terhadap perubahan `referenceAssetIds`, memastikan status generasi gambar otomatis beralih menjadi basi (stale) jika referensi visual diubah.
+
+### Preset Platform Ekspor & Paket Pengiriman ZIP Mandiri (tar.exe)
+- **Preset Platform**: Katalog `EXPORT_PRESETS` menyediakan setelan optimal untuk TikTok (9:16, 1080p, 8 Mbps, maks 600s), Instagram Reels (9:16, 1080p, 8 Mbps, maks 90s), YouTube Shorts (9:16, 1080p, 10 Mbps, maks 60s), YouTube Standard (16:9, 1080p, 12 Mbps), dan Facebook Reels. `validatePresetDuration` memberi peringatan langsung di dialog ekspor jika durasi proyek melampaui batas platform target.
+- **Paket Pengiriman (.zip)**: Fungsi `exportDeliveryPackage` di `src/main/package.ts` mengemas video MP4 (jika tersedia), subtitle SRT yang diselaraskan per klip, gambar sampul & thumbnail JPG, aset visual lembar Lorebook, `manifest.json` (metadata serial, episode, statistik, daftar shot lengkap), serta `checksums.txt` (SHA-256 seluruh file) ke dalam satu arsip ZIP siap kirim menggunakan utilitas bawaan Windows `tar.exe -a -c -f` tanpa dependensi npm tambahan.
+
+### Riwayat Versi & Snapshot Naskah (Script Versioning & Rollback)
+- Draf naskah AI otomatis diarsipkan ke tabel `script_versions` saat pertama kali dibuat ("Rencana draft AI") dan saat dikonfirmasi menjadi shot storyboard ("Naskah dikonfirmasi").
+- Kreator dapat membuat snapshot manual dengan catatan kustom sebelum melakukan perombakan besar cerita.
+- Riwayat versi dapat ditinjau kapan saja di langkah Rencana; satu klik "Pulihkan" mengembalikan draf lengkap tanpa kehilangan entitas Lorebook.
+
+### Katalog Model & Pengaturan Modular (resolveActive & Stale Warning)
+- Modul `src/shared/providers.ts` menjadi *single source of truth* untuk seluruh resolusi model AI (LLM, TTS, visual image, visual video) via helper `resolveActive()`.
+- Halaman Pengaturan dipecah menjadi 5 modul terpisah di `pages/settings/`: Model Aktif (`ActiveModelsSection`), Penyedia & Kunci API (`ProvidersSection`), Penyedia Custom (`CustomProviderModal`), Umum & Editor (`GeneralSection`), serta Whisper & Subtitle (`WhisperSection`).
+- Saat kreator mengganti model visual aktif di Pengaturan, dialog peringatan interaktif memberitahukan bahwa pergantian model akan menandai aset gambar/video yang sudah ada sebagai basi (stale) sehingga kreator mengetahui adegan mana yang perlu diselaraskan ke model baru.
+- Kredensial penyedia custom (kompatibel OpenAI Chat dan Flow2API) dapat diuji langsung dan disimpan secara terenkripsi di `secrets.ts` seperti penyedia bawaan.
+

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Check, CheckCircle2, Copy, Download, Film, FolderOpen, ImagePlus, RotateCcw, Sparkles } from 'lucide-react'
+import { AlertTriangle, Archive, Check, CheckCircle2, Copy, Download, Film, FolderOpen, ImagePlus, RotateCcw, Sparkles } from 'lucide-react'
 import type { Asset, ExportOptions, Job, ThumbnailConcept, YoutubeMetadata } from '@shared/types'
 import { chapterLines, formatChapters } from '@shared/chapters'
+import { EXPORT_PRESETS, getExportPreset, validatePresetDuration } from '@shared/exportPresets'
 import { Button, Modal, Progress, Segmented, Switch, confirmDialog, cx, inputCls } from '../../components/ui'
 import { clipNumber, errorText, mmss } from '../../lib/format'
 import { useApp } from '../../store/app'
@@ -65,6 +66,28 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const thumbJobs = yt.jobIds.map((id) => jobs[id]).filter((j): j is Job => !!j)
   const thumbRunning = thumbJobs.filter(isRunning)
   const thumbFailed = thumbJobs.find((j) => j.status === 'failed')
+  const [packaging, setPackaging] = useState(false)
+  const [packagePath, setPackagePath] = useState<string | null>(null)
+
+  const handleExportPackage = async () => {
+    if (!project) return
+    if (packagePath) {
+      await window.api.exporter.reveal(packagePath)
+      return
+    }
+    setPackaging(true)
+    try {
+      await flush()
+      const candidateVideo = job?.status === 'done' && job.message ? job.message : undefined
+      const savedZip = await window.api.exporter.exportPackage(project.id, episode?.id, candidateVideo)
+      setPackagePath(savedZip)
+      toast('info', 'Paket pengiriman (.zip) berhasil disimpan!')
+    } catch (e) {
+      toast('error', errorText(e))
+    } finally {
+      setPackaging(false)
+    }
+  }
 
   const chaptersText = useMemo(() => formatChapters(clips), [clips])
   const chapterCount = useMemo(() => chapterLines(clips).length, [clips])
@@ -159,12 +182,16 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
       const defaultName = episodes && episodes.length > 1 && episode
         ? `${slug(project.title)} - Ep ${episode.episodeNum}`
         : slug(project.title)
+      const defaultPresetId = project.aspectRatio === '16:9' ? 'youtube_standard' : 'tiktok'
+      const defaultPreset = getExportPreset(defaultPresetId)
       setOpts({
         fileName: defaultName,
         episodeId: episode?.id,
-        resolution: 1080,
-        fps: 30,
+        resolution: defaultPreset?.resolution ?? 1080,
+        fps: defaultPreset?.fps ?? 30,
         encoder: 'cpu',
+        presetId: defaultPresetId,
+        videoBitrate: defaultPreset?.videoBitrate,
         burnCaptions: (episode?.editor ?? project.editor).captionStyle !== 'none',
         writeSrt: false,
         normalizeAudio: true,
@@ -184,6 +211,10 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const noVoice = clips.filter((c) => !c.audioAssetId).length
   const res = RESOLUTIONS.find((r) => r.id === opts.resolution)!
   const sizeMb = Math.round((totalMs / 1000) * res.mb * (opts.fps === 60 ? 1.5 : 1))
+  const currentDurationSec = totalMs / 1000
+  const activePreset = opts.presetId ? getExportPreset(opts.presetId) : undefined
+  const presetWarning = activePreset ? validatePresetDuration(activePreset, currentDurationSec).warning : undefined
+  const aspectMismatch = !!(activePreset && activePreset.platform !== 'custom' && activePreset.aspectRatio !== project.aspectRatio)
   const set = (p: Partial<ExportOptions>): void => {
     setOpts({ ...opts, ...p })
     if (p.fps) {
@@ -447,6 +478,14 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
             <Button icon={<FolderOpen className="size-4" />} onClick={() => job.message && void window.api.exporter.reveal(job.message)}>
               Buka folder
             </Button>
+            <Button
+              variant="secondary"
+              icon={<Archive className="size-4" />}
+              loading={packaging}
+              onClick={() => void handleExportPackage()}
+            >
+              {packagePath ? 'Buka Paket (.zip)' : 'Buat Paket (.zip)'}
+            </Button>
             <Button variant="accent" icon={<Film className="size-4" />} onClick={() => setTab('youtube')}>
               Lihat Kemasan YouTube & Bab
             </Button>
@@ -457,6 +496,11 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
               Selesai
             </Button>
           </div>
+          {packagePath && (
+            <p className="mt-1 text-xs text-ok-ink">
+              Paket tersimpan: <span className="font-mono">{packagePath}</span>
+            </p>
+          )}
         </div>
       ) : (
         <>
@@ -474,6 +518,68 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
               <span>{noVoice} klip belum punya suara narasi. Klip itu akan tampil tanpa suara dan tanpa caption.</span>
             </div>
           )}
+
+          {presetWarning && (
+            <div className="flex items-start gap-2.5 rounded-xl border border-sun bg-sun-soft px-3.5 py-2.5 text-xs text-sun-ink">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              <span>{presetWarning}</span>
+            </div>
+          )}
+
+          {aspectMismatch && (
+            <div className="flex items-start gap-2.5 rounded-xl border border-sun bg-sun-soft px-3.5 py-2.5 text-xs text-sun-ink">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              <span>
+                Format rasio proyek ({project.aspectRatio}) berbeda dengan rasio bawaan platform {activePreset?.name} ({activePreset?.aspectRatio}). Video akan disesuaikan dengan letterbox/pillarbox.
+              </span>
+            </div>
+          )}
+
+          {/* Platform Preset Selector */}
+          <div className="flex flex-col gap-2">
+            <span className="text-sm font-semibold">Preset Platform</span>
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+              {EXPORT_PRESETS.map((p) => {
+                const on = (opts.presetId ?? 'custom') === p.id
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => {
+                      set({
+                        presetId: p.id,
+                        resolution: p.resolution,
+                        fps: p.fps,
+                        videoBitrate: p.videoBitrate
+                      })
+                    }}
+                    className={cx(
+                      'flex flex-col items-center justify-center gap-1 rounded-xl border p-2 text-center transition',
+                      on
+                        ? 'border-2 border-accent bg-accent-soft shadow-xs'
+                        : 'border-line-2 bg-paper hover:border-ink-2'
+                    )}
+                  >
+                    <span className="text-xs font-bold text-ink">{p.name}</span>
+                    <span className="text-[10px] text-muted">{p.aspectRatio}</span>
+                    {p.badge && (
+                      <span className="rounded bg-sand px-1 text-[9px] font-semibold text-accent-dark">
+                        {p.badge}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+            {activePreset && (
+              <p className="text-xs text-muted leading-relaxed">
+                {activePreset.description}
+                {activePreset.videoBitrate && ` • Target bitrate: ${activePreset.videoBitrate}`}
+              </p>
+            )}
+          </div>
+
           <label className="flex flex-col gap-1.5">
             <span className="text-sm font-semibold">Nama file</span>
             <div className="flex h-[46px] overflow-hidden rounded-xl border border-line-2">
@@ -600,7 +706,18 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
                 Batalkan
               </Button>
             ) : (
-              <Button onClick={onClose}>Batal</Button>
+              <>
+                <Button onClick={onClose}>Batal</Button>
+                <Button
+                  variant="secondary"
+                  icon={<Archive className="size-4" />}
+                  loading={packaging}
+                  title="Ekspor seluruh aset (video jika ada, subtitle SRT, lembar tokoh/lokasi/prop, manifest & checksum) dalam arsip ZIP siap kirim."
+                  onClick={() => void handleExportPackage()}
+                >
+                  Paket (.zip)
+                </Button>
+              </>
             )}
             <Button variant="primary" size="lg" icon={<Download className="size-[18px]" />} loading={running} disabled={missing.length > 0} onClick={() => void start()}>
               {running ? 'Mengekspor…' : 'Mulai ekspor'}

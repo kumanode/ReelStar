@@ -814,6 +814,9 @@ async function renderProject(ctx: TaskCtx, projectId: string, opts: ExportOption
     for (let n = 2; existsSync(outPath); n++) outPath = join(folder, `${base}-${n}.mp4`)
 
     ctx.progress(0.84, 'Menyusun video dan audio akhir')
+    const bitrateArgs = opts.videoBitrate
+      ? ['-b:v', opts.videoBitrate, '-maxrate', opts.videoBitrate, '-bufsize', `${Math.max(1000, parseInt(opts.videoBitrate, 10) * 2)}k`]
+      : []
     const finalArgs = (gpu: boolean): string[] => [
         ...args,
         '-filter_complex_script',
@@ -824,8 +827,8 @@ async function renderProject(ctx: TaskCtx, projectId: string, opts: ExportOption
         '[aout]',
         '-c:v',
         ...(gpu
-          ? ['h264_nvenc', '-preset', 'p5', '-tune', 'hq', '-rc', 'vbr', '-cq', opts.resolution === 2160 ? '20' : '19', '-b:v', '0']
-          : ['libx264', '-preset', 'medium', '-crf', opts.resolution === 2160 ? '20' : '19']),
+          ? ['h264_nvenc', '-preset', 'p5', '-tune', 'hq', '-rc', 'vbr', ...(opts.videoBitrate ? bitrateArgs : ['-cq', opts.resolution === 2160 ? '20' : '19', '-b:v', '0'])]
+          : ['libx264', '-preset', 'medium', ...(opts.videoBitrate ? bitrateArgs : ['-crf', opts.resolution === 2160 ? '20' : '19'])]),
         '-r',
         String(opts.fps),
         '-c:a',

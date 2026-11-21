@@ -12,6 +12,10 @@ import type {
   CharacterDerivative,
   CharacterPatchEvent,
   ClipPatchEvent,
+  ContinuityItem,
+  ContinuityKind,
+  ContinuityStatus,
+  ContinuityTier,
   CreditEstimate,
   Episode,
   EpisodeScriptDraft,
@@ -35,6 +39,7 @@ import type {
   ProjectSnapshot,
   ProjectSummary,
   Prop,
+  ScriptVersion,
   SeriesProgressSummary,
   SmartSfxCue,
   TtsProvider,
@@ -127,6 +132,27 @@ export interface StudioApi {
     /** A thumbnail idea written for the title the user picked. */
     thumbnailConcept(projectId: string, title: string): Promise<ThumbnailConcept>
   }
+  continuity: {
+    list(projectId: string): Promise<ContinuityItem[]>
+    create(input: {
+      projectId: string
+      kind: ContinuityKind
+      name: string
+      detail?: string
+      plantedEpisodeId: string
+      tier?: ContinuityTier
+      status?: ContinuityStatus
+    }): Promise<ContinuityItem>
+    update(
+      id: string,
+      patch: Partial<Pick<ContinuityItem, 'name' | 'detail' | 'status' | 'tier' | 'payoffEpisodeId'>>
+    ): Promise<ContinuityItem>
+    remove(id: string): Promise<void>
+  }
+  scriptVersions: {
+    list(episodeId: string): Promise<ScriptVersion[]>
+    save(episodeId: string, draft: EpisodeScriptDraft, note?: string): Promise<ScriptVersion>
+  }
   generate: {
     thumbnail(projectId: string, req: ThumbnailRequest): Promise<Job>
     clipImage(clipId: string): Promise<Job>
@@ -163,6 +189,8 @@ export interface StudioApi {
     pickMusic(projectId: string): Promise<Asset | null>
     /** A logo or watermark image for an overlay. */
     pickImage(projectId: string): Promise<Asset | null>
+    /** Picks a custom reference image for a shot. */
+    pickReference(projectId: string, clipId?: string): Promise<Asset | null>
     listBuiltinSfx(): Promise<BuiltinSfx[]>
     addBuiltinSfx(projectId: string, sfxId: string): Promise<Asset>
     /** Generates a custom sound effect using ElevenLabs. */
@@ -200,6 +228,7 @@ export interface StudioApi {
     /** Saves a thumbnail as a 1280×720 JPG through a save dialog; null when cancelled. */
     saveThumbnail(assetId: string, fileName: string): Promise<string | null>
     saveClipThumbnail(clipId: string): Promise<string | null>
+    exportPackage(projectId: string, episodeId?: string, videoPath?: string): Promise<string>
   }
   app: {
     openExternal(url: string): Promise<void>

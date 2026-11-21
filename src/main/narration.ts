@@ -263,7 +263,10 @@ export function generateNarration(projectId: string, mode: 'missing' | 'all', ep
   const running = activeProjectJob(projectId, 'narration', episodeId)
   if (running) return running
   const project = getProject(projectId)
-  const isVideoDialog = (c: Clip) => !!(c.speakerId && project.dialogAudio === 'video' && c.narration.trim())
+  const isVideoDialog = (c: Clip) => {
+    const dType = c.shotDetail?.dialogueType ?? (c.speakerId ? 'dialogue' : 'narration')
+    return !!(c.speakerId && project.dialogAudio === 'video' && c.narration.trim() && dType === 'dialogue')
+  }
   const targets = clipsOf(projectId, episodeId).filter((c) => c.narration.trim() && !isVideoDialog(c) && (mode === 'all' || !c.audioAssetId))
   if (!targets.length) throw new Error('Tidak ada naskah narasi yang perlu disuarakan.')
   const job = insertJob({ projectId, episodeId, kind: 'narration', provider: project.ttsProvider, payload: { mode, clipIds: targets.map((c) => c.id) } })

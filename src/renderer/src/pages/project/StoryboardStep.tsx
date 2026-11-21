@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Bookmark,
+  Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -20,6 +21,7 @@ import {
   RefreshCw,
   Sparkles,
   Trash2,
+  Upload,
   Volume2,
   X
 } from 'lucide-react'
@@ -29,6 +31,9 @@ import { CAMERA_PRESETS, MOTION_STRENGTHS, cameraAt, cameraCss } from '@shared/m
 import { needsVisual } from '@shared/script'
 import { geminiVoiceName, geminiVoiceTone } from '@shared/models'
 import { dialogVoiceNote, getClipImageStatus, getClipVideoStatus, isVideoDialogue, type GenerationPrerequisitesContext } from '@shared/validation'
+import { resolveActive } from '@shared/providers'
+import { collectReferenceSheets, compileClipPrompt } from '@shared/prompts'
+import { checkLockCompliance } from '@shared/lock'
 import type { AppSettings, Asset, Clip, Job, Project } from '@shared/types'
 import { AutoTextarea } from '../../components/AutoTextarea'
 import { CharacterAvatar } from '../../components/CharacterAvatar'
@@ -127,7 +132,7 @@ function videoModelSummary(modelId: string | null | undefined, resolution: strin
 }
 
 function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: number; total: number; prereqCtx: GenerationPrerequisitesContext }) {
-  const { project, clips, characters, assets, jobs, updateClip, updateProject, removeClip, moveClip, addClip, select, flush } = useProject()
+  const { project, episode, clips, characters, assets, jobs, updateClip, updateProject, removeClip, moveClip, addClip, select, flush } = useProject()
   const { toast } = useApp()
   const audio = useAudio()
   const [editPrompt, setEditPrompt] = useState(false)
@@ -137,6 +142,35 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
 
   const imgStatus = useMemo(() => getClipImageStatus(clip, project, prereqCtx), [clip, project, prereqCtx])
   const vidStatus = useMemo(() => getClipVideoStatus(clip, project, prereqCtx), [clip, project, prereqCtx])
+
+  const activeLocks = useMemo(() => {
+    return [...(project.seriesLock || []), ...(episode?.lockWords || [])].filter((l) => l.enabled)
+  }, [project.seriesLock, episode?.lockWords])
+  const compiledPrompt = useMemo(() => {
+    return compileClipPrompt({
+      project,
+      clip,
+      characters: characters.filter((c) => clip.characterIds.includes(c.id)),
+      derivatives: prereqCtx.derivatives,
+      locations: prereqCtx.locations,
+      props: prereqCtx.props,
+      lockWords: activeLocks
+    })
+  }, [project, clip, characters, prereqCtx, activeLocks])
+  const lockCompliance = useMemo(() => {
+    return checkLockCompliance(compiledPrompt, activeLocks)
+  }, [compiledPrompt, activeLocks])
+
+  const refItems = useMemo(() => {
+    return collectReferenceSheets(
+      clip,
+      characters,
+      prereqCtx.derivatives,
+      prereqCtx.locations,
+      prereqCtx.props,
+      4
+    )
+  }, [clip, characters, prereqCtx])
 
   const isFlow2Video = FLOW2API_VIDEO_MODELS.some((model) => model.id === project.videoModel)
   const image = clip.imageAssetId ? assets[clip.imageAssetId] : null
@@ -393,6 +427,12 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
             <span className="font-semibold">Gambar terblokir:</span> {imgStatus.blockers.join(' · ')}
           </div>
         )}
+        {!lockCompliance.compliant && (
+          <div className="rounded-lg border border-sun/40 bg-sun-soft/30 px-3 py-2 text-xs text-sun-ink">
+            <span className="font-semibold">⚠️ Kunci kontinuitas terpotong:</span>{' '}
+            {lockCompliance.missing.map((m) => m.label).join(', ')}. Prompt melebihi batas karakter model.
+          </div>
+        )}
 
         {editPrompt && (
           <AutoTextarea
@@ -443,6 +483,86 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
             </div>
           </div>
         )}
+
+        {/* Reference Sheet Chips & Overrides */}
+        <div className="flex flex-col gap-2 rounded-xl border border-line bg-surface/50 p-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-ink">Lembar Referensi Shot</span>
+              {Array.isArray(clip.referenceAssetIds) ? (
+                <Badge tone="warn" title="Shot ini menggunakan referensi khusus (override)">
+                  Kustom ({refItems.length})
+                </Badge>
+              ) : (
+                <Badge tone="draft" title="Otomatis diwarisi dari tokoh, lokasi, dan prop">
+                  Otomatis ({refItems.length})
+                </Badge>
+              )}
+            </div>
+            {Array.isArray(clip.referenceAssetIds) && (
+              <button
+                type="button"
+                onClick={() => updateClip(clip.id, { referenceAssetIds: null })}
+                className="text-[11px] font-medium text-accent-dark hover:underline"
+              >
+                Reset Otomatis
+              </button>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {refItems.length === 0 ? (
+              <span className="text-xs text-muted italic">Tidak ada lembar referensi untuk shot ini.</span>
+            ) : (
+              refItems.map((ref) => {
+                const sheet = assets[ref.sheetAssetId]
+                return (
+                  <div
+                    key={ref.sheetAssetId}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-line-2 bg-paper py-0.5 pl-1 pr-2 text-xs"
+                  >
+                    {sheet?.url ? (
+                      <img src={sheet.url} alt={ref.name} className="size-5 rounded-full object-cover" />
+                    ) : (
+                      <div className="size-5 rounded-full bg-sand flex items-center justify-center text-[10px]">📷</div>
+                    )}
+                    <span className="truncate max-w-[120px] font-medium text-ink">{ref.name}</span>
+                    <button
+                      type="button"
+                      title="Lepas referensi dari shot ini"
+                      onClick={() => {
+                        const nextIds = refItems.map((r) => r.sheetAssetId).filter((id) => id !== ref.sheetAssetId)
+                        updateClip(clip.id, { referenceAssetIds: nextIds })
+                      }}
+                      className="text-muted hover:text-bad"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                )
+              })
+            )}
+
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<Upload className="size-3" />}
+              onClick={async () => {
+                try {
+                  const asset = await window.api.assets.pickReference(project.id, clip.id)
+                  if (!asset) return
+                  const currentIds = refItems.map((r) => r.sheetAssetId)
+                  updateClip(clip.id, { referenceAssetIds: [...currentIds, asset.id] })
+                  toast('success', 'Referensi kustom ditambahkan ke shot.')
+                } catch (err) {
+                  toast('error', `Gagal menambahkan referensi: ${errorText(err)}`)
+                }
+              }}
+            >
+              + Unggah
+            </Button>
+          </div>
+        </div>
 
         <div className="flex flex-col gap-1.5">
           <span className="text-sm font-semibold">Pembicara adegan</span>
@@ -931,6 +1051,87 @@ export function StoryboardStep() {
   const loadMoreRef = useRef<HTMLDivElement>(null)
   const lastNarration = useRef<string | null>(null)
 
+  // Multi-shot batch selection state
+  const [selectedBatchIds, setSelectedBatchIds] = useState<Set<string>>(() => new Set())
+
+  const toggleBatchSelect = (clipId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setSelectedBatchIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(clipId)) next.delete(clipId)
+      else next.add(clipId)
+      return next
+    })
+  }
+
+  const handleSelectAll = () => {
+    setSelectedBatchIds(new Set(clips.map((c) => c.id)))
+  }
+
+  const handleDeselectAll = () => {
+    setSelectedBatchIds(new Set())
+  }
+
+  const handleBatchImages = async () => {
+    const ids = Array.from(selectedBatchIds)
+    if (!ids.length) return
+    try {
+      await flush()
+      for (const id of ids) {
+        const job = await window.api.generate.clipImage(id)
+        useProject.getState().upsertJob(job)
+      }
+      toast('info', `Memulai pembuatan gambar untuk ${ids.length} shot.`)
+    } catch (e) {
+      toast('error', errorText(e))
+    }
+  }
+
+  const handleBatchVideos = async () => {
+    const ids = Array.from(selectedBatchIds)
+    if (!ids.length) return
+    try {
+      await flush()
+      const started = await window.api.generate.clipsVideo(ids)
+      started.forEach((j) => useProject.getState().upsertJob(j))
+      toast('info', `Memulai pembuatan video AI untuk ${ids.length} shot.`)
+    } catch (e) {
+      toast('error', errorText(e))
+    }
+  }
+
+  const handleBatchTts = async () => {
+    const ids = Array.from(selectedBatchIds)
+    if (!ids.length) return
+    try {
+      await flush()
+      for (const id of ids) {
+        const job = await window.api.generate.clipTts(id)
+        useProject.getState().upsertJob(job)
+      }
+      toast('info', `Memulai pembuatan suara TTS untuk ${ids.length} shot.`)
+    } catch (e) {
+      toast('error', errorText(e))
+    }
+  }
+
+  const handleBatchDelete = async () => {
+    const ids = Array.from(selectedBatchIds)
+    if (!ids.length) return
+    const ok = await confirmDialog({
+      title: `Hapus ${ids.length} shot terpilih?`,
+      body: 'Shot yang dihapus akan hilang dari timeline episode ini.',
+      confirm: `Hapus ${ids.length} Shot`,
+      danger: true
+    })
+    if (!ok) return
+    for (const id of ids) {
+      useProject.getState().removeClip(id)
+    }
+    setSelectedBatchIds(new Set())
+    toast('info', `${ids.length} shot berhasil dihapus.`)
+  }
+
   const isFlow2Image = FLOW2API_IMAGE_MODELS.some((m) => m.id === project?.imageModel)
   const isFlow2Video = FLOW2API_VIDEO_MODELS.some((m) => m.id === project?.videoModel)
 
@@ -948,11 +1149,17 @@ export function StoryboardStep() {
       props,
       assets,
       activeJobs: Object.values(jobs),
-      isFlow2Api: appSettings?.defaultVisualProvider === 'flow2api',
-      flow2apiImageModel: appSettings?.flow2apiImageModel,
-      flow2apiVideoModel: appSettings?.flow2apiVideoModel
+      isFlow2Api: resolveActive(appSettings, 'image').provider.protocol === 'flow2api',
+      flow2apiImageModel: resolveActive(appSettings, 'image').model,
+      flow2apiVideoModel: resolveActive(appSettings, 'video').model,
+      activeImageModel: resolveActive(appSettings, 'image').model,
+      activeVideoModel: resolveActive(appSettings, 'video').model,
+      lockWords: [
+        ...(project?.seriesLock || []),
+        ...(episode?.lockWords || [])
+      ]
     }),
-    [characters, derivatives, locations, props, assets, jobs, appSettings]
+    [characters, derivatives, locations, props, assets, jobs, appSettings, project?.seriesLock, episode?.lockWords]
   )
 
   // A failed narration take is reported once, when it happens.
@@ -1239,6 +1446,7 @@ export function StoryboardStep() {
           <div className={cx('grid gap-3.5', project.aspectRatio === '9:16' ? 'grid-cols-[repeat(auto-fill,minmax(140px,1fr))]' : 'grid-cols-[repeat(auto-fill,minmax(180px,1fr))]')}>
             {clips.slice(0, visibleCount).map((c, i) => {
               const on = c.id === sel?.id
+              const isBatchSelected = selectedBatchIds.has(c.id)
               const imageJob = jobFor(jobs, 'image', { clipId: c.id })
               const videoJob = jobFor(jobs, 'video', { clipId: c.id })
               const isVideoJobRunning = isRunning(videoJob)
@@ -1275,8 +1483,12 @@ export function StoryboardStep() {
                   aria-pressed={on}
                   onClick={() => select(c.id)}
                   className={cx(
-                    'flex flex-col overflow-hidden rounded-[14px] bg-surface text-left border-2 transition-colors',
-                    on ? 'border-accent shadow-ink-md' : 'border-line hover:border-line-3'
+                    'group relative flex flex-col overflow-hidden rounded-[14px] bg-surface text-left border-2 transition-colors',
+                    isBatchSelected
+                      ? 'border-accent ring-2 ring-accent shadow-ink-md'
+                      : on
+                        ? 'border-accent shadow-ink-md'
+                        : 'border-line hover:border-line-3'
                   )}
                 >
                   <div className={cx('relative w-full overflow-hidden bg-paper', project.aspectRatio === '9:16' ? 'aspect-[9/16]' : 'aspect-video')}>
@@ -1287,7 +1499,20 @@ export function StoryboardStep() {
                       job={imageJob || videoJob}
                     />
                     <div className="absolute inset-x-0 top-0 flex items-center justify-between p-2 pointer-events-none gap-1">
-                      <div className="flex items-center gap-1 min-w-0">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <button
+                          type="button"
+                          title={isBatchSelected ? 'Batalkan pilihan shot' : 'Pilih shot ini'}
+                          onClick={(e) => toggleBatchSelect(c.id, e)}
+                          className={cx(
+                            'pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded border transition-colors',
+                            isBatchSelected
+                              ? 'border-accent bg-accent text-white shadow-sm'
+                              : 'border-white/60 bg-black/40 text-transparent hover:border-white hover:text-white/60 opacity-80 group-hover:opacity-100'
+                          )}
+                        >
+                          <Check className="size-3 stroke-[3]" />
+                        </button>
                         <span className="rounded-md bg-ink px-[7px] py-0.5 font-mono text-xs text-paper shrink-0">{clipNumber(i)}</span>
                         {c.motionType === 'video' && c.videoAssetId ? (
                           <span className="rounded-md bg-accent px-1.5 py-0.5 text-[11px] font-semibold text-white shadow-sm shrink-0">Video AI</span>
@@ -1333,6 +1558,43 @@ export function StoryboardStep() {
               )
             })}
           </div>
+          {selectedBatchIds.size > 0 && (
+            <aside aria-label="Aksi batch klip terpilih" className="sticky bottom-2 z-20 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line-3 bg-surface/95 p-3 shadow-ink-lg backdrop-blur-md">
+              <div className="flex items-center gap-2">
+                <span className="rounded-lg bg-accent/15 px-2.5 py-1 text-xs font-semibold text-accent">
+                  {selectedBatchIds.size} shot terpilih
+                </span>
+                <button
+                  type="button"
+                  onClick={handleSelectAll}
+                  className="rounded px-2 py-1 text-xs font-medium text-ink hover:bg-surface-2"
+                >
+                  Pilih semua ({clips.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeselectAll}
+                  className="rounded px-2 py-1 text-xs font-medium text-muted hover:text-ink"
+                >
+                  Batalkan
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="secondary" icon={<ImageIcon className="size-3.5" />} onClick={() => void handleBatchImages()}>
+                  Gambar AI
+                </Button>
+                <Button size="sm" variant="secondary" icon={<Film className="size-3.5" />} onClick={() => void handleBatchVideos()}>
+                  Video AI
+                </Button>
+                <Button size="sm" variant="secondary" icon={<Mic className="size-3.5" />} onClick={() => void handleBatchTts()}>
+                  Suara TTS
+                </Button>
+                <Button size="sm" variant="danger" icon={<Trash2 className="size-3.5" />} onClick={() => void handleBatchDelete()}>
+                  Hapus
+                </Button>
+              </div>
+            </aside>
+          )}
           {visibleCount < clips.length && <div ref={loadMoreRef} aria-hidden="true" className="h-8" />}
         </section>
         {sel && <ClipPanel key={sel.id} clip={sel} index={selIndex} total={clips.length} prereqCtx={prereqCtx} />}

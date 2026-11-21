@@ -4,7 +4,7 @@ import { formatChapters } from '@shared/chapters'
 import { LANGUAGES } from '@shared/models'
 import { isNarratorName, needsVisual, visualSourceOf } from '@shared/script'
 import { getStyle } from '@shared/styles'
-import { MIN_EPISODE_DURATION_SEC, MAX_EPISODE_DURATION_SEC } from '@shared/validation'
+import { MIN_EPISODE_DURATION_SEC, MAX_EPISODE_DURATION_SEC, cleanShotDetail, defaultDialogueType } from '@shared/validation'
 import type {
   CameraPresetId,
   CandidateCharacter,
@@ -12,7 +12,6 @@ import type {
   CandidateLocation,
   CandidateProp,
   Clip,
-  DialogueType,
   DraftShot,
   Episode,
   EpisodeScriptDraft,
@@ -23,9 +22,9 @@ import type {
   PlanBatchScriptsResult,
   PlanEpisodesInput,
   ProjectBundle,
-  ShotDetail,
   SmartSfxCue,
   SourceKind,
+  StoryBeatPhase,
   ThumbnailConcept,
   TransitionId,
   YoutubeMetadata
@@ -42,10 +41,12 @@ import {
   getEpisode,
   getPlanProgress,
   getProject,
+  listContinuityItems,
   listEpisodes,
   locationsOf,
   patchClip,
   propsOf,
+  saveScriptVersion,
   setPlanProgress,
   updateEpisode,
   type SceneVisual
@@ -370,6 +371,7 @@ const SCRIPT_DRAFT_SCHEMA = {
           emotion: { type: 'string', description: 'Emotional delivery and facial expression, e.g. "marah, mencemooh".' },
           framing: { type: 'string', description: 'Shot framing: close-up, medium shot, extreme close-up, two-shot, over-the-shoulder, wide.' },
           durationSec: { type: 'integer', description: 'Shot duration in seconds (typically 3 to 7).' },
+          beat: { type: 'string', enum: ['hook', 'confrontation', 'twist', 'aftermath'], description: 'Story rhythm beat phase in vertical drama formula: hook, confrontation, twist, aftermath.' },
           shot_detail: {
             type: 'object',
             additionalProperties: false,
@@ -426,6 +428,7 @@ interface RawDraftShot {
   emotion?: string
   framing?: string
   durationSec?: number
+  beat?: string
   shot_detail?: {
     camera_motion?: string
     camera_reason?: string
@@ -475,6 +478,17 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
     ? prs.map((p) => `- ${p.name}: ${p.description}`).join('\n')
     : '(Belum ada prop terdaftar di Lorebook)'
 
+  const openContinuity = listContinuityItems(projectId).filter((ci) => ci.status === 'open')
+  const continuitySummary = openContinuity.length
+    ? openContinuity
+        .map((ci) => {
+          const plantedEp = allEpisodes.find((e) => e.id === ci.plantedEpisodeId)
+          const epLabel = plantedEp ? `Episode ${plantedEp.episodeNum}` : 'Episode sebelumnya'
+          return `- [${ci.tier.toUpperCase()}] ${ci.kind}: "${ci.name}" (ditanam di ${epLabel}) — ${ci.detail}`
+        })
+        .join('\n')
+    : '(Tidak ada benang cerita terbuka)'
+
   const system = [
     'You are a master vertical short drama scriptwriter and director.',
     'You are planning the shot-by-shot script for an episode in an intense vertical short drama series (9:16 format).',
@@ -502,7 +516,9 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
     `\n--- REGISTERED LOREBOOK ASSETS ---`,
     `Characters:\n${castSummary}`,
     `Locations:\n${locSummary}`,
-    `Props:\n${propSummary}`
+    `Props:\n${propSummary}`,
+    `\n--- OPEN CONTINUITY THREADS (Payoff or advance if relevant to this episode) ---`,
+    `${continuitySummary}`
   ].join('\n\n')
 
   const res = await generateJson<RawScriptDraftResponse>({
@@ -531,29 +547,23 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
       }
     }
 
-    // Narration has no on-screen speaker; a speaker who talks must be visible for the video model to lip-sync.
+    const text = str(s.text)
     const rawSpeaker = str(s.speaker)
     const speaker = rawSpeaker && !isNarratorName(rawSpeaker) ? rawSpeaker : null
     const characters = Array.isArray(s.characters) ? s.characters.map(str).filter(Boolean) : []
-    if (speaker && !characters.some((c) => c.toLowerCase() === speaker.toLowerCase())) characters.unshift(speaker)
+    const shotDetail = cleanShotDetail(s.shot_detail, speaker, text)
+    const isVisibleDialogue = (shotDetail?.dialogueType ?? defaultDialogueType(speaker, text)) === 'dialogue'
+    if (speaker && isVisibleDialogue && !characters.some((c) => c.toLowerCase() === speaker.toLowerCase())) {
+      characters.unshift(speaker)
+    }
 
-    const text = str(s.text)
     const wordCount = text.trim().split(/\s+/).filter(Boolean).length
     const minDurForSpeech = wordCount > 0 ? Math.ceil(wordCount / 2.8) : 2
     const requestedDur = Number(s.durationSec) || 5
     const durationSec = Math.max(minDurForSpeech, Math.min(requestedDur, 12))
 
-    const rawDetail = s.shot_detail || {}
-    const shotDetail: ShotDetail = {
-      cameraMotion: str(rawDetail.camera_motion),
-      cameraReason: str(rawDetail.camera_reason),
-      lighting: str(rawDetail.lighting),
-      blocking: str(rawDetail.blocking),
-      nonSpeakingReaction: str(rawDetail.non_speaking_reaction),
-      sfxAmbience: str(rawDetail.sfx_ambience),
-      speechDelivery: str(rawDetail.speech_delivery),
-      dialogueType: (rawDetail.dialogue_type as DialogueType) || (speaker ? 'dialogue' : text ? 'narration' : undefined)
-    }
+    const rawBeat = str(s.beat)
+    const beat = rawBeat && ['hook', 'confrontation', 'twist', 'aftermath'].includes(rawBeat) ? (rawBeat as StoryBeatPhase) : undefined
 
     return {
       title: str(s.title) || `Shot ${i + 1}`,
@@ -568,6 +578,7 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
       emotion: str(s.emotion),
       framing: str(s.framing) || 'medium shot',
       durationSec,
+      ...(beat ? { beat } : {}),
       shotDetail
     }
   })
@@ -588,12 +599,14 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
   }
 
   updateEpisode(episodeId, { scriptDraft: draft })
+  saveScriptVersion(episodeId, draft, 'Rencana draft AI')
   emit.storyProgress({ projectId, message: `Rencana naskah untuk ${ep.title} (${cleanShots.length} shot) selesai disusun!` })
 
   return draft
 }
 
 export async function confirmEpisodeScript(projectId: string, episodeId: string, draft: EpisodeScriptDraft): Promise<ProjectBundle> {
+  saveScriptVersion(episodeId, draft, 'Naskah dikonfirmasi')
   return confirmEpisodeScriptRepo(projectId, episodeId, draft)
 }
 

@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app, type BrowserWindow } from 'electron'
 import ffmpegStatic from 'ffmpeg-static'
@@ -27,6 +27,10 @@ import {
   computeEpisodeRhythm,
   validateSpeechDuration
 } from '@shared/validation'
+import { EXPORT_PRESETS, getExportPreset, validatePresetDuration } from '@shared/exportPresets'
+import { checkLockCompliance } from '@shared/lock'
+import { resolveActive } from '@shared/providers'
+import { exportDeliveryPackage } from './package'
 import { startExport } from './exporter'
 import { assetAbsPath, binPath } from './paths'
 import { extractAudio, probeDurationMs, probeHasAudio } from './services/audio'
@@ -34,22 +38,27 @@ import { parts } from './narration'
 import {
   acceptLorebookCandidates,
   confirmEpisodeScriptRepo,
+  createContinuityItem,
   createEpisode,
   createProject,
   getBundle,
   getClip,
   getPlanProgress,
   insertAsset,
+  listContinuityItems,
   listEpisodes,
+  listScriptVersions,
   patchClip,
   removeAllEpisodes,
   replaceStory,
+  saveScriptVersion,
   saveSnapshot,
   setCharacterSheet,
   setDerivativeSheet,
   setLocationSheet,
   setPropSheet,
   touchProject,
+  updateContinuityItem,
   updateDerivative
 } from './repo'
 import { getSettings, setSettings } from './settings'
@@ -585,8 +594,8 @@ async function checkPhase4(projectId: string): Promise<boolean> {
   }
 
   // 5. All-or-nothing batch while sheets are missing (Flow2API takes references)
-  const before = getSettings().defaultVisualProvider
-  setSettings({ defaultVisualProvider: 'flow2api' })
+  const before = getSettings().providers.visual.activeId
+  setSettings({ providers: { ...getSettings().providers, visual: { activeId: 'flow2api', models: getSettings().providers.visual.models } } })
   try {
     const estimate = await batchEstimate(projectId, ep.id, 'image', false)
     if (estimate.canRun || !estimate.items.some((it) => it.status === 'blocked')) throw new Error('batchEstimate seharusnya terblokir')
@@ -599,7 +608,7 @@ async function checkPhase4(projectId: string): Promise<boolean> {
     }
     if (!rejected) throw new Error('generateMissingImages seharusnya menolak batch (semua atau tidak sama sekali)')
   } finally {
-    setSettings({ defaultVisualProvider: before })
+    setSettings({ providers: { ...getSettings().providers, visual: { activeId: before, models: getSettings().providers.visual.models } } })
   }
 
   // 6. A freshly made image is current: give every entity a sheet, then store an image with the basis
@@ -1273,6 +1282,143 @@ export async function checkPhase7(projectId: string): Promise<boolean> {
   return true
 }
 
+export async function checkPhase8(projectId: string): Promise<boolean> {
+  // 1. Ensure Phase 7 baseline is met
+  await checkPhase7(projectId)
+  console.log('[checkPhase8] Prasyarat Fase 7 terpenuhi')
+
+  const episodes = listEpisodes(projectId)
+  const ep = episodes[0]
+  if (!ep) throw new Error('Episode tidak ditemukan untuk checkPhase8')
+
+  // 2. Test Cross-Episode Continuity Items (Tugas 47)
+  const item1 = createContinuityItem(
+    projectId,
+    'prop',
+    'Cincin Giok Pusaka',
+    'Cincin peninggalan kakek yang memiliki ukiran naga',
+    ep.id,
+    'hot',
+    'open'
+  )
+  if (!item1.id || item1.name !== 'Cincin Giok Pusaka') {
+    throw new Error('createContinuityItem gagal membuat item kontinuitas')
+  }
+
+  const items = listContinuityItems(projectId)
+  if (!items.some((i) => i.id === item1.id)) {
+    throw new Error('listContinuityItems tidak menemukan item kontinuitas yang baru dibuat')
+  }
+
+  const updatedItem = updateContinuityItem(item1.id, {
+    status: 'paid',
+    payoffEpisodeId: ep.id
+  })
+  if (updatedItem.status !== 'paid' || updatedItem.payoffEpisodeId !== ep.id) {
+    throw new Error('updateContinuityItem gagal memperbarui status item')
+  }
+
+  // 3. Test Continuity Lock Words (Tugas 45)
+  const lockCompliancePass = checkLockCompliance('Seorang pemuda berambut hitam rapi mengenakan kemeja putih', [
+    { id: 'lock-1', label: 'Rambut', text: 'hitam rapi', source: 'manual', enabled: true }
+  ])
+  if (!lockCompliancePass.compliant || lockCompliancePass.missing.length > 0) {
+    throw new Error('checkLockCompliance seharusnya compliant')
+  }
+
+  const lockComplianceFail = checkLockCompliance('Seorang pemuda berambut cokelat mengenakan jaket kulit', [
+    { id: 'lock-1', label: 'Rambut', text: 'hitam rapi', source: 'manual', enabled: true }
+  ])
+  if (lockComplianceFail.compliant || lockComplianceFail.missing.length === 0) {
+    throw new Error('checkLockCompliance gagal mendeteksi ketidakpatuhan kata kunci kontinuitas')
+  }
+
+  // 4. Test Script Versioning & Snapshot Rollback (Tugas 50)
+  const mockDraft: EpisodeScriptDraft = {
+    shots: [
+      {
+        title: 'Shot Uji Versi',
+        sourceExcerpt: 'Adegan Pembuka',
+        visualAction: 'Pahlawan menatap ufuk barat',
+        characters: ['Arjuna Wardhana'],
+        costumes: {},
+        location: 'Gerbang Istana Majapahit',
+        props: [],
+        speaker: 'Arjuna Wardhana',
+        text: 'Waktunya telah tiba.',
+        emotion: 'tegas',
+        framing: 'close_up',
+        durationSec: 4
+      }
+    ],
+    newAssets: [],
+    createdAt: Date.now()
+  }
+
+  const savedVer = saveScriptVersion(ep.id, mockDraft, 'Snapshot uji coba devharness')
+  if (!savedVer.id || savedVer.note !== 'Snapshot uji coba devharness') {
+    throw new Error('saveScriptVersion gagal menyimpan versi naskah')
+  }
+  const versions = listScriptVersions(ep.id)
+  if (!versions.some((v) => v.id === savedVer.id)) {
+    throw new Error('listScriptVersions tidak mengembalikan versi naskah yang baru disimpan')
+  }
+
+  // 5. Test Per-shot Reference Overrides (Tugas 48)
+  const bundle = getBundle(projectId, ep.id)
+  const clip = bundle.clips[0]
+  if (clip) {
+    const hashWithoutRef = computeClipImageBasisHash({
+      clip: { ...clip, referenceAssetIds: [] },
+      project: bundle.project,
+      characters: bundle.characters,
+      derivatives: bundle.derivatives,
+      locations: bundle.locations,
+      props: bundle.props,
+      refSheetAssetIds: []
+    })
+    const hashWithRef = computeClipImageBasisHash({
+      clip: { ...clip, referenceAssetIds: ['custom-ref-asset-id-123'] },
+      project: bundle.project,
+      characters: bundle.characters,
+      derivatives: bundle.derivatives,
+      locations: bundle.locations,
+      props: bundle.props,
+      refSheetAssetIds: ['custom-ref-asset-id-123']
+    })
+    if (hashWithoutRef === hashWithRef) {
+      throw new Error('computeClipImageBasisHash harus berubah ketika referenceAssetIds / refSheetAssetIds berubah!')
+    }
+  }
+
+  // 6. Test Platform Export Presets (Tugas 49)
+  if (!EXPORT_PRESETS.some((p) => p.id === 'tiktok') || !EXPORT_PRESETS.some((p) => p.id === 'shorts')) {
+    throw new Error('EXPORT_PRESETS katalog tidak lengkap')
+  }
+  const tiktokPreset = getExportPreset('tiktok')!
+  const tiktokWarn = validatePresetDuration(tiktokPreset, 700)
+  if (tiktokWarn.valid || !tiktokWarn.warning?.includes('TikTok')) {
+    throw new Error('validatePresetDuration gagal mendeteksi durasi yang melebihi batas preset TikTok')
+  }
+
+  // 7. Test Provider Resolution & Active Models (Tugas 54 & 56)
+  const settings = getSettings()
+  const activeLlm = resolveActive(settings, 'llm')
+  if (!activeLlm.provider || !activeLlm.model) {
+    throw new Error('resolveActive gagal mengembalikan provider dan model aktif untuk LLM')
+  }
+
+  // 8. Test Delivery Package Exporter (Tugas 52)
+  const pkgPath = await exportDeliveryPackage(projectId, ep.id)
+  if (!pkgPath || !existsSync(pkgPath) || !pkgPath.endsWith('.zip')) {
+    throw new Error(`exportDeliveryPackage gagal menghasilkan file zip yang valid: ${pkgPath}`)
+  }
+  console.log(`[checkPhase8] Paket pengiriman berhasil diekspor ke: ${pkgPath}`)
+
+  console.log('[checkPhase8] Semua pengujian backend Fase 8 BERHASIL!')
+  return true
+}
+
 /**
  * For harness runs: keep painting and timers going while the test window sits behind other windows, so
  * screenshots show the current state. Must run before the app is ready.
@@ -1303,7 +1449,7 @@ export function attachDevHarness(win: BrowserWindow): void {
   const planPath = process.env.STUDIO_CAPTURE_PLAN
   if (!planPath) return
   let plan: {
-    main?: 'seed' | 'seedEpisodes' | 'checkIsolation' | 'checkPhase3' | 'checkPhase4' | 'checkPhase6' | 'checkPhase7' | 'export' | 'key' | 'overlays' | 'speech' | 'videos'
+    main?: 'seed' | 'seedEpisodes' | 'checkIsolation' | 'checkPhase3' | 'checkPhase4' | 'checkPhase6' | 'checkPhase7' | 'checkPhase8' | 'export' | 'key' | 'overlays' | 'speech' | 'videos'
     openProject?: boolean
     exportTo?: string
     encoder?: ExportOptions['encoder']
@@ -1343,6 +1489,7 @@ export function attachDevHarness(win: BrowserWindow): void {
         if (step.main === 'checkPhase4' && (step.projectId ?? demoId)) await checkPhase4((step.projectId ?? demoId)!)
         if (step.main === 'checkPhase6' && (step.projectId ?? demoId)) await checkPhase6((step.projectId ?? demoId)!)
         if (step.main === 'checkPhase7' && (step.projectId ?? demoId)) await checkPhase7((step.projectId ?? demoId)!)
+        if (step.main === 'checkPhase8' && (step.projectId ?? demoId)) await checkPhase8((step.projectId ?? demoId)!)
         if (step.openProject && demoId) {
           await win.webContents.executeJavaScript(`(() => { window.useApp?.getState().go({ name: 'project', id: ${JSON.stringify(demoId)} }); })()`)
         }

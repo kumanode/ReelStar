@@ -10,20 +10,25 @@ import {
   computeLocationSheetBasisHash,
   computePropSheetBasisHash
 } from './hash'
-import { estimateNarrationMs } from './script'
+import { estimateNarrationMs, isNarratorName } from './script'
 import type {
   Asset,
   Character,
   CharacterDerivative,
   Clip,
+  ContinuityItem,
+  DialogueType,
   Episode,
   EpisodeScriptDraft,
   Job,
   Location,
+  LockWord,
   Project,
   Prop,
   ScriptDoctorIssue,
-  SheetGenerationStatus
+  SheetGenerationStatus,
+  ShotDetail,
+  StoryBeatPhase
 } from './types'
 
 export const MIN_EPISODE_DURATION_SEC = 30
@@ -72,6 +77,10 @@ export interface GenerationPrerequisitesContext {
   flow2apiImageModel?: string
   /** Flow2API video model from the app settings, used when the project names a Higgsfield model. */
   flow2apiVideoModel?: string
+  /** Active global models resolved via resolveActive() */
+  activeImageModel?: string
+  activeVideoModel?: string
+  lockWords?: LockWord[]
 }
 
 export interface PrerequisitesCheckResult {
@@ -87,6 +96,13 @@ export interface ClipStatusResult {
   hasResult: boolean
 }
 
+export interface SheetStatusResult {
+  status: SheetGenerationStatus
+  blockers: string[]
+  basisHash: string
+  hasResult: boolean
+}
+
 type ProjectModels = Pick<Project, 'imageModel' | 'videoModel'>
 
 function findAsset(assets: Asset[] | Record<string, Asset>, id: string | null | undefined): Asset | null {
@@ -95,34 +111,39 @@ function findAsset(assets: Asset[] | Record<string, Asset>, id: string | null | 
   return assets[id] ?? null
 }
 
-/** Flow2API model ids never contain "/", Higgsfield ids always do; a Higgsfield id falls back to the settings. */
-function flow2apiId(projectModel: string | null | undefined, fallback: string | undefined): string | null {
-  return projectModel && !projectModel.includes('/') ? projectModel : fallback ?? null
+function effectiveImageModelId(projectModel: string | null | undefined, ctx: Pick<GenerationPrerequisitesContext, 'isFlow2Api' | 'flow2apiImageModel' | 'activeImageModel'>): string | null {
+  return ctx.activeImageModel?.trim() || (ctx.isFlow2Api ? (ctx.flow2apiImageModel?.trim() || null) : (projectModel?.trim() || null))
+}
+
+function effectiveVideoModelId(projectModel: string | null | undefined, ctx: Pick<GenerationPrerequisitesContext, 'isFlow2Api' | 'flow2apiVideoModel' | 'activeVideoModel'>): string | null {
+  return ctx.activeVideoModel?.trim() || (ctx.isFlow2Api ? (ctx.flow2apiVideoModel?.trim() || null) : (projectModel?.trim() || null))
 }
 
 /**
  * How many reference sheets the image model takes. Status and generation both read this, so the basis hash
  * of a fresh image always matches the one the storyboard computes.
  */
-export function referenceLimit(project: ProjectModels, ctx: Pick<GenerationPrerequisitesContext, 'isFlow2Api' | 'flow2apiImageModel'>): number {
+export function referenceLimit(project: ProjectModels, ctx: Pick<GenerationPrerequisitesContext, 'isFlow2Api' | 'flow2apiImageModel' | 'activeImageModel'>): number {
+  const modelId = effectiveImageModelId(project.imageModel, ctx)
   if (ctx.isFlow2Api) {
-    const m = getFlow2ApiModel(flow2apiId(project.imageModel, ctx.flow2apiImageModel), 'image')
+    const m = getFlow2ApiModel(modelId, 'image')
     return m.supportsRef ? m.maxRefs : 0
   }
-  return maxRefs(getImageModel(project.imageModel))
+  return maxRefs(getImageModel(modelId))
 }
 
 /** Allowed video lengths in seconds, or null when the model takes any length. */
-function videoDurations(project: ProjectModels, ctx: Pick<GenerationPrerequisitesContext, 'isFlow2Api' | 'flow2apiVideoModel'>): number[] | { min: number; max: number } | null {
+function videoDurations(project: ProjectModels, ctx: Pick<GenerationPrerequisitesContext, 'isFlow2Api' | 'flow2apiVideoModel' | 'activeVideoModel'>): number[] | { min: number; max: number } | null {
+  const modelId = effectiveVideoModelId(project.videoModel, ctx)
   if (ctx.isFlow2Api) {
-    const id = (flow2apiId(project.videoModel, ctx.flow2apiVideoModel) ?? '')
+    const id = (modelId ?? '')
       .trim()
       .replace(/-\d+s-(landscape|portrait)$/, '')
       .replace(/-(landscape|portrait)$/, '')
     const model = FLOW2API_VIDEO_MODELS.find((m) => m.id === id) ?? getFlow2ApiModel(null, 'video')
     return model.durations.length ? [...model.durations].sort((a, b) => a - b) : null
   }
-  const d = getVideoModel(project.videoModel).durations
+  const d = getVideoModel(modelId).durations
   if (!d) return null
   return 'values' in d ? [...d.values].sort((a, b) => a - b) : d
 }
@@ -226,7 +247,7 @@ export function checkClipVideoPrerequisites(clip: Clip, project: Project, ctx: G
 
   if (clip.speakerId && project.dialogAudio === 'video') {
     const isFlow = !!ctx.isFlow2Api
-    const vModelId = isFlow ? (flow2apiId(project.videoModel, ctx.flow2apiVideoModel) ?? project.videoModel) : project.videoModel
+    const vModelId = isFlow ? (effectiveVideoModelId(project.videoModel, ctx) ?? project.videoModel) : project.videoModel
     if (!modelSupportsNativeAudio(vModelId, isFlow)) {
       blockers.push('Model video terpilih tidak mendukung dialog bersuara. Ganti model video yang mendukung suara (misal Veo 3.1) atau alihkan mode dialog ke TTS.')
     }
@@ -275,16 +296,20 @@ function resultStatus(assets: Asset[] | Record<string, Asset>, assetId: string |
 
 /** The basis hash a clip image is generated from, with the same reference sheets generation will send. */
 export function clipImageBasis(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): { basisHash: string; refSheetAssetIds: string[] } {
+  const activeImageModel = ctx.activeImageModel || (ctx.isFlow2Api ? ctx.flow2apiImageModel : null) || project.imageModel
   const refs = collectReferenceSheets(clip, ctx.characters, ctx.derivatives, ctx.locations, ctx.props, referenceLimit(project, ctx))
   const refSheetAssetIds = refs.map((r) => r.sheetAssetId)
+  const lockWords = ctx.lockWords || project.seriesLock || []
   const basisHash = computeClipImageBasisHash({
-    project,
+    project: { ...project, imageModel: activeImageModel },
     clip,
     characters: ctx.characters,
     derivatives: ctx.derivatives,
     locations: ctx.locations,
     props: ctx.props,
-    refSheetAssetIds
+    refSheetAssetIds,
+    lockWords,
+    imageModel: activeImageModel
   })
   return { basisHash, refSheetAssetIds }
 }
@@ -306,12 +331,16 @@ export function getClipVideoStatus(clip: Clip, project: Project, ctx: Generation
       prevAssetId = prev.videoAssetId || prev.imageAssetId || null
     }
   }
+  const activeVideoModel = ctx.activeVideoModel || (ctx.isFlow2Api ? ctx.flow2apiVideoModel : null) || project.videoModel
+  const lockWords = ctx.lockWords || project.seriesLock || []
   const basisHash = computeClipVideoBasisHash({
-    project,
+    project: { ...project, videoModel: activeVideoModel },
     clip,
     characters: ctx.characters,
     seconds: videoSecondsFor(project, clip, ctx).seconds,
-    prevAssetId
+    prevAssetId,
+    lockWords,
+    videoModel: activeVideoModel
   })
   return resultStatus(ctx.assets, clip.videoAssetId, basisHash, checkClipVideoPrerequisites(clip, project, ctx))
 }
@@ -358,17 +387,11 @@ export function dialogVoiceNote(
   return null
 }
 
-export interface SheetStatusResult {
-  status: SheetGenerationStatus
-  blockers: string[]
-  basisHash: string
-  hasResult: boolean
-}
-
 export function getCharacterSheetStatus(
   character: Character,
   project: Pick<Project, 'styleId' | 'imageModel'>,
-  assets: Asset[] | Record<string, Asset>
+  assets: Asset[] | Record<string, Asset>,
+  imageModelOverride?: string
 ): SheetStatusResult {
   const blockers: string[] = []
   if (!character.name.trim()) blockers.push('Nama karakter masih kosong.')
@@ -376,7 +399,7 @@ export function getCharacterSheetStatus(
     name: character.name,
     description: character.description,
     styleId: project.styleId,
-    imageModel: project.imageModel,
+    imageModel: imageModelOverride || project.imageModel,
     profile: character.profile
   })
   const asset = findAsset(assets, character.sheetAssetId)
@@ -398,7 +421,8 @@ export function getDerivativeSheetStatus(
   character: Character | undefined,
   project: Pick<Project, 'imageModel'>,
   assets: Asset[] | Record<string, Asset>,
-  baseSheetWillBeGenerated = false
+  baseSheetWillBeGenerated = false,
+  imageModelOverride?: string
 ): SheetStatusResult {
   const blockers: string[] = []
   if (!character) {
@@ -409,7 +433,7 @@ export function getDerivativeSheetStatus(
   const basisHash = computeDerivativeSheetBasisHash({
     baseSheetAssetId: character?.sheetAssetId ?? null,
     promptChange: derivative.promptChange,
-    imageModel: project.imageModel,
+    imageModel: imageModelOverride || project.imageModel,
     costumeKeyphrase: derivative.costumeKeyphrase
   })
   const asset = findAsset(assets, derivative.sheetAssetId)
@@ -434,7 +458,8 @@ export function getDerivativeSheetStatus(
 export function getLocationSheetStatus(
   location: Location,
   project: Pick<Project, 'styleId' | 'imageModel'>,
-  assets: Asset[] | Record<string, Asset>
+  assets: Asset[] | Record<string, Asset>,
+  imageModelOverride?: string
 ): SheetStatusResult {
   const blockers: string[] = []
   if (!location.name.trim()) blockers.push('Nama lokasi masih kosong.')
@@ -442,7 +467,7 @@ export function getLocationSheetStatus(
     name: location.name,
     description: location.description,
     styleId: project.styleId,
-    imageModel: project.imageModel,
+    imageModel: imageModelOverride || project.imageModel,
     profile: location.profile
   })
   const asset = findAsset(assets, location.sheetAssetId)
@@ -462,7 +487,8 @@ export function getLocationSheetStatus(
 export function getPropSheetStatus(
   prop: Prop,
   project: Pick<Project, 'styleId' | 'imageModel'>,
-  assets: Asset[] | Record<string, Asset>
+  assets: Asset[] | Record<string, Asset>,
+  imageModelOverride?: string
 ): SheetStatusResult {
   const blockers: string[] = []
   if (!prop.name.trim()) blockers.push('Nama prop masih kosong.')
@@ -470,7 +496,7 @@ export function getPropSheetStatus(
     name: prop.name,
     description: prop.description,
     styleId: project.styleId,
-    imageModel: project.imageModel,
+    imageModel: imageModelOverride || project.imageModel,
     profile: prop.profile
   })
   const asset = findAsset(assets, prop.sheetAssetId)
@@ -516,6 +542,43 @@ export function validateSpeechDuration(text: string, durationSec: number): {
   }
 }
 
+export function defaultDialogueType(speaker?: string | null, text?: string | null): DialogueType {
+  if (speaker && speaker.trim() && !isNarratorName(speaker)) return 'dialogue'
+  if (text && text.trim()) return 'narration'
+  return 'dialogue'
+}
+
+export function cleanShotDetail(
+  raw: Partial<ShotDetail> | Record<string, unknown> | undefined,
+  speaker?: string | null,
+  text?: string | null
+): ShotDetail | undefined {
+  if (!raw) {
+    const dt = defaultDialogueType(speaker, text)
+    return dt ? { dialogueType: dt } : undefined
+  }
+  const detail: ShotDetail = {}
+  const cm = String(raw.cameraMotion || (raw as Record<string, unknown>).camera_motion || '').trim()
+  if (cm) detail.cameraMotion = cm
+  const cr = String(raw.cameraReason || (raw as Record<string, unknown>).camera_reason || '').trim()
+  if (cr) detail.cameraReason = cr
+  const lt = String(raw.lighting || '').trim()
+  if (lt) detail.lighting = lt
+  const bl = String(raw.blocking || '').trim()
+  if (bl) detail.blocking = bl
+  const nr = String(raw.nonSpeakingReaction || (raw as Record<string, unknown>).non_speaking_reaction || '').trim()
+  if (nr) detail.nonSpeakingReaction = nr
+  const sfx = String(raw.sfxAmbience || (raw as Record<string, unknown>).sfx_ambience || '').trim()
+  if (sfx) detail.sfxAmbience = sfx
+  const sd = String(raw.speechDelivery || (raw as Record<string, unknown>).speech_delivery || '').trim()
+  if (sd) detail.speechDelivery = sd
+  const dt = (raw.dialogueType || (raw as Record<string, unknown>).dialogue_type) as DialogueType | undefined
+  const validDt = dt && ['dialogue', 'os', 'vo', 'narration'].includes(dt) ? dt : defaultDialogueType(speaker, text)
+  if (validDt) detail.dialogueType = validDt
+
+  return Object.keys(detail).length > 0 ? detail : undefined
+}
+
 export function checkScriptDoctor(
   draft: EpisodeScriptDraft,
   episode: Episode,
@@ -524,6 +587,11 @@ export function checkScriptDoctor(
     locations: Location[]
     props: Prop[]
     derivatives?: CharacterDerivative[]
+  },
+  previousEpisode?: Episode,
+  continuityContext?: {
+    items: ContinuityItem[]
+    episodes: Episode[]
   }
 ): ScriptDoctorIssue[] {
   const issues: ScriptDoctorIssue[] = []
@@ -543,15 +611,32 @@ export function checkScriptDoctor(
   if (firstShot) {
     const hasVisualTension = Boolean(firstShot.visualAction && firstShot.visualAction.length > 10)
     const hasEmotion = Boolean(firstShot.emotion && firstShot.emotion.trim())
-    const hasSpeech = Boolean(firstShot.text && firstShot.text.trim())
-    if (!hasVisualTension && !hasEmotion && !hasSpeech) {
+    if (!hasVisualTension && !hasEmotion) {
       issues.push({
         code: 'WEAK_HOOK',
         severity: 'warning',
         shotIndex: 0,
         title: 'Hook Pembuka Kurang Menggigit',
-        description: 'Shot 1 membuka episode, namun belum memiliki aksi visual dramatis, emosi kuat, atau dialog pembuka.',
-        suggestion: 'Mulai dengan konfrontasi langsung, pertanyaan misterius, atau ekspresi dramatis.'
+        description: 'Shot 1 membuka episode, namun belum memiliki aksi visual dramatis atau emosi yang kuat.',
+        suggestion: 'Mulai dengan konfrontasi langsung, bahaya mendadak, atau ekspresi dramatis yang memicu rasa penasaran penonton.'
+      })
+    }
+  }
+
+  // 1b. Unresolved cliffhanger from previous episode
+  if (previousEpisode?.cliffhanger && previousEpisode.cliffhanger.trim()) {
+    const prevCliff = previousEpisode.cliffhanger.toLowerCase()
+    const keywords = prevCliff.split(/\W+/).filter((w) => w.length > 3)
+    const earlyText = shots.slice(0, 3).map((s) => `${s.text} ${s.visualAction} ${s.title}`).join(' ').toLowerCase()
+    const matchesKeyword = keywords.some((kw) => earlyText.includes(kw))
+    if (!matchesKeyword && keywords.length > 0) {
+      issues.push({
+        code: 'CLIFFHANGER_UNRESOLVED',
+        severity: 'info',
+        shotIndex: 0,
+        title: 'Resolusi Cliffhanger Episode Sebelumnya',
+        description: `Episode sebelumnya ditutup dengan: "${previousEpisode.cliffhanger}". Pastikan pembuka episode ini menjawab atau menyambung momen gantung tersebut.`,
+        suggestion: 'Mulai adegan dengan reaksi atau dampak langsung dari kejadian di akhir episode sebelumnya.'
       })
     }
   }
@@ -597,6 +682,77 @@ export function checkScriptDoctor(
     }
   }
 
+  // 3b. Dialogue run too long: > 6 consecutive dialogue shots without action/reaction
+  let consecutiveDialogueShots = 0
+  for (let i = 0; i < shots.length; i++) {
+    const s = shots[i]
+    const dType = s.shotDetail?.dialogueType ?? defaultDialogueType(s.speaker, s.text)
+    const hasDialogue = dType === 'dialogue' && Boolean(s.text && s.text.trim())
+    const isActionOrReaction = !hasDialogue || Boolean(s.shotDetail?.nonSpeakingReaction) || !s.speaker
+    if (hasDialogue && !s.shotDetail?.nonSpeakingReaction) {
+      consecutiveDialogueShots++
+      if (consecutiveDialogueShots > 6) {
+        issues.push({
+          code: 'DIALOGUE_RUN_TOO_LONG',
+          severity: 'warning',
+          shotIndex: i,
+          title: `Rangkaian Dialog Terlalu Panjang (${consecutiveDialogueShots} Shot)`,
+          description: `Ada ${consecutiveDialogueShots} shot dialog berturut-turut tanpa jeda shot aksi atau reaksi hening. Tempo drama vertikal membutuhkan aksi visual agar penonton tidak jenuh.`,
+          suggestion: 'Sisipkan shot reaksi hening karakter non-speaking, gerak aksi fisik, atau visual objek penting.'
+        })
+        consecutiveDialogueShots = 0
+      }
+    } else if (isActionOrReaction) {
+      consecutiveDialogueShots = 0
+    }
+  }
+
+  // 3c. Visual anchor missing: 4 consecutive dialogue shots without visual action/reaction
+  let dialogueWithoutAnchor = 0
+  for (let i = 0; i < shots.length; i++) {
+    const s = shots[i]
+    const dType = s.shotDetail?.dialogueType ?? defaultDialogueType(s.speaker, s.text)
+    const isDialogue = dType === 'dialogue' && Boolean(s.text && s.text.trim())
+    const hasVisualAnchor = Boolean(
+      (s.visualAction && s.visualAction.length > 25) ||
+      s.shotDetail?.nonSpeakingReaction ||
+      s.shotDetail?.blocking ||
+      /wide|long|establishing|insert/i.test(s.framing || '')
+    )
+    if (isDialogue && !hasVisualAnchor) {
+      dialogueWithoutAnchor++
+      if (dialogueWithoutAnchor >= 4) {
+        issues.push({
+          code: 'VISUAL_ANCHOR_MISSING',
+          severity: 'warning',
+          shotIndex: i,
+          title: 'Jangkar Visual Tidak Ditemukan',
+          description: `Terdapat ${dialogueWithoutAnchor} shot dialog berurutan tanpa aksi visual atau jangkar panggung yang jelas.`,
+          suggestion: 'Tambahkan detail blocking, reaksi fisik, atau gunakan shot insert/sudut dinamis sebagai jangkar adegan.'
+        })
+        dialogueWithoutAnchor = 0
+      }
+    } else {
+      dialogueWithoutAnchor = 0
+    }
+  }
+
+  // 3d. Four-beat formula check
+  const beatsFound = new Set(shots.map((s) => s.beat).filter(Boolean))
+  if (beatsFound.size > 0) {
+    const requiredBeats: StoryBeatPhase[] = ['hook', 'confrontation', 'twist', 'aftermath']
+    const missingBeats = requiredBeats.filter((b) => !beatsFound.has(b))
+    if (missingBeats.length > 0) {
+      issues.push({
+        code: 'FOUR_BEAT_INCOMPLETE',
+        severity: 'info',
+        title: 'Pola Empat Babak (Four-Beat) Belum Lengkap',
+        description: `Struktur dramatik belum mencakup fase: ${missingBeats.join(', ')}.`,
+        suggestion: 'Formula drama vertikal ideal: Hook (0-15s) → Konfrontasi (15-45s) → Twist/Pembalikan (45-60s) → Aftermath/Cliffhanger.'
+      })
+    }
+  }
+
   // 4. Speech duration overflow
   for (let i = 0; i < shots.length; i++) {
     const s = shots[i]
@@ -629,7 +785,9 @@ export function checkScriptDoctor(
 
   for (let i = 0; i < shots.length; i++) {
     const s = shots[i]
-    if (s.speaker && !knownChars.has(s.speaker.toLowerCase())) {
+    const dType = s.shotDetail?.dialogueType ?? defaultDialogueType(s.speaker, s.text)
+    const isVisibleDialogue = dType === 'dialogue'
+    if (s.speaker && isVisibleDialogue && !knownChars.has(s.speaker.toLowerCase())) {
       issues.push({
         code: 'UNREGISTERED_SPEAKER',
         severity: 'warning',
@@ -638,6 +796,19 @@ export function checkScriptDoctor(
         description: `Karakter "${s.speaker}" di Shot ${i + 1} tidak ditemukan di Lorebook maupun usulan aset baru.`,
         suggestion: `Daftarkan "${s.speaker}" di Lorebook atau tambahkan ke usulan aset baru.`
       })
+    }
+    if (s.speaker && isVisibleDialogue && !isNarratorName(s.speaker)) {
+      const isVisible = (s.characters || []).some((c) => c.toLowerCase() === s.speaker!.toLowerCase())
+      if (!isVisible) {
+        issues.push({
+          code: 'SPEAKER_NOT_VISIBLE',
+          severity: 'warning',
+          shotIndex: i,
+          title: `Pembicara "${s.speaker}" Harus Terlihat di Shot`,
+          description: `Untuk dialog langsung (on-screen), karakter "${s.speaker}" harus masuk daftar karakter shot agar gerak bibir/ekspresi dapat disinkronkan.`,
+          suggestion: `Tambahkan "${s.speaker}" ke karakter shot, atau ubah tipe dialog menjadi O.S. (Off-Screen) / V.O. jika suara datang dari luar layar.`
+        })
+      }
     }
     if (s.location && s.location.trim() && !knownLocs.has(s.location.trim().toLowerCase())) {
       issues.push({
@@ -685,6 +856,32 @@ export function checkScriptDoctor(
       description: `Total durasi ${shots.length} shot adalah ${totalDurationSec} detik (selisih ${totalDurationSec > targetSec ? '+' : '-'}${delta}s dari target ${targetSec}s).`,
       suggestion: 'Sesuaikan durasi shot atau jumlah shot jika ingin pas dengan target penayangan.'
     })
+  }
+
+  // 8. Cross-episode continuity checks (Hot items open >3 episodes)
+  if (continuityContext?.items && continuityContext.episodes) {
+    const allEps = continuityContext.episodes
+    const currentIdx = allEps.findIndex((e) => e.id === episode.id)
+    if (currentIdx !== -1) {
+      for (const item of continuityContext.items) {
+        if (item.status === 'open' && item.tier === 'hot') {
+          const plantedIdx = allEps.findIndex((e) => e.id === item.plantedEpisodeId)
+          if (plantedIdx !== -1) {
+            const ageInEpisodes = currentIdx - plantedIdx
+            if (ageInEpisodes >= 3) {
+              const plantedNum = allEps[plantedIdx].episodeNum ?? plantedIdx + 1
+              issues.push({
+                code: 'CONTINUITY_OPEN_TOO_LONG',
+                severity: 'warning',
+                title: `Benang Cerita Belum Dibayar: "${item.name}"`,
+                description: `Petunjuk "${item.name}" (${item.kind}) ditanam di Episode ${plantedNum} (${ageInEpisodes} episode lalu) berstatus HOT, tetapi belum pernah diselesaikan atau dibayar.`,
+                suggestion: `Bahas atau bayar benang cerita ini pada episode sekarang agar audiens tidak kehilangan jejak, atau tandai sebagai Lunas di Lorebook.`
+              })
+            }
+          }
+        }
+      }
+    }
   }
 
   return issues

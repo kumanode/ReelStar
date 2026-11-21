@@ -253,6 +253,36 @@ const MIGRATIONS: string[] = [
   ALTER TABLE clips ADD COLUMN continue_from_previous INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE projects ADD COLUMN series_guidelines TEXT NOT NULL DEFAULT '';
   ALTER TABLE projects ADD COLUMN prompt_templates_json TEXT NOT NULL DEFAULT '{}';
+  `,
+  `
+  ALTER TABLE projects ADD COLUMN series_lock_json TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE episodes ADD COLUMN lock_words_json TEXT NOT NULL DEFAULT '[]';
+  `,
+  `
+  CREATE TABLE continuity_items (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open',
+    tier TEXT NOT NULL DEFAULT 'hot',
+    planted_episode_id TEXT NOT NULL,
+    payoff_episode_id TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX continuity_items_project ON continuity_items(project_id, status);
+
+  ALTER TABLE clips ADD COLUMN reference_asset_ids_json TEXT NOT NULL DEFAULT '[]';
+
+  CREATE TABLE script_versions (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    draft_json TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX script_versions_episode ON script_versions(episode_id, created_at);
   `
 ]
 

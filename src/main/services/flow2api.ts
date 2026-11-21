@@ -6,7 +6,7 @@ import { getSettings } from '../settings'
 import { ApiError, readError, sleep } from './http'
 
 function getBaseUrl(override?: string): string {
-  const base = (override ?? getSettings().flow2apiBaseUrl).trim().replace(/\/+$/, '')
+  const base = (override ?? getSettings().flow2apiBaseUrl ?? '').trim().replace(/\/+$/, '')
   return base || 'http://localhost:8000/v1'
 }
 

@@ -4,6 +4,10 @@ import type {
   Character,
   CharacterDerivative,
   Clip,
+  ContinuityItem,
+  ContinuityKind,
+  ContinuityStatus,
+  ContinuityTier,
   Episode,
   Job,
   Location,
@@ -27,6 +31,7 @@ interface ProjectState {
   locations: Location[]
   props: Prop[]
   characters: Character[]
+  continuityItems: ContinuityItem[]
   clips: Clip[]
   assets: Record<string, Asset>
   jobs: Record<string, Job>
@@ -67,6 +72,21 @@ interface ProjectState {
   removeProp(id: string): Promise<void>
 
   refreshLorebook(): Promise<void>
+
+  loadContinuityItems(projectId?: string): Promise<void>
+  addContinuityItem(input: {
+    kind: ContinuityKind
+    name: string
+    detail?: string
+    plantedEpisodeId: string
+    tier?: ContinuityTier
+    status?: ContinuityStatus
+  }): Promise<ContinuityItem>
+  updateContinuityItem(
+    id: string,
+    patch: Partial<Pick<ContinuityItem, 'name' | 'detail' | 'status' | 'tier' | 'payoffEpisodeId'>>
+  ): Promise<void>
+  removeContinuityItem(id: string): Promise<void>
 
   load(bundle: ProjectBundle, opts?: { keepHistory?: boolean }): void
   unload(): void
@@ -209,6 +229,7 @@ export const useProject = create<ProjectState>((set, get) => {
     locations: [],
     props: [],
     characters: [],
+    continuityItems: [],
     clips: [],
     assets: {},
     jobs: {},
@@ -368,6 +389,35 @@ export const useProject = create<ProjectState>((set, get) => {
       })
     },
 
+    loadContinuityItems: async (projectId) => {
+      const pid = projectId ?? get().project?.id
+      if (!pid) return
+      try {
+        const items = await window.api.continuity.list(pid)
+        set({ continuityItems: items })
+      } catch (err) {
+        console.error('Failed to load continuity items:', err)
+      }
+    },
+    addContinuityItem: async (input) => {
+      const p = get().project!
+      const item = await window.api.continuity.create({ projectId: p.id, ...input })
+      set({ continuityItems: [...get().continuityItems, item] })
+      return item
+    },
+    updateContinuityItem: async (id, patch) => {
+      const updated = await window.api.continuity.update(id, patch)
+      set({
+        continuityItems: get().continuityItems.map((ci) => (ci.id === id ? updated : ci))
+      })
+    },
+    removeContinuityItem: async (id) => {
+      await window.api.continuity.remove(id)
+      set({
+        continuityItems: get().continuityItems.filter((ci) => ci.id !== id)
+      })
+    },
+
     load: (b, opts) => {
       if (!opts?.keepHistory) {
         past = []
@@ -412,6 +462,7 @@ export const useProject = create<ProjectState>((set, get) => {
         activeTab: defaultTab,
         sidebarCollapsed: shouldCollapseSidebar
       })
+      void get().loadContinuityItems(b.project.id)
     },
     unload: () => {
       if (timer) clearTimeout(timer)
@@ -428,6 +479,7 @@ export const useProject = create<ProjectState>((set, get) => {
         locations: [],
         props: [],
         characters: [],
+        continuityItems: [],
         clips: [],
         assets: {},
         jobs: {},
@@ -595,6 +647,7 @@ export const useProject = create<ProjectState>((set, get) => {
         sourceExcerpt: '',
         shotDetail: {},
         continueFromPrevious: false,
+        referenceAssetIds: null,
         motionType: 'camera',
         cameraPreset: 'zoomin',
         motionStrength: 'halus',

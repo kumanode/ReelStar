@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Film, Image as ImageIcon, Move, Users } from 'lucide-react'
 import { DEFAULT_FLOW2API_IMAGE_MODEL, DEFAULT_FLOW2API_VIDEO_MODEL, flow2apiModelOptions } from '@shared/flow2api-catalog'
+import { resolveActive } from '@shared/providers'
 import { effectiveResolution, fitDuration, getImageModel, getVideoModel, hfModelOptions, maxRefs, resolutionOptions } from '@shared/higgsfield'
 import type { AppSettings, CreditEstimate, ModelOption, Project } from '@shared/types'
 import { ModelLogo } from '../../components/ModelLogo'
@@ -93,7 +94,7 @@ export function ModelSection({
     [videoCosts, perClip, hasKey]
   )
 
-  const isFlow2Api = appSettings?.defaultVisualProvider === 'flow2api'
+  const isFlow2Api = resolveActive(appSettings, 'image').provider.protocol === 'flow2api'
   const f2aImageModels = useMemo(() => flow2apiModelOptions('image'), [])
   const f2aVideoModels = useMemo(() => flow2apiModelOptions('video'), [])
 

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowRight, Copy, FolderOpen, Minus, MoreHorizontal, Plus, RefreshCw, Search, SlidersHorizontal, Trash2, Upload } from 'lucide-react'
-import { LANGUAGES, llmName } from '@shared/models'
+import { LANGUAGES } from '@shared/models'
+import { resolveActive } from '@shared/providers'
 import { getStyle } from '@shared/styles'
 import {
   calculateSeriesDuration,
@@ -99,7 +100,8 @@ export function Home() {
 
     const [testingFlow2Api, setTestingFlow2Api] = useState(false)
   const flow2Status = keys.find((k) => k.provider === 'flow2api')
-  const flow2apiIssue = (appSettings?.defaultVisualProvider ?? 'higgsfield') === 'flow2api' && (!flow2Status?.configured || flow2Status?.lastOk === false)
+  const activeVisual = resolveActive(appSettings, 'image')
+  const flow2apiIssue = activeVisual.provider.protocol === 'flow2api' && (!flow2Status?.configured || flow2Status?.lastOk === false)
 
   const recheckFlow2Api = async (): Promise<void> => {
     setTestingFlow2Api(true)
@@ -123,12 +125,13 @@ export function Home() {
       return !!k?.configured && k.lastOk !== false
     }
     const issues: { what: string; blocks: string }[] = []
-    const vp = appSettings.defaultVisualProvider ?? 'higgsfield'
+    const vp = resolveActive(appSettings, 'image').provider.id
     if (vp === 'higgsfield' && !ok('higgsfield')) issues.push({ what: 'kunci Higgsfield', blocks: 'gambar' })
     if (vp === 'flow2api' && !ok('flow2api')) issues.push({ what: 'koneksi Flow2API', blocks: 'gambar' })
-    const llm = appSettings.llmProvider
-    if (!ok(llm)) issues.push({ what: `kunci ${llmName(llm)}`, blocks: 'cerita' })
-    else if (!appSettings.llmModels[llm]) issues.push({ what: `model ${llmName(llm)}`, blocks: 'cerita' })
+    const activeLlm = resolveActive(appSettings, 'llm')
+    const llm = activeLlm.provider.id
+    if (!ok(llm)) issues.push({ what: `kunci ${activeLlm.provider.name}`, blocks: 'cerita' })
+    else if (!activeLlm.model) issues.push({ what: `model ${activeLlm.provider.name}`, blocks: 'cerita' })
     // Narration needs just one working voice service; every project can pick either one.
     const tts = ttsReadiness(keys)
     if (!tts.gemini.ok && !tts.elevenlabs.ok) issues.push({ what: 'kunci Gemini atau ElevenLabs', blocks: 'suara narator' })

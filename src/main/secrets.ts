@@ -1,19 +1,20 @@
 import { safeStorage } from 'electron'
+import { allProviders, providerById } from '@shared/providers'
 import type { ApiProvider, KeyStatus } from '@shared/types'
 import { getDb } from './db'
 import { getSettings } from './settings'
 
-const PROVIDERS: ApiProvider[] = ['higgsfield', 'gemini', 'elevenlabs', 'openrouter', 'groq', 'custom', 'flow2api']
-
-export const PROVIDER_NAMES: Record<ApiProvider, string> = {
-  higgsfield: 'Higgsfield',
-  gemini: 'Google Gemini',
-  elevenlabs: 'ElevenLabs',
-  openrouter: 'OpenRouter',
-  groq: 'Groq',
-  custom: 'endpoint custom',
-  flow2api: 'Flow2API'
+export function providerName(provider: string): string {
+  const p = providerById(provider, getSettings().customProviders)
+  return p?.name || provider
 }
+
+export const PROVIDER_NAMES: Record<string, string> = new Proxy(
+  {},
+  {
+    get: (_, prop: string) => providerName(prop)
+  }
+)
 
 interface SecretRow {
   provider: ApiProvider
@@ -90,13 +91,13 @@ export function clearSecret(provider: ApiProvider): void {
   getDb().prepare('DELETE FROM secrets WHERE provider = ?').run(provider)
 }
 
-/** Test results for the custom endpoint are kept even when it has no key (local servers). */
+/** Test results for endpoints are kept even when they have no key (local servers). */
 export function recordCheck(provider: ApiProvider, ok: boolean, message: string): void {
   const now = Date.now()
   const res = getDb()
     .prepare('UPDATE secrets SET last_ok = ?, last_message = ?, checked_at = ? WHERE provider = ?')
     .run(ok ? 1 : 0, message, now, provider)
-  if (res.changes === 0 && provider === 'custom') {
+  if (res.changes === 0) {
     getDb()
       .prepare('INSERT INTO secrets (provider, value, last_ok, last_message, checked_at) VALUES (?, ?, ?, ?, ?)')
       .run(provider, Buffer.alloc(0), ok ? 1 : 0, message, now)
@@ -105,15 +106,28 @@ export function recordCheck(provider: ApiProvider, ok: boolean, message: string)
 
 export function keyStatuses(): KeyStatus[] {
   const rows = getDb().prepare('SELECT * FROM secrets').all() as SecretRow[]
-  const customUrl = getSettings().customBaseUrl.trim()
-  return PROVIDERS.map((provider) => {
+  const settings = getSettings()
+  const providers = allProviders(settings.customProviders)
+  const customUrl = (settings.customBaseUrl || '').trim()
+
+  return providers.map((p) => {
+    const provider = p.id
     const r = rows.find((x) => x.provider === provider)
     const hasKey = !!r && r.value.length > 0
     const value = hasKey ? decrypt(r!.value) : null
     const unreadable = hasKey && value == null
+
+    let configured = hasKey
+    if (p.kind === 'custom') {
+      configured = p.keyOptional ? Boolean(p.baseUrl?.trim()) : Boolean(p.baseUrl?.trim() && hasKey)
+      if (provider === 'custom' && customUrl) configured = true
+    } else if (p.protocol === 'flow2api') {
+      configured = Boolean(p.baseUrl?.trim()) || hasKey
+    }
+
     return {
       provider,
-      configured: provider === 'custom' ? !!customUrl : hasKey,
+      configured,
       lastOk: unreadable ? false : r?.last_ok == null ? null : r.last_ok === 1,
       lastMessage: unreadable ? 'Kunci tersimpan tapi tidak bisa dibuka lagi. Masukkan ulang kuncinya.' : (r?.last_message ?? null),
       checkedAt: r?.checked_at ?? null,

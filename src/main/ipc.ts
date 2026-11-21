@@ -8,6 +8,10 @@ import type {
   AspectRatio,
   Character,
   CharacterDerivative,
+  ContinuityItem,
+  ContinuityKind,
+  ContinuityStatus,
+  ContinuityTier,
   Episode,
   EpisodeScriptDraft,
   ExportOptions,
@@ -25,6 +29,7 @@ import type {
   WordTiming
 } from '@shared/types'
 import { clearExportCache, nvencAvailable, startExport } from './exporter'
+import { exportDeliveryPackage } from './package'
 import {
   batchEstimate,
   batchEstimateSheets,
@@ -55,6 +60,7 @@ import { emit } from './events'
 import {
   acceptLorebookCandidates,
   createCharacter,
+  createContinuityItem,
   createDerivative,
   createEpisode,
   createLocation,
@@ -72,13 +78,16 @@ import {
   getProject,
   getProp,
   insertAsset,
+  listContinuityItems,
   listEpisodes,
   listProjects,
+  listScriptVersions,
   locationsOf,
   mergeAssets,
   patchClip,
   propsOf,
   removeCharacter,
+  removeContinuityItem,
   removeDerivative,
   removeEpisode,
   removeAllEpisodes,
@@ -86,6 +95,7 @@ import {
   removeProject,
   removeProp,
   reorderEpisodes,
+  saveScriptVersion,
   saveSnapshot,
   setCharacterSheet,
   setDerivativeSheet,
@@ -94,6 +104,7 @@ import {
   touchProject,
   updateAssetMeta,
   updateCharacter,
+  updateContinuityItem,
   updateDerivative,
   updateEpisode,
   updateLocation,
@@ -352,6 +363,42 @@ export function registerIpc(): void {
   handle('story:confirmEpisodeScript', (projectId: string, episodeId: string, draft: EpisodeScriptDraft) => confirmEpisodeScript(projectId, episodeId, draft))
   handle('story:writePrompts', (projectId: string, episodeId: string, clipIds?: string[]) => writePrompts(projectId, episodeId, clipIds))
 
+  handle('continuity:list', (projectId: string) => listContinuityItems(projectId))
+  handle(
+    'continuity:create',
+    (input: {
+      projectId: string
+      kind: ContinuityKind
+      name: string
+      detail?: string
+      plantedEpisodeId: string
+      tier?: ContinuityTier
+      status?: ContinuityStatus
+    }) =>
+      createContinuityItem(
+        input.projectId,
+        input.kind,
+        input.name,
+        input.detail ?? '',
+        input.plantedEpisodeId,
+        input.tier ?? 'hot',
+        input.status ?? 'open'
+      )
+  )
+  handle(
+    'continuity:update',
+    (
+      id: string,
+      patch: Partial<Pick<ContinuityItem, 'name' | 'detail' | 'status' | 'tier' | 'payoffEpisodeId'>>
+    ) => updateContinuityItem(id, patch)
+  )
+  handle('continuity:remove', (id: string) => removeContinuityItem(id))
+
+  handle('scriptVersions:list', (episodeId: string) => listScriptVersions(episodeId))
+  handle('scriptVersions:save', (episodeId: string, draft: EpisodeScriptDraft, note?: string) =>
+    saveScriptVersion(episodeId, draft, note ?? '')
+  )
+
   handle('story:musicPrompt', (projectId: string, episodeId?: string) => generateMusicPrompt(projectId, episodeId))
   handle('story:planSmartSfx', (projectId: string, episodeId?: string) => planSmartSfx(projectId, episodeId))
   handle('story:generateMusic', async (projectId: string, req: { prompt: string; durationMs: number }) => {
@@ -495,6 +542,37 @@ export function registerIpc(): void {
       width: size.width,
       height: size.height
     })
+  })
+
+  handle('assets:pickReference', async (projectId: string, clipId?: string) => {
+    const win = BrowserWindow.getFocusedWindow()
+    const res = await dialog.showOpenDialog(win!, {
+      title: 'Pilih gambar referensi shot',
+      filters: [{ name: 'Gambar', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      properties: ['openFile']
+    })
+    if (res.canceled || !res.filePaths[0]) return null
+    getProject(projectId)
+    const src = res.filePaths[0]
+    const rel = `references/${randomUUID()}${extname(src).toLowerCase()}`
+    const abs = assetAbsPath(projectId, rel)
+    mkdirSync(dirname(abs), { recursive: true })
+    copyFileSync(src, abs)
+    const size = await probeSize(abs).catch(() => null)
+    if (!size) throw new Error('Gambar tidak bisa dibaca. Pakai file PNG, JPG, atau WebP.')
+    const asset = insertAsset({
+      projectId,
+      clipId: clipId ?? null,
+      kind: 'image',
+      provider: 'local',
+      prompt: basename(src),
+      localPath: rel,
+      width: size.width,
+      height: size.height,
+      meta: { uploaded: true, isReference: true }
+    })
+    emit.asset(asset)
+    return asset
   })
 
   handle('assets:listBuiltinSfx', () => BUILTIN_SFX)
@@ -754,6 +832,10 @@ export function registerIpc(): void {
     await toYoutubeThumbnail(assetAbsPath(project.id, asset.localPath), res.filePath)
     return res.filePath
   })
+
+  handle('export:package', (projectId: string, episodeId?: string, videoPath?: string) =>
+    exportDeliveryPackage(projectId, episodeId, videoPath)
+  )
 
   handle('app:version', () => app.getVersion())
   handle('app:copyText', (text: string) => clipboard.writeText(String(text)))

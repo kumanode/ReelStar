@@ -25,17 +25,21 @@ import {
   Film,
   Volume2,
   Sun,
-  Link
+  Link,
+  Lock,
+  History
 } from 'lucide-react'
 import type {
   DialogueType,
   DraftShot,
   EpisodeScriptDraft,
   NewAssetProposal,
-  ProjectBundle
+  ProjectBundle,
+  LockWord,
+  ScriptVersion
 } from '@shared/types'
-import { checkScriptDoctor, computeEpisodeRhythm } from '@shared/validation'
-import { Badge, Button, IconButton, confirmDialog, cx, inputCls } from '../../components/ui'
+import { checkScriptDoctor, computeEpisodeRhythm, defaultDialogueType } from '@shared/validation'
+import { Badge, Button, IconButton, Modal, confirmDialog, cx, inputCls } from '../../components/ui'
 import { Popover } from '../../components/Popover'
 import { Select } from '../../components/Select'
 import { AutoTextarea } from '../../components/AutoTextarea'
@@ -76,11 +80,13 @@ export function PlanStep() {
   const {
     project,
     episode,
+    episodes,
     updateEpisode,
     characters,
     derivatives,
     locations,
     props,
+    continuityItems,
     clips,
     load,
     flush,
@@ -95,6 +101,85 @@ export function PlanStep() {
   const [planMessage, setPlanMessage] = useState<string | null>(null)
   const [expandedDetails, setExpandedDetails] = useState<Set<number>>(() => new Set())
   const [doctorCardCollapsed, setDoctorCardCollapsed] = useState(false)
+  const [locksCollapsed, setLocksCollapsed] = useState(true)
+  const [newEpLockLabel, setNewEpLockLabel] = useState('')
+  const [newEpLockText, setNewEpLockText] = useState('')
+
+  // Script versioning state
+  const [versions, setVersions] = useState<ScriptVersion[]>([])
+  const [historyModalOpen, setHistoryModalOpen] = useState(false)
+  const [snapshotNote, setSnapshotNote] = useState('')
+  const [snapshotModalOpen, setSnapshotModalOpen] = useState(false)
+
+  const loadVersions = async () => {
+    if (!episode) return
+    try {
+      const list = await window.api.scriptVersions.list(episode.id)
+      setVersions(list)
+    } catch {
+      // ignore
+    }
+  }
+
+  useEffect(() => {
+    void loadVersions()
+  }, [episode?.id])
+
+  const handleSaveSnapshot = async () => {
+    if (!episode || !draft) return
+    try {
+      await window.api.scriptVersions.save(episode.id, draft, snapshotNote.trim() || 'Snapshot manual')
+      toast('success', 'Snapshot naskah berhasil disimpan.')
+      setSnapshotNote('')
+      setSnapshotModalOpen(false)
+      void loadVersions()
+    } catch (err) {
+      toast('error', `Gagal menyimpan snapshot: ${errorText(err)}`)
+    }
+  }
+
+  const handleRestoreVersion = async (v: ScriptVersion) => {
+    const ok = await confirmDialog({
+      title: 'Pulihkan Versi Naskah?',
+      body: `Naskah saat ini akan digantikan dengan naskah dari snapshot "${v.note || 'Versi'}" (${new Date(v.createdAt).toLocaleString('id-ID')}). Tindakan ini tidak dapat dibatalkan.`,
+      confirm: 'Pulihkan',
+      danger: true
+    })
+    if (!ok) return
+    setDraft(v.draft)
+    await updateEpisode(episode!.id, { scriptDraft: v.draft })
+    toast('success', 'Naskah berhasil dipulihkan ke versi pilihan.')
+    setHistoryModalOpen(false)
+  }
+
+  const episodeLocks = episode?.lockWords || []
+  const seriesLocks = project?.seriesLock || []
+
+  const handleToggleEpisodeLock = (id: string) => {
+    if (!episode) return
+    const updated = episodeLocks.map((l) => (l.id === id ? { ...l, enabled: !l.enabled } : l))
+    void updateEpisode(episode.id, { lockWords: updated })
+  }
+
+  const handleAddEpisodeLock = () => {
+    if (!episode || !newEpLockText.trim()) return
+    const newLock: LockWord = {
+      id: `ep-manual-${Date.now()}`,
+      label: newEpLockLabel.trim() || 'Kunci Episode',
+      text: newEpLockText.trim(),
+      source: 'manual',
+      enabled: true
+    }
+    void updateEpisode(episode.id, { lockWords: [...episodeLocks, newLock] })
+    setNewEpLockLabel('')
+    setNewEpLockText('')
+  }
+
+  const handleRemoveEpisodeLock = (id: string) => {
+    if (!episode) return
+    const updated = episodeLocks.filter((l) => l.id !== id)
+    void updateEpisode(episode.id, { lockWords: updated })
+  }
 
   const hookAnchor = useRef<HTMLButtonElement>(null)
   const [hookOpen, setHookOpen] = useState(false)
@@ -244,7 +329,9 @@ export function PlanStep() {
       }
 
       // Unmapped speaker ("Narator" is the narrator voice, not a character)
-      if (s.speaker?.trim() && !isNarratorName(s.speaker)) {
+      const dType = s.shotDetail?.dialogueType ?? defaultDialogueType(s.speaker, s.text)
+      const isVisibleDialogue = dType === 'dialogue'
+      if (s.speaker?.trim() && isVisibleDialogue && !isNarratorName(s.speaker)) {
         const q = s.speaker.trim().toLowerCase()
         if (!registeredCharNames.has(q) && !proposedCharNames.has(q)) {
           issues.push({
@@ -257,10 +344,10 @@ export function PlanStep() {
       }
 
       // Dialogue from the video model needs the speaker's face on screen to lip-sync.
-      if (s.speaker?.trim() && !isNarratorName(s.speaker) && !(s.characters ?? []).some((c) => c.trim().toLowerCase() === s.speaker!.trim().toLowerCase())) {
+      if (s.speaker?.trim() && isVisibleDialogue && !isNarratorName(s.speaker) && !(s.characters ?? []).some((c) => c.trim().toLowerCase() === s.speaker!.trim().toLowerCase())) {
         issues.push({
           type: 'speaker_hidden',
-          message: `Pembicara "${s.speaker}" tidak ada di daftar tokoh yang terlihat di shot ini`
+          message: `Pembicara "${s.speaker}" tidak ada di daftar tokoh yang terlihat di shot ini (pilih O.S./V.O. jika suara dari luar layar)`
         })
       }
 
@@ -322,15 +409,100 @@ export function PlanStep() {
     }, 0)
   }, [shotIssues])
 
+  const previousEpisode = useMemo(() => {
+    if (!episode) return undefined
+    return episodes.find((e) => e.episodeNum === episode.episodeNum - 1)
+  }, [episodes, episode])
+
   const scriptDoctorIssues = useMemo(() => {
     if (!draft || !episode) return []
-    return checkScriptDoctor(draft, episode, {
-      characters,
-      locations,
-      props,
-      derivatives
-    })
-  }, [draft, episode, characters, locations, props, derivatives])
+    return checkScriptDoctor(
+      draft,
+      episode,
+      {
+        characters,
+        locations,
+        props,
+        derivatives
+      },
+      previousEpisode,
+      {
+        items: continuityItems,
+        episodes
+      }
+    )
+  }, [draft, episode, characters, locations, props, derivatives, previousEpisode, continuityItems, episodes])
+
+  const handleFixDuration = (shotIndex: number) => {
+    if (!draft) return
+    const s = draft.shots[shotIndex]
+    if (!s) return
+    const wordCount = s.text.trim().split(/\s+/).filter(Boolean).length
+    const needed = Math.max(3, Math.ceil(wordCount / 2.6))
+    const updatedShots = draft.shots.map((shot, i) => (i === shotIndex ? { ...shot, durationSec: needed } : shot))
+    setDraft({ ...draft, shots: updatedShots })
+    toast('success', `Durasi Shot ${shotIndex + 1} diperpanjang menjadi ${needed} detik.`)
+  }
+
+  const handleSplitShot = (shotIndex: number) => {
+    if (!draft) return
+    const s = draft.shots[shotIndex]
+    if (!s) return
+    const words = s.text.trim().split(/\s+/).filter(Boolean)
+    if (words.length < 2) return
+    const mid = Math.ceil(words.length / 2)
+    const text1 = words.slice(0, mid).join(' ')
+    const text2 = words.slice(mid).join(' ')
+    const dur1 = Math.max(2, Math.ceil(s.durationSec / 2))
+    const dur2 = Math.max(2, s.durationSec - dur1)
+
+    const shot1: DraftShot = {
+      ...s,
+      title: `${s.title} (Bagian 1)`,
+      text: text1,
+      durationSec: dur1
+    }
+    const shot2: DraftShot = {
+      ...s,
+      title: `${s.title} (Bagian 2)`,
+      text: text2,
+      durationSec: dur2
+    }
+
+    const nextShots = [...draft.shots]
+    nextShots.splice(shotIndex, 1, shot1, shot2)
+    setDraft({ ...draft, shots: nextShots })
+    toast('success', `Shot ${shotIndex + 1} berhasil dibagi menjadi 2 shot.`)
+  }
+
+  const handleInsertReactionShot = (shotIndex: number) => {
+    if (!draft) return
+    const s = draft.shots[shotIndex]
+    if (!s) return
+    const reactionShot: DraftShot = {
+      title: `Shot ${shotIndex + 2}: Reaksi Hening`,
+      sourceExcerpt: s.sourceExcerpt,
+      visualAction: 'Shot reaksi hening karakter yang mendengarkan, tatapan tegang menyerap perkataan lawan bicara.',
+      characters: s.characters,
+      costumes: s.costumes,
+      location: s.location,
+      props: s.props,
+      speaker: null,
+      text: '',
+      emotion: 'tegang, terkejut',
+      framing: 'close-up',
+      durationSec: 3,
+      shotDetail: {
+        cameraMotion: 'slow dramatic push in',
+        nonSpeakingReaction: 'Tatapan mata terpaku, menahan napas terkejut',
+        dialogueType: 'narration'
+      }
+    }
+    const nextShots = [...draft.shots]
+    nextShots.splice(shotIndex + 1, 0, reactionShot)
+    setDraft({ ...draft, shots: nextShots })
+    toast('success', `Shot reaksi berhasil disisipkan setelah Shot ${shotIndex + 1}.`)
+  }
 
   const rhythmSegments = useMemo(() => {
     if (!draft) return []
@@ -651,6 +823,30 @@ export function PlanStep() {
             </div>
           )}
 
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<History className="size-3.5" />}
+            onClick={() => {
+              void loadVersions()
+              setHistoryModalOpen(true)
+            }}
+            title="Lihat dan pulihkan versi naskah sebelumnya"
+          >
+            Versi ({versions.length})
+          </Button>
+
+          {draft && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSnapshotModalOpen(true)}
+              title="Simpan versi checkpoint naskah saat ini"
+            >
+              Simpan Snapshot
+            </Button>
+          )}
+
           {draft && (
             <Button
               variant="secondary"
@@ -799,6 +995,110 @@ export function PlanStep() {
                 </div>
               </div>
 
+              {/* Episode Lock Words Box */}
+              <div className="flex flex-col gap-2.5 rounded-2xl border border-line bg-surface p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Lock className="size-4 text-accent" />
+                    <span className="font-display text-xs font-bold text-ink">
+                      Kunci Kontinuitas ({seriesLocks.filter((l) => l.enabled).length + episodeLocks.filter((l) => l.enabled).length} aktif)
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setLocksCollapsed((v) => !v)}
+                    className="text-xs text-muted hover:text-ink font-medium"
+                  >
+                    {locksCollapsed ? 'Buka Pengaturan ▸' : 'Tutup ▾'}
+                  </button>
+                </div>
+
+                {!locksCollapsed && (
+                  <div className="flex flex-col gap-3 pt-1 text-xs">
+                    <p className="text-[11px] text-muted">
+                      Kunci kontinuitas ditempel verbatim ke setiap prompt gambar dan video episode ini untuk menjaga konsistensi.
+                    </p>
+
+                    {/* Series Locks Summary */}
+                    {seriesLocks.length > 0 && (
+                      <div className="space-y-1.5">
+                        <span className="text-[11px] font-semibold text-muted">Kunci Tingkat Serial (dari Lorebook):</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {seriesLocks.map((sl) => (
+                            <span
+                              key={sl.id}
+                              className={cx(
+                                'rounded-md px-2 py-0.5 text-[11px] font-medium border',
+                                sl.enabled
+                                  ? 'border-line bg-paper text-ink'
+                                  : 'border-line/40 bg-sand/20 text-muted line-through opacity-60'
+                              )}
+                              title={sl.text}
+                            >
+                              {sl.label}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Episode Locks List & Add Form */}
+                    <div className="space-y-2 border-t border-line/60 pt-2">
+                      <span className="text-[11px] font-semibold text-muted">Kunci Khusus Episode Ini:</span>
+                      {episodeLocks.map((el) => (
+                        <div
+                          key={el.id}
+                          className="flex items-center justify-between gap-2 rounded-lg border border-line bg-paper p-2"
+                        >
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={el.enabled}
+                              onChange={() => handleToggleEpisodeLock(el.id)}
+                              className="size-3.5 rounded border-line"
+                            />
+                            <span className="font-medium text-ink">{el.label}:</span>
+                            <span className="font-mono text-[11px] text-muted">{el.text}</span>
+                          </div>
+                          <IconButton
+                            label="Hapus kunci episode"
+                            onClick={() => handleRemoveEpisodeLock(el.id)}
+                            className="text-bad hover:text-bad/80"
+                            size={24}
+                          >
+                            <Trash2 className="size-3" />
+                          </IconButton>
+                        </div>
+                      ))}
+
+                      {/* Add Form */}
+                      <div className="flex items-center gap-2 pt-1">
+                        <input
+                          value={newEpLockLabel}
+                          onChange={(e) => setNewEpLockLabel(e.target.value)}
+                          placeholder="Label (mis. Jas basah)"
+                          className="h-7 w-36 rounded-md border border-line-2 bg-paper px-2 text-xs text-ink outline-none focus:border-ink"
+                        />
+                        <input
+                          value={newEpLockText}
+                          onChange={(e) => setNewEpLockText(e.target.value)}
+                          placeholder="Teks Verbatim (mis. Soaked wet dark suit)"
+                          className="h-7 flex-1 rounded-md border border-line-2 bg-paper px-2 text-xs text-ink outline-none focus:border-ink"
+                        />
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={handleAddEpisodeLock}
+                          disabled={!newEpLockText.trim()}
+                        >
+                          Tambah
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Script Doctor Issues Box */}
               {scriptDoctorIssues.length > 0 && (
                 <div className="flex flex-col gap-2.5 rounded-2xl border border-line bg-surface p-4">
@@ -852,15 +1152,46 @@ export function PlanStep() {
                             </div>
                           </div>
 
-                          {issue.shotIndex !== undefined && (
-                            <button
-                              type="button"
-                              onClick={() => scrollToShot(issue.shotIndex!)}
-                              className="shrink-0 rounded-lg border border-current/30 px-2 py-0.5 text-[11px] font-semibold hover:bg-black/5"
-                            >
-                              Lompat ke Shot {issue.shotIndex + 1}
-                            </button>
-                          )}
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            {issue.code === 'SPEECH_DURATION_OVERFLOW' && issue.shotIndex !== undefined && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleFixDuration(issue.shotIndex!)}
+                                  className="rounded-lg bg-bad px-2 py-0.5 text-[11px] font-semibold text-white hover:brightness-110"
+                                >
+                                  Perpanjang durasi
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSplitShot(issue.shotIndex!)}
+                                  className="rounded-lg border border-current/30 px-2 py-0.5 text-[11px] font-semibold hover:bg-black/5"
+                                >
+                                  Bagi jadi 2 shot
+                                </button>
+                              </>
+                            )}
+
+                            {(issue.code === 'DIALOGUE_RUN_TOO_LONG' || issue.code === 'TALKING_HEAD_MONOTONY') && issue.shotIndex !== undefined && (
+                              <button
+                                type="button"
+                                onClick={() => handleInsertReactionShot(issue.shotIndex!)}
+                                className="rounded-lg bg-accent px-2 py-0.5 text-[11px] font-semibold text-white hover:brightness-110"
+                              >
+                                Sisipkan shot reaksi
+                              </button>
+                            )}
+
+                            {issue.shotIndex !== undefined && (
+                              <button
+                                type="button"
+                                onClick={() => scrollToShot(issue.shotIndex!)}
+                                className="rounded-lg border border-current/30 px-2 py-0.5 text-[11px] font-semibold hover:bg-black/5"
+                              >
+                                Lompat ke Shot {issue.shotIndex + 1}
+                              </button>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -912,6 +1243,11 @@ export function PlanStep() {
                             />
                             <span>dtk</span>
                           </div>
+                          {shot.beat && (
+                            <span className="rounded bg-sand px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted">
+                              {shot.beat}
+                            </span>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-1">
@@ -1273,7 +1609,7 @@ export function PlanStep() {
                               <div className="w-64">
                                 <Select
                                   label="Tipe dialog"
-                                  value={shot.shotDetail?.dialogueType ?? 'spoken'}
+                                  value={shot.shotDetail?.dialogueType ?? defaultDialogueType(shot.speaker, shot.text)}
                                   options={DIALOGUE_TYPE_OPTIONS}
                                   onChange={(val) => {
                                     const d = { ...(shot.shotDetail ?? {}), dialogueType: val as DialogueType }
@@ -1431,6 +1767,97 @@ export function PlanStep() {
           </div>
         </div>
       </div>
+
+      {/* History Modal */}
+      <Modal
+        open={historyModalOpen}
+        onClose={() => setHistoryModalOpen(false)}
+        title="Riwayat Versi Naskah"
+        subtitle={`Daftar snapshot naskah untuk Episode ${episode?.episodeNum ?? ''}.`}
+        width={560}
+      >
+        <div className="flex flex-col gap-3">
+          {versions.length === 0 ? (
+            <div className="flex flex-col items-center justify-center p-8 text-center text-muted">
+              <History className="size-8 opacity-40" />
+              <p className="mt-2 text-xs">Belum ada riwayat snapshot naskah tersimpan.</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2 max-h-[400px] overflow-y-auto pr-1">
+              {versions.map((v, idx) => {
+                const shotCount = v.draft.shots?.length ?? 0
+                return (
+                  <div
+                    key={v.id}
+                    className="flex items-center justify-between gap-3 rounded-xl border border-line bg-surface p-3 transition-colors hover:border-ink/20"
+                  >
+                    <div className="flex flex-col gap-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-display text-xs font-bold text-ink">
+                          {v.note || `Versi #${versions.length - idx}`}
+                        </span>
+                        <span className="rounded bg-sand px-1.5 py-0.2 text-[10px] font-mono text-ink-2">
+                          {shotCount} shot
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-muted">
+                        {new Date(v.createdAt).toLocaleString('id-ID', {
+                          dateStyle: 'medium',
+                          timeStyle: 'short'
+                        })}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => void handleRestoreVersion(v)}
+                    >
+                      Pulihkan
+                    </Button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          <div className="mt-2 flex justify-end border-t border-line pt-3">
+            <Button variant="secondary" onClick={() => setHistoryModalOpen(false)}>
+              Tutup
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Snapshot Modal */}
+      <Modal
+        open={snapshotModalOpen}
+        onClose={() => setSnapshotModalOpen(false)}
+        title="Simpan Snapshot Naskah"
+        subtitle="Simpan kondisi draf naskah saat ini agar bisa dipulihkan sewaktu-waktu."
+        width={460}
+      >
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-semibold text-ink">Catatan Snapshot</label>
+            <input
+              value={snapshotNote}
+              onChange={(e) => setSnapshotNote(e.target.value)}
+              placeholder="Mis. Sebelum revisi dialog adegan 3"
+              className={inputCls}
+              autoFocus
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-2 border-t border-line pt-3">
+            <Button variant="secondary" onClick={() => setSnapshotModalOpen(false)}>
+              Batal
+            </Button>
+            <Button variant="primary" onClick={() => void handleSaveSnapshot()}>
+              Simpan Snapshot
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

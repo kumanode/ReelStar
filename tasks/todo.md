@@ -92,18 +92,25 @@ Urutan pengerjaan: 36 → 37 → 38 → 39 → 40 → 41 → 42 → 43.
 - [x] Tugas 43 — Sambung frame terakhir antar-shot (dari fase 5).
 - [x] Checkpoint 7 — typecheck/build, dev harness, screenshot 1180×720 terang dan gelap.
 
-## Fase 8 — Kontinuitas, referensi per shot, dan pengiriman
+## Fase 8 — Kontinuitas, referensi per shot, pengiriman, dan pengaturan global
 
-Rincian dan kriteria penerimaan: [Fase 8 di plan.md](plan.md#fase-8--kontinuitas-referensi-per-shot-dan-pengiriman).
-Urutan pengerjaan: 44 → 45 → 46 → 47 → 48; tugas 49–52 bebas setelah 44 (49 diuji paling akhir).
+Rincian dan kriteria penerimaan: [Fase 8 di plan.md](plan.md#fase-8--kontinuitas-referensi-per-shot-pengiriman-dan-pengaturan-global).
+Urutan pengerjaan: 44 → 54 → 45 → 46 → 47 → 48, lalu 55 → 56 → 57 → 58; tugas 53 kapan saja; tugas 49–52 bebas setelah 44 (49 diuji paling akhir).
+Rincian pengaturan: [setting.md](setting.md).
 
-- [ ] Tugas 44 — Rapikan sisa Tugas 38–39: nilai bawaan tipe dialog, `shotDetail` ringkas, aturan O.S./V.O., `WEAK_HOOK`, prioritas jalur trim prompt.
-- [ ] Tugas 45 — Kunci kontinuitas (lock words) per serial dan episode, masuk prompt (termasuk jalur trim) dan hash.
-- [ ] Tugas 46 — Aturan ritme Dokter Naskah: deretan dialog, jangkar visual, four-beat dengan label `beat`, cliffhanger antar-episode.
-- [ ] Tugas 47 — Catatan kontinuitas lintas episode (foreshadow, prop, aturan, relasi) + konteks planner.
-- [ ] Tugas 48 — Referensi per shot: chip, lepas, unggah, override masuk hash.
-- [ ] Tugas 49 — Preset platform ekspor (rasio sama dengan proyek), bitrate, peringatan durasi.
-- [ ] Tugas 50 — Versi naskah dan rollback (dari fase 5).
-- [ ] Tugas 51 — Aksi grup di Storyboard dengan estimasi gabungan.
-- [ ] Tugas 52 — Paket kirim: manifest, checksum, SRT, zip.
-- [ ] Checkpoint 8 — typecheck/build, dev harness (hash basi, Dokter Naskah, migrasi, `ffprobe`), screenshot 1180×720 terang dan gelap.
+- [x] Tugas 44 — Rapikan sisa Tugas 38–39: nilai bawaan tipe dialog, `shotDetail` ringkas, aturan O.S./V.O., `WEAK_HOOK`, prioritas jalur trim prompt.
+- [x] Tugas 45 — Kunci kontinuitas (lock words) per serial dan episode, masuk prompt (termasuk jalur trim) dan hash.
+- [x] Tugas 46 — Aturan ritme Dokter Naskah: deretan dialog, jangkar visual, four-beat dengan label `beat`, cliffhanger antar-episode.
+- [x] Tugas 47 — Catatan kontinuitas lintas episode (foreshadow, prop, aturan, relasi) + konteks planner.
+- [x] Tugas 48 — Referensi per shot: chip, lepas, unggah, override masuk hash.
+- [x] Tugas 49 — Preset platform ekspor (rasio sama dengan proyek), bitrate, peringatan durasi.
+- [x] Tugas 50 — Versi naskah dan rollback (dari fase 5).
+- [x] Tugas 51 — Aksi grup di Storyboard dengan estimasi gabungan.
+- [x] Tugas 52 — Paket kirim: manifest, checksum, SRT, zip.
+- [x] Tugas 53 — Pengaturan: kerangka tiga kolom (sidebar, rail penyedia, detail), tanpa ubah data model.
+- [x] Tugas 54 — Katalog penyedia + `resolveActive`: semua penyedia/model global, hapus tebakan `includes('/')` dan `defaultVisualProvider`.
+- [x] Tugas 55 — Penyedia custom LLM: tambah, ubah, hapus; endpoint `custom` lama tetap terbaca.
+- [x] Tugas 56 — Halaman Model aktif; pemilih model di proyek jadi ringkasan baca-saja; konfirmasi saat ganti model.
+- [x] Tugas 57 — Status dan penanda masalah di Pengaturan dari satu `KeyStatus`.
+- [x] Tugas 58 — Dokumentasi pengaturan + salin mockup ke `docs/mockup/`.
+- [x] Checkpoint 8 — typecheck/build, dev harness (hash basi termasuk ganti model aktif, Dokter Naskah, migrasi dan normalisasi setting, penyedia custom setelah restart, `ffprobe`), screenshot 1180×720 terang dan gelap.

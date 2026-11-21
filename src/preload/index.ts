@@ -79,6 +79,16 @@ const api: StudioApi = {
     youtubeMetadata: call('story:youtubeMetadata'),
     thumbnailConcept: call('story:thumbnailConcept')
   },
+  continuity: {
+    list: call('continuity:list'),
+    create: call('continuity:create'),
+    update: call('continuity:update'),
+    remove: call('continuity:remove')
+  },
+  scriptVersions: {
+    list: call('scriptVersions:list'),
+    save: call('scriptVersions:save')
+  },
   generate: {
     thumbnail: call('generate:thumbnail'),
     clipImage: call('generate:clipImage'),
@@ -107,6 +117,7 @@ const api: StudioApi = {
     setWords: call('assets:setWords'),
     pickMusic: call('assets:pickMusic'),
     pickImage: call('assets:pickImage'),
+    pickReference: call('assets:pickReference'),
     listBuiltinSfx: call('assets:listBuiltinSfx'),
     addBuiltinSfx: call('assets:addBuiltinSfx'),
     generateSfx: call('assets:generateSfx'),
@@ -137,7 +148,8 @@ const api: StudioApi = {
     pickFolder: call('export:pickFolder'),
     reveal: call('export:reveal'),
     saveThumbnail: call('export:saveThumbnail'),
-    saveClipThumbnail: call('export:saveClipThumbnail')
+    saveClipThumbnail: call('export:saveClipThumbnail'),
+    exportPackage: call('export:package')
   },
   app: {
     openExternal: call('app:openExternal'),

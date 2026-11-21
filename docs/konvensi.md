@@ -51,8 +51,10 @@ Bayangan "tinta" (`shadow-ink`) memberi kesan kertas dan tinta. Font caption ada
 1. **Jangan pakai `<select>` bawaan.** Pakai `Select`/`Popover` supaya tampilannya seragam.
 2. **Pilihan visual** (gaya gambar dll.) dipilih dari **grid thumbnail persegi 1:1**, bukan daftar teks. Contoh
    gambarnya berfokus pada karakter, menghadap kamera, dengan subjek berbeda tiap pilihan.
-3. **Satu dropdown penyedia per bagian** (misalnya LLM atau TTS): hanya formulir penyedia terpilih yang
-   ditampilkan. Kunci Higgsfield cukup satu kolom (format `KEY_ID:KEY_SECRET` dari tombol "Copy API key").
+3. **Pola rail penyedia + panel detail di Pengaturan.** Setiap peran (cerita, suara, visual)
+   menampilkan rail penyedia dengan status di samping panel konfigurasi detail, bukan dropdown bertumpuk.
+   Penyedia dan model aktif berlaku global untuk seluruh proyek. Kunci Higgsfield cukup satu kolom
+   (format `KEY_ID:KEY_SECRET` dari tombol "Copy API key").
 4. **Pilihan yang tidak bisa dipakai dinonaktifkan**, misalnya penyedia TTS tanpa kunci valid.
 5. **Kurangi klik manual.** AI mengisi pengaturan per klip (gerak kamera, kekuatan, transisi, arahan video), dan
    pratinjau berjalan otomatis.

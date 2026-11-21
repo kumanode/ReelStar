@@ -1,9 +1,10 @@
 import { getStyle } from './styles'
 import { NO_MUSIC, NO_MUSIC_DIALOG } from './higgsfield'
-import type { AspectRatio, Character, CharacterDerivative, Clip, Location, Prop } from './types'
+import { renderLockBlock } from './lock'
+import type { AspectRatio, Character, CharacterDerivative, Clip, Location, Prop, LockWord } from './types'
 
 export interface ReferenceSheetItem {
-  kind: 'character' | 'derivative' | 'location' | 'prop'
+  kind: 'character' | 'derivative' | 'location' | 'prop' | 'custom'
   id: string
   name: string
   sheetAssetId: string
@@ -21,6 +22,7 @@ export interface CompileClipPromptOptions {
   locations?: Location[]
   props?: Prop[]
   refNames?: string[]
+  lockWords?: LockWord[]
   limit?: number
 }
 
@@ -49,6 +51,39 @@ export function collectReferenceSheets(
   props: Prop[] = [],
   maxRefs = 3
 ): ReferenceSheetItem[] {
+  // If the shot explicitly specifies an override array for referenceAssetIds
+  if (Array.isArray(clip.referenceAssetIds)) {
+    const overrideResult: ReferenceSheetItem[] = []
+    const seen = new Set<string>()
+    for (const assetId of clip.referenceAssetIds) {
+      if (!assetId || seen.has(assetId)) continue
+      seen.add(assetId)
+      const ch = characters.find((c) => c.sheetAssetId === assetId)
+      if (ch) {
+        overrideResult.push({ kind: 'character', id: ch.id, name: ch.name, sheetAssetId: assetId })
+        continue
+      }
+      const d = derivatives.find((dv) => dv.sheetAssetId === assetId)
+      if (d) {
+        const parent = characters.find((c) => c.id === d.characterId)
+        overrideResult.push({ kind: 'derivative', id: d.id, name: `${parent?.name ?? ''} (${d.name})`, sheetAssetId: assetId })
+        continue
+      }
+      const loc = locations.find((l) => l.sheetAssetId === assetId)
+      if (loc) {
+        overrideResult.push({ kind: 'location', id: loc.id, name: loc.name, sheetAssetId: assetId })
+        continue
+      }
+      const pr = props.find((p) => p.sheetAssetId === assetId)
+      if (pr) {
+        overrideResult.push({ kind: 'prop', id: pr.id, name: pr.name, sheetAssetId: assetId })
+        continue
+      }
+      overrideResult.push({ kind: 'custom', id: assetId, name: 'Referensi Kustom', sheetAssetId: assetId })
+    }
+    return overrideResult.slice(0, maxRefs)
+  }
+
   const result: ReferenceSheetItem[] = []
   const seenSheets = new Set<string>()
 
@@ -174,10 +209,11 @@ const withoutLines = (text: string, labels: string[]): string => {
  * Scene, Wardrobe, Action & Emotion, Location & Setting, Props, Recurring Characters, Art style, Avoid.
  */
 export function compileClipPrompt(opts: CompileClipPromptOptions): string {
-  const { project, clip, characters, derivatives = [], locations = [], props = [], refNames = [], limit = 4000 } = opts
+  const { project, clip, characters, derivatives = [], locations = [], props = [], refNames = [], lockWords = [], limit = 4000 } = opts
   const style = getStyle(project.styleId)
   const split = splitAvoid(clip.visualPrompt)
   const avoid = split.avoid
+  const lockBlock = renderLockBlock(lockWords)
 
   const charMap = new Map(characters.map((c) => [c.id, c]))
   const derivMap = new Map(derivatives.map((d) => [d.id, d]))
@@ -245,6 +281,8 @@ export function compileClipPrompt(opts: CompileClipPromptOptions): string {
     )
   }
 
+  if (lockBlock) parts.push(lockBlock)
+
   parts.push(`Art style: ${style.prompt}`)
   if (avoid) parts.push(`Must not appear in the image: ${avoid}.`)
   parts.push(`Frame format ${project.aspectRatio}, full-bleed composition.`)
@@ -252,14 +290,28 @@ export function compileClipPrompt(opts: CompileClipPromptOptions): string {
   const full = parts.join('\n\n')
   if (full.length <= limit) return full
 
-  // Gracefully trim to fit shorter prompt limits
-  return [
-    scene,
-    visibleChars.map(({ char, deriv }) => compactCharacterLine(char, deriv)).join('; '),
-    loc ? `Setting: ${loc.name}` : '',
-    avoid && `Must not appear: ${avoid}.`,
-    style.prompt
-  ].filter(Boolean).join('\n\n')
+  // Gracefully trim to fit shorter prompt limits.
+  // Priority: director details (lighting, blocking, props, emotion, framing) trimmed first;
+  // identity, costume, and location are preserved to the end.
+  const essentialScene = scene
+  const charBlock = visibleChars.map(({ char, deriv }) => compactCharacterLine(char, deriv)).join('; ')
+  const locBlock = loc ? `Setting: ${loc.name}${loc.description ? `, ${loc.description}` : ''}.` : ''
+  const styleBlock = `Art style: ${style.prompt}`
+  const avoidBlock = avoid ? `Must not appear: ${avoid}.` : ''
+
+  const candidateParts = [essentialScene, charBlock, locBlock, lockBlock, avoidBlock, styleBlock].filter(Boolean)
+  let candidate = candidateParts.join('\n\n')
+  if (candidate.length <= limit) return candidate
+
+  const withoutAvoid = [essentialScene, charBlock, locBlock, lockBlock, styleBlock].filter(Boolean)
+  candidate = withoutAvoid.join('\n\n')
+  if (candidate.length <= limit) return candidate
+
+  const nonSceneLength = candidate.length - essentialScene.length
+  const maxSceneLen = Math.max(0, limit - nonSceneLength - 5)
+  const trimmedScene = maxSceneLen > 20 ? `${essentialScene.slice(0, maxSceneLen)}...` : ''
+
+  return [trimmedScene, charBlock, loc ? `Setting: ${loc.name}.` : '', lockBlock, styleBlock].filter(Boolean).join('\n\n')
 }
 
 /**
@@ -272,8 +324,13 @@ export function compileClipVideoPrompt(
   project: { styleId: string; aspectRatio: AspectRatio; dialogAudio?: 'video' | 'tts' },
   clip: Clip,
   characters: Character[] = [],
-  maxLen = 2000
+  lockWordsOrMaxLen: LockWord[] | number = [],
+  maybeMaxLen = 2000
 ): string {
+  const lockWords = Array.isArray(lockWordsOrMaxLen) ? lockWordsOrMaxLen : []
+  const maxLen = typeof lockWordsOrMaxLen === 'number' ? lockWordsOrMaxLen : maybeMaxLen
+  const lockBlock = renderLockBlock(lockWords)
+
   const { scene } = splitAvoid(clip.visualPrompt)
   let baseMotion = clip.videoPrompt.trim()
   if (!baseMotion) {
@@ -285,7 +342,8 @@ export function compileClipVideoPrompt(
   }
 
   const charMap = new Map(characters.map((c) => [c.id, c]))
-  const isVideoDialog = clip.speakerId && project.dialogAudio === 'video' && clip.narration.trim()
+  const dType = clip.shotDetail?.dialogueType ?? (clip.speakerId ? 'dialogue' : 'narration')
+  const isVideoDialog = clip.speakerId && project.dialogAudio === 'video' && clip.narration.trim() && dType === 'dialogue'
 
   if (isVideoDialog) {
     const speaker = charMap.get(clip.speakerId!)
@@ -294,14 +352,16 @@ export function compileClipVideoPrompt(
     const voiceStyle = speaker?.voiceStyle ? `, voice style: ${speaker.voiceStyle}` : ''
     const delivery = clip.shotDetail?.speechDelivery ? `, speech delivery: ${clip.shotDetail.speechDelivery}` : ''
     const dialogBlock = `Spoken line: "${clip.narration.trim()}", spoken by ${speakerName} ${emotion}${voiceStyle}${delivery}. Lip movements naturally sync with the spoken words. ${NO_MUSIC_DIALOG}`
+    const suffix = lockBlock ? `${lockBlock}\n\n${dialogBlock}` : dialogBlock
 
-    const combined = `${baseMotion}\n\n${dialogBlock}`
+    const combined = `${baseMotion}\n\n${suffix}`
     if (combined.length <= maxLen) return combined
-    return `${baseMotion.slice(0, maxLen - dialogBlock.length - 10)}...\n\n${dialogBlock}`
+    return `${baseMotion.slice(0, Math.max(0, maxLen - suffix.length - 10))}...\n\n${suffix}`
   }
 
   // Non-dialog video prompt: append NO_MUSIC instruction
-  const combined = `${baseMotion.replace(/\s*No background music[^\n]*$/i, '').trim()} ${NO_MUSIC}`
+  const suffix = lockBlock ? `${lockBlock} ${NO_MUSIC}` : NO_MUSIC
+  const combined = `${baseMotion.replace(/\s*No background music[^\n]*$/i, '').trim()} ${suffix}`
   if (combined.length <= maxLen) return combined
-  return `${baseMotion.slice(0, maxLen - NO_MUSIC.length - 5)}... ${NO_MUSIC}`
+  return `${baseMotion.slice(0, Math.max(0, maxLen - suffix.length - 5))}... ${suffix}`
 }

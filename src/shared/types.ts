@@ -1,15 +1,27 @@
+export type LockWordSource = 'character' | 'costume' | 'location' | 'prop' | 'manual'
+
+export interface LockWord {
+  id: string
+  label: string
+  text: string
+  source: LockWordSource
+  sourceId?: string
+  enabled: boolean
+}
+
 export type ProjectStatus = 'draft' | 'script' | 'storyboard' | 'editing' | 'exported'
 export type SourceKind = 'novel' | 'screenplay'
 export type DialogAudio = 'video' | 'tts'
 export type EpisodeStatus = 'draft' | 'planned' | 'script' | 'storyboard' | 'editing' | 'exported'
 export type ResultStatus = 'current' | 'stale' | 'missing' | 'blocked'
 export type AspectRatio = '16:9' | '9:16'
-export type VisualProvider = 'higgsfield' | 'flow2api'
-export type TtsProvider = 'gemini' | 'elevenlabs'
-export type LlmProvider = 'gemini' | 'openrouter' | 'groq' | 'custom'
-export type ApiProvider = 'higgsfield' | 'gemini' | 'elevenlabs' | 'openrouter' | 'groq' | 'custom' | 'flow2api'
+export type ProviderId = string
+export type VisualProvider = ProviderId
+export type TtsProvider = ProviderId
+export type LlmProvider = ProviderId
+export type ApiProvider = ProviderId
 /** Where a live model list comes from: an LLM provider, or a TTS catalog. */
-export type ModelSource = LlmProvider | 'gemini-tts' | 'elevenlabs'
+export type ModelSource = ProviderId
 export type MotionType = 'camera' | 'video'
 export type CameraPresetId = 'zoomin' | 'zoomout' | 'panleft' | 'panright' | 'kenburns' | 'shake' | 'static'
 export type MotionStrength = 'halus' | 'sedang' | 'kuat'
@@ -187,6 +199,7 @@ export interface Project {
   targetEpisodeCount?: number | null
   seriesGuidelines?: string
   promptTemplates?: Record<string, string>
+  seriesLock?: LockWord[]
   language: string
   aspectRatio: AspectRatio
   styleId: string
@@ -219,6 +232,7 @@ export interface Episode {
   sourceKind: SourceKind | null
   sourceExcerpt?: string
   scriptDraft?: EpisodeScriptDraft | null
+  lockWords?: LockWord[]
   status: EpisodeStatus
   durationSec: number
   sort: number
@@ -234,6 +248,7 @@ export interface EpisodeScriptDraft {
 }
 
 export type DialogueType = 'dialogue' | 'os' | 'vo' | 'narration'
+export type StoryBeatPhase = 'hook' | 'confrontation' | 'twist' | 'aftermath'
 
 export interface ShotDetail {
   cameraMotion?: string
@@ -259,8 +274,10 @@ export interface DraftShot {
   emotion: string
   framing: string
   durationSec: number
+  beat?: StoryBeatPhase
   shotDetail?: ShotDetail
   continueFromPrevious?: boolean
+  referenceAssetIds?: string[] | null
 }
 
 export interface NewAssetProposal {
@@ -280,6 +297,31 @@ export interface PlanEpisodesInput {
   targetEpisodeCount?: number
   /** replace: start over from the top of the source; continue: plan the part not yet covered. */
   mode?: 'replace' | 'continue'
+}
+
+export type ContinuityKind = 'foreshadow' | 'prop' | 'rule' | 'relationship'
+export type ContinuityStatus = 'open' | 'paid' | 'dropped'
+export type ContinuityTier = 'hot' | 'cold'
+
+export interface ContinuityItem {
+  id: string
+  projectId: string
+  kind: ContinuityKind
+  name: string
+  detail: string
+  status: ContinuityStatus
+  tier: ContinuityTier
+  plantedEpisodeId: string
+  payoffEpisodeId: string | null
+  createdAt: number
+}
+
+export interface ScriptVersion {
+  id: string
+  episodeId: string
+  draft: EpisodeScriptDraft
+  note: string
+  createdAt: number
 }
 
 export interface CharacterVisualProfile {
@@ -548,6 +590,7 @@ export interface Clip {
   sourceExcerpt: string
   shotDetail?: ShotDetail
   continueFromPrevious?: boolean
+  referenceAssetIds?: string[] | null
 }
 
 export type AssetKind = 'image' | 'video' | 'audio' | 'music' | 'sfx' | 'overlay' | 'export'
@@ -655,6 +698,7 @@ export interface NewProjectInput {
   targetEpisodeCount?: number | null
   seriesGuidelines?: string
   promptTemplates?: Record<string, string>
+  seriesLock?: LockWord[]
   sourceText?: string
   sourceKind?: SourceKind
   language?: string
@@ -780,38 +824,58 @@ export interface VoiceOption {
 export type ThemePreference = 'system' | 'light' | 'dark'
 export type ActiveTheme = 'light' | 'dark'
 
+export type ProviderRole = 'llm' | 'tts' | 'visual'
+export type ProviderKind = 'preset' | 'custom'
+export type ModelPurpose = 'llm' | 'tts' | 'image' | 'video'
+export type ProviderProtocol = 'gemini' | 'openai-chat' | 'elevenlabs' | 'higgsfield' | 'flow2api'
+export type ProviderLogoId = 'gemini' | 'openrouter' | 'groq' | 'elevenlabs' | 'higgsfield' | 'flow2api' | 'custom'
+
+export interface ProviderDef {
+  id: string
+  name: string
+  roles: ProviderRole[]
+  kind: ProviderKind
+  protocol: ProviderProtocol
+  logo?: ProviderLogoId
+  note: string
+  docs?: { link: string; label: string }
+  baseUrl?: string
+  keyOptional?: boolean
+}
+
+export interface RoleSettings {
+  /** Penyedia aktif untuk peran ini, berlaku untuk semua proyek. */
+  activeId: string
+  /** Model per penyedia per tujuan, supaya berpindah penyedia tidak menghapus pilihan model penyedia lain. */
+  models: Record<string, Partial<Record<ModelPurpose, string>>>
+}
+
 export interface AppSettings {
   theme: ThemePreference
   defaultTtsProvider: TtsProvider
   defaultLanguage: string
   exportFolder: string | null
-  /** Which LLM writes stories and narration. */
+  whisperAuto: boolean
+  higgsfieldConcurrency: number
+  flow2apiConcurrency: number
+  imageGenerationMode: 'draft' | 'final'
+  storyStyleProfiles: StoryStyleProfile[]
+
+  providers: Record<ProviderRole, RoleSettings>
+  customProviders: ProviderDef[]
+
+  /** Legacy fields kept for backward compatibility during transition */
   llmProvider: LlmProvider
-  /** Chosen model per LLM provider, so switching providers keeps each choice. */
-  llmModels: Record<LlmProvider, string>
-  /** Base URL of an OpenAI-compatible endpoint, e.g. http://localhost:11434/v1 */
+  llmModels: Record<string, string>
   customBaseUrl: string
   geminiTtsModel: string
   elevenModel: string
-  /** Higgsfield models for new projects: the last ones picked in the Idea step. */
   imageModel: string
   videoModel: string
-  /** Time captions against the real voice with Whisper after narration is made (when the model is present). */
-  whisperAuto: boolean
-  /** Penyedia gambar dan video bawaan: Higgsfield atau Flow2API. */
   defaultVisualProvider: VisualProvider
-  /** Base URL server Flow2API, termasuk /v1. */
   flow2apiBaseUrl: string
-  /** Model dasar gambar di Flow2API (suffix aspect otomatis). */
   flow2apiImageModel: string
-  /** Model dasar video di Flow2API (suffix aspect+durasi otomatis). */
   flow2apiVideoModel: string
-  /** Maximum active image/video jobs for each visual provider. */
-  higgsfieldConcurrency: number
-  flow2apiConcurrency: number
-  /** Draft selects the lowest resolution supported by a Higgsfield image model. */
-  imageGenerationMode: 'draft' | 'final'
-  storyStyleProfiles: StoryStyleProfile[]
 }
 
 /** What one Higgsfield request would cost, from the API's estimate endpoint. */
@@ -934,6 +998,8 @@ export interface ExportOptions {
   normalizeAudio: boolean
   duckMusic: boolean
   folder: string
+  presetId?: string
+  videoBitrate?: string
 }
 
 export interface ClipPatchEvent {

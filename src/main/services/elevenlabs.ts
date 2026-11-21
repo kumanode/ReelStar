@@ -157,7 +157,7 @@ export async function speak(
   signal?: AbortSignal,
   context?: { previous?: string; next?: string }
 ): Promise<{ audio: Buffer; words: WordTiming[] }> {
-  const model = getSettings().elevenModel
+  const model = getSettings().elevenModel || 'eleven_multilingual_v2'
   const body: Record<string, unknown> = { text: toElevenLabsText(text, model), model_id: model }
   if (context?.previous) body.previous_text = toElevenLabsText(context.previous, model)
   if (context?.next) body.next_text = toElevenLabsText(context.next, model)

@@ -6,6 +6,7 @@ import { spokenWords, stripVoiceTags } from '@shared/speech'
 import { getImageModel, getVideoModel, imageBody, maxRefs, promptLimit, resolutionOptions, videoBody, type HfModel } from '@shared/higgsfield'
 import { getStyle, NO_TEXT } from '@shared/styles'
 import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt } from '@shared/prompts'
+import { resolveActive } from '@shared/providers'
 import {
   computeCharacterSheetBasisHash,
   computeClipTtsBasisHash,
@@ -47,6 +48,7 @@ import type {
   CreditEstimate,
   Job,
   Location,
+  LockWord,
   Project,
   Prop,
   ThumbnailRequest,
@@ -68,6 +70,7 @@ import {
   getCharacter,
   getClip,
   getDerivative,
+  getEpisode,
   getJob,
   getLocation,
   getProject,
@@ -465,12 +468,22 @@ function updateJobPayload(jobId: string, payload: HfPayload): void {
 }
 
 function isFlow2Api(): boolean {
-  return getSettings().defaultVisualProvider === 'flow2api'
+  return resolveActive(getSettings(), 'image').provider.protocol === 'flow2api'
 }
 
 /** Everything the shared status and prerequisite rules read, gathered once per call. */
-function prereqContext(projectId: string): GenerationPrerequisitesContext {
+function prereqContext(projectId: string, episodeId?: string): GenerationPrerequisitesContext {
   const s = getSettings()
+  const activeImage = resolveActive(s, 'image')
+  const activeVideo = resolveActive(s, 'video')
+  let lockWords: LockWord[] = []
+  try {
+    const project = getProject(projectId)
+    const episode = episodeId ? getEpisode(episodeId) : undefined
+    lockWords = [...(project.seriesLock || []), ...(episode?.lockWords || [])]
+  } catch {
+    // If project cannot be fetched, proceed with empty locks
+  }
   return {
     characters: charactersOf(projectId),
     derivatives: derivativesOf(projectId),
@@ -479,9 +492,12 @@ function prereqContext(projectId: string): GenerationPrerequisitesContext {
     assets: assetsOf(projectId),
     clips: clipsOf(projectId),
     activeJobs: activeJobsOf(projectId),
-    isFlow2Api: isFlow2Api(),
-    flow2apiImageModel: s.flow2apiImageModel,
-    flow2apiVideoModel: s.flow2apiVideoModel
+    isFlow2Api: activeImage.provider.protocol === 'flow2api',
+    flow2apiImageModel: activeImage.model,
+    flow2apiVideoModel: activeVideo.model,
+    activeImageModel: activeImage.model,
+    activeVideoModel: activeVideo.model,
+    lockWords
   }
 }
 
@@ -525,7 +541,7 @@ export function generateClipImage(clipId: string): Job {
         }
       }
 
-      const baseModel = (project.imageModel && !project.imageModel.includes('/') ? project.imageModel : null) ?? getSettings().flow2apiImageModel
+      const baseModel = resolveActive(getSettings(), 'image').model
       const modelId = resolveFlow2ApiModelId(baseModel, project.aspectRatio)
       const prompt = compileClipPrompt({
         project,
@@ -535,6 +551,7 @@ export function generateClipImage(clipId: string): Job {
         locations: allLocs,
         props: allProps,
         refNames: refItems.map((r) => r.name),
+        lockWords: pctx.lockWords,
         limit: 4000
       })
       const { basisHash } = clipImageBasis(fresh, project, pctx)
@@ -601,6 +618,7 @@ export function generateClipImage(clipId: string): Job {
       locations: allLocs,
       props: allProps,
       refNames: refs.names,
+      lockWords: pctx.lockWords,
       limit: promptLimit(model)
     })
     const { basisHash } = clipImageBasis(fresh, project, pctx)
@@ -669,7 +687,7 @@ export function generateThumbnail(projectId: string, req: ThumbnailRequest): Job
         }
       }
       const variedPrompt = thumbnailPrompt(project, req, chars, refNames)
-      const baseModel = (project.imageModel && !project.imageModel.includes('/') ? project.imageModel : null) ?? getSettings().flow2apiImageModel
+      const baseModel = resolveActive(getSettings(), 'image').model
       const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
       const { mediaUrl } = await f2a.generateImage({ prompt: variedPrompt, model: modelId, referenceImages: refBuffers, signal: ctx.signal, onProgress: (progress, message) => ctx.progress(progress, message) })
       const downloadStartedAt = Date.now()
@@ -718,7 +736,7 @@ export function generateCharacterSheet(characterId: string): Job {
     emit.job(job)
     return runJob(job, 'flow2api', async (ctx) => {
       const prompt = sheetPrompt(project, getCharacter(characterId))
-      const baseModel = (project.imageModel && !project.imageModel.includes('/') ? project.imageModel : null) ?? getSettings().flow2apiImageModel
+      const baseModel = resolveActive(getSettings(), 'image').model
       const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
 
       ctx.progress(0.04, 'Menyiapkan prompt lembar karakter Flow2API')
@@ -791,7 +809,7 @@ export function generateDerivativeSheet(derivativeId: string): Job {
     const job = insertJob({ projectId: c.projectId, characterId: c.id, kind: 'sheet', provider: 'flow2api', payload: { target: 'derivative-sheet', derivativeId } })
     emit.job(job)
     return runJob(job, 'flow2api', async (ctx) => {
-      const baseModel = (project.imageModel && !project.imageModel.includes('/') ? project.imageModel : null) ?? getSettings().flow2apiImageModel
+      const baseModel = resolveActive(getSettings(), 'image').model
       const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
 
       const refBuffers: Buffer[] = []
@@ -865,7 +883,7 @@ export function generateLocationSheet(locationId: string): Job {
     const job = insertJob({ projectId: l.projectId, kind: 'image', provider: 'flow2api', payload: { target: 'location-sheet', locationId } })
     emit.job(job)
     return runJob(job, 'flow2api', async (ctx) => {
-      const baseModel = (project.imageModel && !project.imageModel.includes('/') ? project.imageModel : null) ?? getSettings().flow2apiImageModel
+      const baseModel = resolveActive(getSettings(), 'image').model
       const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
 
       ctx.progress(0.04, 'Menyiapkan prompt lembar lokasi Flow2API')
@@ -930,7 +948,7 @@ export function generatePropSheet(propId: string): Job {
     const job = insertJob({ projectId: pr.projectId, kind: 'image', provider: 'flow2api', payload: { target: 'prop-sheet', propId } })
     emit.job(job)
     return runJob(job, 'flow2api', async (ctx) => {
-      const baseModel = (project.imageModel && !project.imageModel.includes('/') ? project.imageModel : null) ?? getSettings().flow2apiImageModel
+      const baseModel = resolveActive(getSettings(), 'image').model
       const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
 
       ctx.progress(0.04, 'Menyiapkan prompt lembar prop Flow2API')
@@ -1050,13 +1068,14 @@ export function generateClipVideo(clipId: string): Job {
       const allChars = charactersOf(project.id)
       const initial = await resolveInitialImageForClip(fresh, project)
 
-      const durationSec = videoSecondsFor(project, fresh, prereqContext(project.id)).seconds
-      const baseModel = (project.videoModel && !project.videoModel.includes('/') ? project.videoModel : null) ?? getSettings().flow2apiVideoModel
+      const pctx = prereqContext(project.id, fresh.episodeId)
+      const durationSec = videoSecondsFor(project, fresh, pctx).seconds
+      const baseModel = resolveActive(getSettings(), 'video').model
       const video = resolveFlow2ApiVideo(baseModel, project.aspectRatio, durationSec)
       const modelId = video.model
 
-      const prompt = compileClipVideoPrompt(project, fresh, allChars, 2000)
-      const basisHash = computeClipVideoBasisHash({ project, clip: fresh, characters: allChars, seconds: durationSec, prevAssetId: initial.prevAssetId })
+      const prompt = compileClipVideoPrompt(project, fresh, allChars, pctx.lockWords || [], 2000)
+      const basisHash = computeClipVideoBasisHash({ project: { ...project, videoModel: baseModel }, clip: fresh, characters: allChars, seconds: durationSec, prevAssetId: initial.prevAssetId, lockWords: pctx.lockWords, videoModel: baseModel })
 
       ctx.progress(0.04, 'Menyiapkan video Flow2API (Veo)')
       const { mediaUrl } = await f2a.generateVideo({
@@ -1107,18 +1126,19 @@ export function generateClipVideo(clipId: string): Job {
   return startHiggsfield(job, async (ctx) => {
     const fresh = getClip(clipId)
     const project = getProject(fresh.projectId)
-    const model = getVideoModel(project.videoModel)
+    const pctx = prereqContext(project.id, fresh.episodeId)
+    const model = getVideoModel(pctx.activeVideoModel || project.videoModel)
     const allChars = charactersOf(project.id)
     const initial = await resolveInitialImageForClip(fresh, project)
 
     ctx.progress(0.05, 'Menyiapkan gambar awal')
     const url = await publicUrlFor(initial.asset, ctx.signal)
-    let prompt = compileClipVideoPrompt(project, fresh, allChars, promptLimit(model))
+    let prompt = compileClipVideoPrompt(project, fresh, allChars, pctx.lockWords || [], promptLimit(model))
     if (model.input.mode === 'reference') {
       prompt = `Open on the exact scene of the reference image and keep its art style, characters and composition. ${prompt}`
     }
-    const seconds = videoSecondsFor(project, fresh, prereqContext(project.id)).seconds
-    const basisHash = computeClipVideoBasisHash({ project, clip: fresh, characters: allChars, seconds, prevAssetId: initial.prevAssetId })
+    const seconds = videoSecondsFor(project, fresh, pctx).seconds
+    const basisHash = computeClipVideoBasisHash({ project: { ...project, videoModel: model.id }, clip: fresh, characters: allChars, seconds, prevAssetId: initial.prevAssetId, lockWords: pctx.lockWords, videoModel: model.id })
     const isVideoDialog = isVideoDialogue(project, fresh)
     return {
       endpoint: model.id,
@@ -1254,14 +1274,16 @@ export async function batchEstimate(
   const project = getProject(projectId)
   const ctx = prereqContext(projectId)
   const settings = getSettings()
+  const activeImage = resolveActive(settings, 'image')
+  const activeVideo = resolveActive(settings, 'video')
   const modelName =
     kind === 'image'
       ? ctx.isFlow2Api
-        ? getFlow2ApiModel(project.imageModel && !project.imageModel.includes('/') ? project.imageModel : settings.flow2apiImageModel, 'image').name
-        : getImageModel(project.imageModel).name
+        ? getFlow2ApiModel(activeImage.model, 'image').name
+        : getImageModel(activeImage.model).name
       : ctx.isFlow2Api
-        ? getFlow2ApiModel(project.videoModel && !project.videoModel.includes('/') ? project.videoModel : settings.flow2apiVideoModel, 'video').name
-        : getVideoModel(project.videoModel).name
+        ? getFlow2ApiModel(activeVideo.model, 'video').name
+        : getVideoModel(activeVideo.model).name
 
   const items = clipsOf(projectId, episodeId).map((clip, i) => ({
     clip,
@@ -1366,18 +1388,18 @@ function sheetBatchItems(
 }
 
 export async function batchEstimateSheets(projectId: string, includeStale = false): Promise<BatchEstimateSheetResult> {
-  const project = getProject(projectId)
   const ctx = prereqContext(projectId)
   const settings = getSettings()
+  const activeImage = resolveActive(settings, 'image')
   const modelName = ctx.isFlow2Api
-    ? getFlow2ApiModel(project.imageModel && !project.imageModel.includes('/') ? project.imageModel : settings.flow2apiImageModel, 'image').name
-    : getImageModel(project.imageModel).name
+    ? getFlow2ApiModel(activeImage.model, 'image').name
+    : getImageModel(activeImage.model).name
   const { targets, blocking, all } = sheetBatchItems(projectId, includeStale)
 
   // Sheets are always one 16:9 image, so one lookup prices the whole batch; Flow2API spends no Higgsfield credits.
   let pricePerSheet: number | null = null
   if (!ctx.isFlow2Api) {
-    const est = await estimateCredits('image', project.imageModel || '', '16:9', 0, null).catch(() => null)
+    const est = await estimateCredits('image', activeImage.model, '16:9', 0, null).catch(() => null)
     pricePerSheet = est?.credits ?? null
   }
 

@@ -203,7 +203,45 @@ Saat `duplicateProject()` menyalin `editor_json`, remap semua ID aset dan klip: 
 `defaultTtsProvider`, `defaultLanguage`, `exportFolder`, `llmProvider`, `llmModels` (model per penyedia LLM),
 `customBaseUrl`, `geminiTtsModel`, `elevenModel`, `imageModel`, `videoModel` (bawaan untuk proyek baru),
 `whisperAuto` (sinkron caption otomatis setelah narasi Gemini), `storyStyleProfiles` (nama, aturan gaya, dan waktu
-pembuatan; teks contoh narasi tidak disimpan).
+pembuatan; teks contoh narasi tidak disimpan), `providers` (konfigurasi per peran: llm, tts, visual dengan `activeId` dan model tersimpan),
+serta `customProviders` (daftar penyedia kustom OpenAI-compatible atau Flow2API).
 
 Kunci baru harus ada di `DEFAULT_SETTINGS` (`src/main/settings.ts`); kunci yang tidak dikenal diabaikan saat
 disimpan.
+
+## Kontinuitas Lintas Episode (`continuity_items`, Migrasi 15)
+
+Tabel `continuity_items` melacak janji naratif (mystery box, luka fisik, prop penting, hubungan) antar episode:
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | `TEXT PRIMARY KEY` | UUID item |
+| `project_id` | `TEXT` | ID proyek pemilik |
+| `kind` | `TEXT` | Kategori: `plot_thread`, `character_state`, `prop`, `lore` |
+| `name` | `TEXT` | Judul singkat item |
+| `detail` | `TEXT` | Penjelasan visual atau naratif |
+| `status` | `TEXT` | Status: `open` (belum tuntas), `paid` (terbayar), `dropped` (dibatalkan) |
+| `tier` | `TEXT` | Prioritas: `hot` (harus dibayar dalam 3 episode), `cold` (jangka panjang) |
+| `planted_episode_id` | `TEXT` | ID episode tempat item pertama kali muncul |
+| `payoff_episode_id` | `TEXT NULL` | ID episode tempat payoff terjadi |
+| `created_at` | `INTEGER` | Timestamp pembuatan |
+
+Script Doctor memicu peringatan `CONTINUITY_OPEN_TOO_LONG` jika item berstatus `hot` masih `open` selama 3 episode atau lebih.
+
+## Riwayat Versi & Snapshot Naskah (`script_versions`, Migrasi 16)
+
+Tabel `script_versions` mencatat revisi draf naskah per episode untuk rollback dan backup manual:
+
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` | `TEXT PRIMARY KEY` | UUID versi |
+| `episode_id` | `TEXT` | ID episode |
+| `draft_json` | `TEXT` | Snapshot struktur `EpisodeScriptDraft` (shots & proposed new assets) |
+| `note` | `TEXT NULL` | Catatan versi (otomatis dari AI planner / konfirmasi atau manual pengguna) |
+| `created_at` | `INTEGER` | Timestamp versi |
+
+## Override Lembar Referensi per Shot (`clips.reference_asset_ids_json`, Migrasi 17)
+
+Kolom `reference_asset_ids_json` di tabel `clips` menyimpan array `string[]` berisi ID aset referensi khusus untuk shot tersebut.
+Jika kolom ini terisi (panjang > 0), `collectReferenceSheets` memprioritaskan aset kustom ini sebelum mengisi slot referensi otomatis dari karakter/lokasi/prop yang terhubung ke adegan. Basis hash gambar (`meta.basisHash`) sensitif terhadap perubahan array ini.
+
