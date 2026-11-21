@@ -26,6 +26,9 @@ Fase 1  Fondasi episode ──► Fase 2  Studio Hub & Lorebook ──► Fase 3
   di awal fase itu berdasarkan kondisi kode terbaru.
 - **Uji suara Veo** (3–4 shot dialog bahasa Indonesia, tokoh yang sama) wajib sebelum fase 4 dimulai. Jika gagal,
   §6.C spec diganti ke `dialog_audio = 'tts'` + lip-sync sebelum fase 4 dirinci.
+- **Ditunda (2026-11-21):** uji suara Veo dan Checkpoint 4 dijalankan setelah aplikasi siap, yaitu setelah tombol
+  dan fitur alur serial (fase 6) jelas. Fase 6 boleh dimulai tanpa menunggu keduanya; jalur
+  `dialog_audio = 'tts'` tetap menjadi cadangan bila uji Veo gagal nanti.
 
 ## Aturan kerja (berlaku semua fase)
 
@@ -189,6 +192,127 @@ tombol cepat gerak kamera, auto-draft 1 klik, preset subtitle kreatif, ekspor dr
 dari gambar referensi, pemeriksaan otomatis video, riwayat versi dengan rollback, lip-sync TTS lewat model
 ber-`audio_url`.
 
+## Fase 6 — Penyempurnaan alur serial
+
+Tujuan: pengguna bisa menetapkan skala serial, memahami langkah berikutnya, dan menjalankan pekerjaan berulang
+secara massal tanpa kehilangan kendali atas draf atau biaya generate.
+
+- Dikerjakan di branch sendiri (mis. `fase-6-alur-serial`), dibuat dari branch fase 4 setelah perubahan terakhirnya
+  di-commit.
+- Urutan yang disarankan: **35 → 32 → 31 → 34 → 33** (dari yang kecil dan berisiko rendah ke yang terbesar).
+- Setiap tugas di bawah punya bagian **Catatan kode**: temuan dari pengecekan kode 2026-11-21 yang harus dijawab
+  saat tugas itu dirinci.
+
+### Tugas 31 — Target jumlah dan durasi serial
+- Tambahkan pengaturan jumlah episode yang diinginkan di Episode Hub, di samping target durasi per episode.
+- Tampilkan estimasi total durasi (jumlah episode × durasi target); jika jumlah episode atau durasi diubah,
+  perbarui estimasi langsung. Contoh: 3 episode × 2 menit = sekitar 6 menit.
+- Teruskan jumlah episode yang diminta ke planner agar hasil perencanaan menargetkan jumlah tersebut. Jika sumber
+  cerita tidak cocok dengan target, tampilkan hasil/selisihnya dan biarkan pengguna meninjau, bukan diam-diam
+  mengklaim target tercapai.
+- Validasi batas durasi total serial maksimal 1 jam; jelaskan cara menyesuaikan target bila jumlah × durasi
+  melampaui batas.
+- Periksa pilihan durasi saat ini (45–120 detik di UI, dibatasi 30–180 detik di planner) agar target baru yang
+  lebih panjang dapat diatur tanpa nilai UI dan batas planner berbeda.
+- Berkas utama: `src/renderer/src/pages/project/EpisodeHub.tsx`, tipe/API dan `src/main/story.ts` untuk input
+  planner; migrasi hanya jika pengaturan perlu disimpan dan tidak cocok dengan kolom yang sudah ada.
+- Kriteria selesai: jumlah episode dan durasi dapat diatur; estimasi total benar; planner menerima target jumlah;
+  serial di atas satu jam ditolak atau diberi jalur koreksi yang jelas.
+- Catatan kode:
+  - Planner memecah sumber per ±9.000 karakter (`planWindows`, `PLAN_WINDOW_CHARS` di `story.ts`) dan memanggil
+    LLM sekali per potongan. Target jumlah episode harus dibagi ke setiap potongan (mis. sebanding panjang
+    potongan), dan mode `continue` harus tahu sisa target dari episode yang sudah tersimpan.
+  - Batas durasi episode saat ini tertulis dua kali di `story.ts` (`Math.max(30, Math.min(…, 180))` untuk input dan
+    untuk tiap hasil) dan UI hanya menawarkan 45–120 detik. Pindahkan batas ke satu konstanta di `src/shared/` yang
+    dipakai UI dan planner.
+  - Dengan maksimal 180 detik per episode, batas 1 jam = paling banyak 20 episode × 3 menit. Tentukan yang divalidasi:
+    target (jumlah × durasi) sebelum planner jalan, lalu tampilkan selisih terhadap jumlah `durationSec` hasil
+    planner sesudahnya.
+  - `Project` belum punya tempat untuk jumlah episode target (`episodeCount` hanya ada di `ProjectSummary` dan
+    berarti jumlah episode yang ada). Kemungkinan perlu migrasi kolom baru di `projects` + `docs/data-model.md`.
+
+### Tugas 32 — Navigasi lanjut dan ringkasan progres
+- Tambahkan tombol lanjut yang kontekstual di Episode Hub, termasuk **Lanjut ke Lorebook** setelah perencanaan
+  episode selesai.
+- Di Lorebook, sediakan aksi lanjut ke penulisan naskah setelah aset yang diperlukan ditinjau/dibuat.
+- Tampilkan progres serial: episode yang direncanakan, draf naskah, sudah dikonfirmasi, aset yang belum punya
+  lembar, dan gambar/video adegan yang belum dibuat.
+- Berkas utama: `EpisodeHub.tsx`, `LorebookPage.tsx`, dan komponen navigasi/progres yang sudah ada.
+- Kriteria selesai: pengguna selalu melihat langkah berikutnya dan progresnya; tombol membuka layar/episode yang
+  tepat tanpa mengubah atau mengonfirmasi draf secara otomatis.
+- Catatan kode: data progres sudah ada (`Episode.status`, `scriptDraft`, `sheetAssetId`, status hasil klip). Hitung
+  lewat fungsi di `src/shared/validation.ts` (mis. `getClipImageStatus`/`getClipVideoStatus`) supaya angka ringkasan
+  sama dengan badge Storyboard, bukan menghitung ulang di halaman.
+
+### Tugas 33 — Generate lembar Lorebook secara batch
+- Tambahkan aksi batch untuk lembar karakter, varian kostum, lokasi, dan prop yang belum memiliki hasil.
+- Sebelum mulai, tampilkan jenis/jumlah aset, estimasi biaya yang tersedia, dan aset yang terblokir beserta
+  alasannya. Jangan mulai batch jika prasyarat generate tidak terpenuhi.
+- Pertahankan generate satu aset secara individual; batch tidak boleh menimpa lembar yang sudah ada kecuali
+  pengguna memilih secara eksplisit untuk menyertakan hasil basi/membuat ulang.
+- Ikuti pola estimasi dan pemeriksaan batch di Tugas 29, serta dukung status/progres dan pembatalan bila job
+  berjalan.
+- Berkas utama: `LorebookPage.tsx`, API/preload/IPC, serta generator dan estimasi aset Lorebook di
+  `src/main/generation.ts`.
+- Kriteria selesai: batch hanya memproses aset yang dipilih dan memenuhi prasyarat; estimasi/status sesuai dengan
+  item yang dijalankan; lembar lama tidak terganti tanpa pilihan eksplisit.
+- Catatan kode:
+  - Varian kostum bergantung pada lembar dasar: `generateDerivativeSheet` menolak bila karakter belum punya
+    `sheetAssetId`. Batch harus dua gelombang: lembar karakter dasar (plus lokasi/prop) dulu, lalu varian setelah job
+    lembar dasarnya selesai. Varian yang lembar dasarnya ikut dibuat di batch yang sama tidak boleh dianggap
+    terblokir.
+  - Belum ada fungsi status lembar. Hash basis sudah tersimpan di `asset.meta.basisHash`
+    (`compute*SheetBasisHash` di `shared/hash.ts`), tetapi status basi hanya dihitung di `LorebookPage.tsx` dan hanya
+    untuk varian. Tambahkan fungsi status lembar (terkini/basi/belum ada/terblokir) di `shared/validation.ts`, setara
+    `getClipImageStatus`, dan pakai di halaman dan batch.
+  - `planBatch`/`batchEstimate` di `generation.ts` masih khusus klip; buat versi untuk aset Lorebook atau jadikan
+    generik. Pembatalan bisa memakai `jobs.cancelProject(projectId, 'sheet')`.
+
+### Tugas 34 — Buat draf naskah untuk semua episode
+- Tambahkan tombol **Buat semua naskah** di sebelah kanan judul daftar episode di Episode Hub.
+- Buat draf hanya untuk episode yang belum memiliki draf/klip naskah; jangan menimpa draf atau klip yang sudah
+  ada tanpa persetujuan eksplisit.
+- Jalankan secara berurutan, tampilkan episode/progres yang sedang dikerjakan, dan laporkan episode yang gagal
+  agar pengguna bisa mencoba lagi.
+- Aksi ini hanya membuat draf untuk ditinjau; tidak mengonfirmasi rencana, mendaftarkan usulan aset, atau
+  mengganti klip secara otomatis.
+- Berkas utama: `EpisodeHub.tsx`, `src/main/story.ts`, dan API/preload/IPC jika diperlukan untuk orkestrasi batch.
+- Kriteria selesai: draf dibuat untuk episode yang memenuhi syarat; episode yang sudah ada tetap utuh; kegagalan
+  satu episode tidak menghapus atau mengganti hasil episode lain.
+- Catatan kode:
+  - `planEpisodeScript` selalu menimpa `scriptDraft` (`updateEpisode(episodeId, { scriptDraft: draft })`). Syarat
+    "belum punya draf" dicek di main, bukan hanya di UI: episode berstatus `planned`, `scriptDraft` kosong, dan tanpa
+    klip.
+  - Fungsi ini memanggil LLM langsung, tidak lewat sistem job, jadi tidak bisa dibatalkan dengan `jobs.cancel`.
+    Pilih: orkestrasi berurutan di renderer dengan tombol "Berhenti setelah episode ini", atau fungsi batch baru di
+    main dengan `AbortSignal`.
+  - Draf episode N membaca episode sebelum dan sesudahnya, jadi urutan berurutan (bukan paralel) memang wajib.
+
+### Tugas 35 — Hapus semua episode
+- Tambahkan tombol **Hapus semua episode** di sebelah kanan judul daftar episode.
+- Gunakan dialog konfirmasi bahaya yang menyebut bahwa seluruh episode dan klipnya akan dihapus, tetapi sumber
+  cerita dan Lorebook tetap dipertahankan.
+- Tangani episode aktif dan job yang sedang berjalan dengan aman; muat ulang state setelah penghapusan dan
+  tampilkan keadaan kosong yang menawarkan mulai lagi.
+- Berkas utama: `EpisodeHub.tsx` dan API/repo hanya jika operasi hapus massal belum dapat dilakukan dengan aman
+  melalui mekanisme penghapusan episode yang ada.
+- Kriteria selesai: setelah konfirmasi semua episode/klip hilang, Lorebook dan sumber serial tetap ada, dan UI
+  kembali ke keadaan kosong; batal tidak mengubah apa pun.
+- Catatan kode: mekanisme yang ada tidak cukup, perlu fungsi repo baru (mis. `removeAllEpisodes`) dalam satu
+  transaksi.
+  - `removeEpisode` hanya `DELETE FROM episodes`; klip ikut terhapus lewat `ON DELETE CASCADE`, tetapi setting
+    `plan_progress:<projectId>` tertinggal sehingga "Lanjutkan perencanaan" mengira sumber sudah tercakup.
+    `clearEpisodesForReplan` membersihkannya, tetapi menolak bila ada klip.
+  - `assets.episode_id` dan `jobs.episode_id` tidak punya foreign key. Batalkan job proyek yang berjalan
+    (`cancelProject`) sebelum menghapus, dan putuskan nasib aset gambar/video/suara klip yang tertinggal (hapus file
+    atau biarkan) — catat keputusannya di `docs/keputusan-teknis.md`.
+  - Proyek baru selalu dibuat dengan "Episode 1". Periksa store, editor, ekspor, dan devharness tetap aman saat
+    proyek tanpa episode sama sekali (store `removeEpisode` sudah menangani daftar kosong; bagian lain belum).
+
+- **Checkpoint 6** — typecheck/build bersih; dev harness memakai `STUDIO_USER_DATA` sementara; verifikasi target
+  durasi, navigasi, batch Lorebook, pembuatan draf massal, dan penghapusan massal termasuk batal, kegagalan, serta
+  episode yang sudah memiliki hasil.
+
 ## Risiko
 
 | Risiko | Dampak | Penanganan |
@@ -198,3 +322,5 @@ ber-`audio_url`.
 | Pemanggil yang lupa dibatasi per episode | Klip episode lain terhapus | Typecheck sebagai daftar kerja (tugas 2) + harness `checkIsolation` |
 | Sidebar membuat editor sesak di 1180×720 | Editor sulit dipakai | Sidebar otomatis ciut di tab Editor (tugas 9) |
 | Batch generate menguras kredit | Biaya tak terduga | Estimasi kredit dan batch semua-atau-tidak-sama-sekali (tugas 29) |
+| Target jumlah/durasi tidak sesuai panjang sumber | Hasil perencanaan meleset dari ekspektasi | Tampilkan estimasi dan selisih; jangan menyatakan target tercapai bila planner menghasilkan jumlah berbeda |
+| Aksi massal menimpa draf/hasil atau menghapus data yang salah | Kehilangan pekerjaan pengguna | Draf massal hanya mengisi yang kosong; hapus semua meminta konfirmasi dan mempertahankan Lorebook/sumber |

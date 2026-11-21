@@ -39,7 +39,7 @@ Rincian setiap tugas ada di [plan.md](plan.md); desain di
 
 ## Fase 4 — Prompt, suara & generate
 
-- [ ] Prasyarat — Uji suara Veo: 3–4 shot dialog bahasa Indonesia, tokoh yang sama (ditunda sesuai instruksi).
+- [ ] Prasyarat — Uji suara Veo: 3–4 shot dialog bahasa Indonesia, tokoh yang sama (ditunda sampai aplikasi siap dan fitur fase 6 jelas).
 - [x] Tugas 23 — Flag `nativeAudio`, prompt dialog, suara tidak dimatikan untuk klip dialog.
 - [x] Tugas 24 — Ekstraksi audio video + Whisper menjadi aset audio klip.
 - [x] Tugas 25 — Take TTS per suara untuk narator.
@@ -48,7 +48,7 @@ Rincian setiap tugas ada di [plan.md](plan.md); desain di
 - [x] Tugas 28 — Hash basis, status hasil, badge di Storyboard.
 - [x] Tugas 29 — Batch "Buat yang belum ada", estimasi kredit, total kredit per episode.
 - [x] Tugas 30 — Catat perubahan keputusan teknis.
-- [ ] Checkpoint 4 — sampel dialog lolos, lalu kriteria fase 4.
+- [ ] Checkpoint 4 — sampel dialog lolos, lalu kriteria fase 4 (ditunda bersama uji suara Veo).
 
 ## Fase 5 — Opsional
 
@@ -64,3 +64,15 @@ Rincian setiap tugas ada di [plan.md](plan.md); desain di
 - [ ] Pemeriksaan otomatis video (layar hitam, gambar macet)
 - [ ] Riwayat versi dengan rollback
 - [ ] Lip-sync TTS lewat model ber-`audio_url`
+
+## Fase 6 — Penyempurnaan alur serial
+
+Rincian dan kriteria penerimaan: [Fase 6 di plan.md](plan.md#fase-6--penyempurnaan-alur-serial).
+Urutan pengerjaan yang disarankan: 35 → 32 → 31 → 34 → 33.
+
+- [ ] Tugas 31 — Target jumlah episode, durasi per episode, estimasi total, dan batas serial 1 jam.
+- [ ] Tugas 32 — Tombol lanjut ke Lorebook/naskah dan ringkasan progres serial.
+- [ ] Tugas 33 — Generate batch lembar Lorebook dengan estimasi biaya dan pemeriksaan prasyarat.
+- [ ] Tugas 34 — Buat draf naskah semua episode yang belum punya draf; jangan otomatis konfirmasi/menimpa.
+- [ ] Tugas 35 — Hapus semua episode dengan konfirmasi; pertahankan sumber cerita dan Lorebook.
+- [ ] Checkpoint 6 — typecheck/build dan verifikasi alur/batch massal lewat dev harness.
