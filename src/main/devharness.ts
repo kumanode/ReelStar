@@ -7,8 +7,8 @@ import ffmpegStatic from 'ffmpeg-static'
 import { estimateWordTimings } from '@shared/captions'
 import { anchorPoint } from '@shared/overlays'
 import { NO_MUSIC, NO_MUSIC_DIALOG, modelSupportsNativeAudio } from '@shared/higgsfield'
-import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt } from '@shared/prompts'
-import { computeClipImageBasisHash, computeClipVideoBasisHash, computeDerivativeSheetBasisHash } from '@shared/hash'
+import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt, hasReferenceOverride } from '@shared/prompts'
+import { computeCharacterSheetBasisHash, computeClipImageBasisHash, computeClipVideoBasisHash, computeDerivativeSheetBasisHash } from '@shared/hash'
 import {
   MAX_EPISODE_DURATION_SEC,
   MAX_SERIES_DURATION_SEC,
@@ -19,6 +19,7 @@ import {
   getClipImageStatus,
   getClipVideoStatus,
   getDerivativeSheetStatus,
+  isVideoDialogue,
   planBatch,
   planBatchSheets,
   referenceLimit,
@@ -32,7 +33,7 @@ import { checkLockCompliance } from '@shared/lock'
 import { resolveActive } from '@shared/providers'
 import { exportDeliveryPackage } from './package'
 import { startExport } from './exporter'
-import { assetAbsPath, binPath } from './paths'
+import { assetAbsPath, binPath, dataDir } from './paths'
 import { extractAudio, probeDurationMs, probeHasAudio } from './services/audio'
 import { parts } from './narration'
 import {
@@ -62,7 +63,7 @@ import {
   updateDerivative
 } from './repo'
 import { getSettings, setSettings } from './settings'
-import { needsScriptDraft, planEpisodes, splitEpisodeTarget, writePrompts } from './story'
+import { mergeLorebookCandidates, needsScriptDraft, planEpisodes, splitEpisodeTarget, writePrompts } from './story'
 import { batchEstimate, batchEstimateSheets, derivativeWaveBlocker, extractVideoDialogueAudio, generateMissingImages, seriesProgress, setActiveAsset } from './generation'
 import { recordCheck, setSecret } from './secrets'
 import type { ApiProvider, Asset, Character, Clip, DraftShot, EpisodeScriptDraft, ExportOptions } from '@shared/types'
@@ -1409,11 +1410,40 @@ export async function checkPhase8(projectId: string): Promise<boolean> {
   }
 
   // 8. Test Delivery Package Exporter (Tugas 52)
-  const pkgPath = await exportDeliveryPackage(projectId, ep.id)
+  // Into the harness data folder: a test run must never write into the creator's real Videos folder.
+  const pkgPath = await exportDeliveryPackage(projectId, ep.id, undefined, join(dataDir(), 'tmp', 'harness-delivery.zip'))
   if (!pkgPath || !existsSync(pkgPath) || !pkgPath.endsWith('.zip')) {
     throw new Error(`exportDeliveryPackage gagal menghasilkan file zip yang valid: ${pkgPath}`)
   }
   console.log(`[checkPhase8] Paket pengiriman berhasil diekspor ke: ${pkgPath}`)
+
+  // 9. Regression guards from the phase 7–8 review.
+  // a) A clip without a manual choice reads back as automatic references, and stays so after a save and a patch.
+  const refBundle = getBundle(projectId, ep.id)
+  const refClip = refBundle.clips[0]
+  if (refClip) {
+    saveSnapshot({ project: refBundle.project, episodeId: ep.id, characters: refBundle.characters, clips: refBundle.clips.map((c) => ({ ...c, referenceAssetIds: null })) })
+    patchClip(refClip.id, { referenceAssetIds: null })
+    const back = getClip(refClip.id)
+    if (back.referenceAssetIds !== null) throw new Error(`Referensi otomatis tersimpan sebagai ${JSON.stringify(back.referenceAssetIds)}, bukan null`)
+    if (hasReferenceOverride({ referenceAssetIds: [] })) throw new Error('Daftar referensi kosong tidak boleh dianggap override')
+  }
+  // b) An empty profile ({} from the database) hashes like no profile, so a fresh sheet is not "stale".
+  const sheetBase = { name: 'Rani', description: 'x', styleId: 's', imageModel: 'm' }
+  if (computeCharacterSheetBasisHash({ ...sheetBase, profile: {} }) !== computeCharacterSheetBasisHash(sheetBase)) {
+    throw new Error('Profil kosong mengubah hash lembar karakter')
+  }
+  // c) Off-screen and voice-over lines never go to the video model's lip sync, even with a speaker set.
+  const vdClip = { speakerId: 'c1', narration: 'Halo' }
+  if (!isVideoDialogue({ dialogAudio: 'video' }, vdClip)) throw new Error('Dialog di layar harus disuarakan model video')
+  for (const t of ['os', 'vo', 'narration'] as const) {
+    if (isVideoDialogue({ dialogAudio: 'video' }, { ...vdClip, shotDetail: { dialogueType: t } })) throw new Error(`Klip ${t} tidak boleh dianggap dialog video`)
+  }
+  // d) Lorebook candidates from different source parts merge by name and alias.
+  const cand = (name: string, aliases: string[] = []) => ({ tempId: randomUUID(), name, description: '', aliases }) as never
+  const into = { characters: [cand('Rani', ['Rani Pratama'])], derivatives: [], locations: [], props: [] }
+  mergeLorebookCandidates(into, { characters: [cand('Rani Pratama'), cand('Bima')], derivatives: [], locations: [], props: [] })
+  if (into.characters.length !== 2) throw new Error(`Kandidat ganda tidak digabung: ${into.characters.length} tokoh`)
 
   console.log('[checkPhase8] Semua pengujian backend Fase 8 BERHASIL!')
   return true

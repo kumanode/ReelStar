@@ -217,8 +217,21 @@ const toClip = (r: Row): Clip => ({
   sourceExcerpt: r.source_excerpt ?? '',
   shotDetail: r.shot_detail_json ? JSON.parse(r.shot_detail_json) : {},
   continueFromPrevious: Boolean(r.continue_from_previous),
-  referenceAssetIds: r.reference_asset_ids_json ? JSON.parse(r.reference_asset_ids_json) : null
+  referenceAssetIds: referenceOverrideFromDb(r.reference_asset_ids_json)
 })
+
+/**
+ * The column is NOT NULL with '[]' as its default, so an empty list is what every clip without a manual choice
+ * stores. It must read back as "automatic" (null); an empty override would generate shots with no references.
+ */
+function referenceOverrideFromDb(raw: string | null): string[] | null {
+  try {
+    const ids = raw ? (JSON.parse(raw) as unknown) : null
+    return Array.isArray(ids) && ids.length ? ids.filter((x): x is string => typeof x === 'string') : null
+  } catch {
+    return null
+  }
+}
 
 export const toAsset = (r: Row): Asset => ({
   id: r.id,
@@ -708,7 +721,7 @@ export function saveSnapshot(snap: ProjectSnapshot): number {
         sourceExcerpt: c.sourceExcerpt ?? '',
         shotDetailJson: JSON.stringify(c.shotDetail || {}),
         continueFromPrevious: c.continueFromPrevious ? 1 : 0,
-        referenceAssetIdsJson: JSON.stringify(c.referenceAssetIds || [])
+        referenceAssetIdsJson: JSON.stringify(c.referenceAssetIds ?? [])
       })
   })()
   return now
@@ -1571,6 +1584,8 @@ export function patchClip(id: string, patch: Partial<Clip>): void {
     .run(
       ...entries.map(([k, v]) => {
         if (k === 'continueFromPrevious') return v ? 1 : 0
+        // null means "automatic", stored as the column's '[]' default (the column is NOT NULL).
+        if (k === 'referenceAssetIds') return JSON.stringify(v ?? [])
         return v !== null && typeof v === 'object' ? JSON.stringify(v) : v
       }),
       id
@@ -1609,7 +1624,7 @@ export function insertClipAfter(afterId: string, c: Clip): void {
       sourceExcerpt: c.sourceExcerpt ?? '',
       shotDetailJson: JSON.stringify(c.shotDetail || {}),
       continueFromPrevious: c.continueFromPrevious ? 1 : 0,
-      referenceAssetIdsJson: JSON.stringify(c.referenceAssetIds || [])
+      referenceAssetIdsJson: JSON.stringify(c.referenceAssetIds ?? [])
     })
   })()
 }

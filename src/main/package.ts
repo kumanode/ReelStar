@@ -69,6 +69,15 @@ function collectAllFiles(dir: string, baseDir: string = dir): string[] {
   return results
 }
 
+
+/**
+ * Windows' own bsdtar writes zip archives. A bare "tar.exe" can resolve to Git's GNU tar when Git sits earlier in
+ * PATH; GNU tar reads "C:\..." as a remote host and cannot write zips, so the system copy is called by its path.
+ */
+function windowsTar(): string {
+  const systemTar = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe')
+  return existsSync(systemTar) ? systemTar : 'tar.exe'
+}
 export async function exportDeliveryPackage(
   projectId: string,
   episodeId?: string,
@@ -264,7 +273,7 @@ export async function exportDeliveryPackage(
       rmSync(finalZipPath, { force: true })
     }
 
-    await execFileAsync('tar.exe', ['-a', '-c', '-f', finalZipPath, '-C', stagingDir, '.'])
+    await execFileAsync(windowsTar(), ['-a', '-c', '-f', finalZipPath, '-C', stagingDir, '.'])
 
     return finalZipPath
   } finally {

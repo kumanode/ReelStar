@@ -123,6 +123,7 @@ import * as llm from './services/llm'
 import {
   confirmEpisodeScript,
   extractLorebookFromStory,
+  cancelLorebookExtraction,
   generateVisuals,
   generateMusicPrompt,
   generateThumbnailConcept,
@@ -354,6 +355,7 @@ export function registerIpc(): void {
   handle('lorebook:assetUsage', (projectId: string, kind: 'character' | 'derivative' | 'location' | 'prop', id: string) => getAssetUsage(projectId, kind, id))
   handle('lorebook:merge', (input: MergeAssetInput) => mergeAssets(input))
   handle('lorebook:extract', (projectId: string) => extractLorebookFromStory(projectId))
+  handle('lorebook:cancelExtract', (projectId: string) => cancelLorebookExtraction(projectId))
   handle('lorebook:acceptCandidates', (input: any) => acceptLorebookCandidates(input))
 
   handle('story:planEpisodes', (input: PlanEpisodesInput) => planEpisodes(input))

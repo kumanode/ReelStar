@@ -8,12 +8,8 @@ import { getStyle, NO_TEXT } from '@shared/styles'
 import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt } from '@shared/prompts'
 import { resolveActive } from '@shared/providers'
 import {
-  computeCharacterSheetBasisHash,
   computeClipTtsBasisHash,
   computeClipVideoBasisHash,
-  computeDerivativeSheetBasisHash,
-  computeLocationSheetBasisHash,
-  computePropSheetBasisHash
 } from '@shared/hash'
 import {
   checkClipImagePrerequisites,
@@ -472,6 +468,11 @@ function isFlow2Api(): boolean {
 }
 
 /** Everything the shared status and prerequisite rules read, gathered once per call. */
+/** The image model picked under Pengaturan › Model aktif; projects no longer choose their own (Tugas 54). */
+function activeImageModelId(): string {
+  return resolveActive(getSettings(), 'image').model
+}
+
 function prereqContext(projectId: string, episodeId?: string): GenerationPrerequisitesContext {
   const s = getSettings()
   const activeImage = resolveActive(s, 'image')
@@ -601,7 +602,7 @@ export function generateClipImage(clipId: string): Job {
   return startHiggsfield(job, async (ctx) => {
     const fresh = getClip(clipId)
     const project = getProject(fresh.projectId)
-    const model = getImageModel(project.imageModel)
+    const model = getImageModel(activeImageModelId())
     const pctx = prereqContext(project.id)
     const allChars = pctx.characters
     const allDerivs = pctx.derivatives
@@ -704,7 +705,7 @@ export function generateThumbnail(projectId: string, req: ThumbnailRequest): Job
   }
   const job = insertJob({ projectId, kind: 'image', provider: 'higgsfield', payload: { target: 'thumbnail', variation } })
   return startHiggsfield(job, async (ctx) => {
-    const model = getImageModel(project.imageModel)
+    const model = getImageModel(activeImageModelId())
     const refs = await resolveReferenceUrls(
       model,
       chars.map((c) => ({ sheetAssetId: c.sheetAssetId || '', name: c.name })),
@@ -724,12 +725,8 @@ export function generateCharacterSheet(characterId: string): Job {
   if (existing) return existing
   const c = getCharacter(characterId)
   const project = getProject(c.projectId)
-  const basisHash = computeCharacterSheetBasisHash({
-    name: c.name,
-    description: c.description,
-    styleId: project.styleId,
-    imageModel: project.imageModel
-  })
+  // The same function the Lorebook badge uses, so a fresh sheet is never "stale" the moment it lands.
+  const basisHash = getCharacterSheetStatus(c, project, [], activeImageModelId()).basisHash
 
   if (isFlow2Api()) {
     const job = insertJob({ projectId: c.projectId, characterId, kind: 'sheet', provider: 'flow2api' })
@@ -779,7 +776,7 @@ export function generateCharacterSheet(characterId: string): Job {
 
   const job = insertJob({ projectId: c.projectId, characterId, kind: 'sheet', provider: 'higgsfield' })
   return startHiggsfield(job, async () => {
-    const model = getImageModel(project.imageModel)
+    const model = getImageModel(activeImageModelId())
     const prompt = sheetPrompt(project, getCharacter(characterId))
     return {
       endpoint: model.id,
@@ -799,11 +796,7 @@ export function generateDerivativeSheet(derivativeId: string): Job {
 
   const project = getProject(c.projectId)
   const prompt = derivativeSheetPrompt(project, c, d)
-  const basisHash = computeDerivativeSheetBasisHash({
-    baseSheetAssetId: c.sheetAssetId,
-    promptChange: d.promptChange,
-    imageModel: project.imageModel
-  })
+  const basisHash = getDerivativeSheetStatus(d, c, project, [], false, activeImageModelId()).basisHash
 
   if (isFlow2Api()) {
     const job = insertJob({ projectId: c.projectId, characterId: c.id, kind: 'sheet', provider: 'flow2api', payload: { target: 'derivative-sheet', derivativeId } })
@@ -857,7 +850,7 @@ export function generateDerivativeSheet(derivativeId: string): Job {
 
   const job = insertJob({ projectId: c.projectId, characterId: c.id, kind: 'sheet', provider: 'higgsfield', payload: { target: 'derivative-sheet', derivativeId } })
   return startHiggsfield(job, async (ctx) => {
-    const model = getImageModel(project.imageModel)
+    const model = getImageModel(activeImageModelId())
     const refUrl = await publicUrlFor(baseSheet, ctx.signal)
     return {
       endpoint: model.id,
@@ -872,12 +865,7 @@ export function generateLocationSheet(locationId: string): Job {
   if (!l) throw new Error('Lokasi tidak ditemukan')
   const project = getProject(l.projectId)
   const prompt = locationSheetPrompt(project, l)
-  const basisHash = computeLocationSheetBasisHash({
-    name: l.name,
-    description: l.description,
-    styleId: project.styleId,
-    imageModel: project.imageModel
-  })
+  const basisHash = getLocationSheetStatus(l, project, [], activeImageModelId()).basisHash
 
   if (isFlow2Api()) {
     const job = insertJob({ projectId: l.projectId, kind: 'image', provider: 'flow2api', payload: { target: 'location-sheet', locationId } })
@@ -923,7 +911,7 @@ export function generateLocationSheet(locationId: string): Job {
 
   const job = insertJob({ projectId: l.projectId, kind: 'image', provider: 'higgsfield', payload: { target: 'location-sheet', locationId } })
   return startHiggsfield(job, async () => {
-    const model = getImageModel(project.imageModel)
+    const model = getImageModel(activeImageModelId())
     return {
       endpoint: model.id,
       body: imageBody(model, prompt, '16:9', []),
@@ -937,12 +925,7 @@ export function generatePropSheet(propId: string): Job {
   if (!pr) throw new Error('Prop tidak ditemukan')
   const project = getProject(pr.projectId)
   const prompt = propSheetPrompt(project, pr)
-  const basisHash = computePropSheetBasisHash({
-    name: pr.name,
-    description: pr.description,
-    styleId: project.styleId,
-    imageModel: project.imageModel
-  })
+  const basisHash = getPropSheetStatus(pr, project, [], activeImageModelId()).basisHash
 
   if (isFlow2Api()) {
     const job = insertJob({ projectId: pr.projectId, kind: 'image', provider: 'flow2api', payload: { target: 'prop-sheet', propId } })
@@ -988,7 +971,7 @@ export function generatePropSheet(propId: string): Job {
 
   const job = insertJob({ projectId: pr.projectId, kind: 'image', provider: 'higgsfield', payload: { target: 'prop-sheet', propId } })
   return startHiggsfield(job, async () => {
-    const model = getImageModel(project.imageModel)
+    const model = getImageModel(activeImageModelId())
     return {
       endpoint: model.id,
       body: imageBody(model, prompt, '16:9', []),
@@ -1299,7 +1282,7 @@ export async function batchEstimate(
     if (ctx.isFlow2Api) return null
     const seconds = kind === 'video' ? videoSecondsFor(project, clip, ctx).seconds : 0
     if (!priceBySeconds.has(seconds)) {
-      const est = await estimateCredits(kind, (kind === 'image' ? project.imageModel : project.videoModel) || '', project.aspectRatio, seconds || 5, project.videoResolution).catch(() => null)
+      const est = await estimateCredits(kind, (kind === 'image' ? ctx.activeImageModel : ctx.activeVideoModel) || '', project.aspectRatio, seconds || 5, project.videoResolution).catch(() => null)
       priceBySeconds.set(seconds, est?.credits ?? null)
     }
     return priceBySeconds.get(seconds) ?? null
@@ -1348,12 +1331,13 @@ function sheetBatchItems(
   const project = getProject(projectId)
   const characters = charactersOf(projectId)
   const assets = assetsOf(projectId)
+  const model = activeImageModelId()
 
   const charItems: SheetBatchItem[] = characters.map((c) => ({
     id: c.id,
     name: c.name,
     kind: 'character',
-    status: getCharacterSheetStatus(c, project, assets)
+    status: getCharacterSheetStatus(c, project, assets, model)
   }))
   const charTargets = new Set(
     charItems.filter((i) => i.status.status === 'missing' || (includeStale && i.status.status === 'stale')).map((i) => i.id)
@@ -1367,20 +1351,20 @@ function sheetBatchItems(
       id: d.id,
       name: `${parent ? parent.name + ' - ' : ''}${d.name}`,
       kind: 'derivative',
-      status: getDerivativeSheetStatus(d, parent, project, assets, baseWillBeGenerated)
+      status: getDerivativeSheetStatus(d, parent, project, assets, baseWillBeGenerated, model)
     }
   })
   const locItems: SheetBatchItem[] = locationsOf(projectId).map((l) => ({
     id: l.id,
     name: l.name,
     kind: 'location',
-    status: getLocationSheetStatus(l, project, assets)
+    status: getLocationSheetStatus(l, project, assets, model)
   }))
   const propItems: SheetBatchItem[] = propsOf(projectId).map((p) => ({
     id: p.id,
     name: p.name,
     kind: 'prop',
-    status: getPropSheetStatus(p, project, assets)
+    status: getPropSheetStatus(p, project, assets, model)
   }))
 
   const all = [...charItems, ...derivItems, ...locItems, ...propItems]

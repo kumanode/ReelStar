@@ -1385,20 +1385,110 @@ export async function extractLorebookFromStory(projectId: string): Promise<Loreb
     p.seriesGuidelines ? `Creator guidelines for this series:\n${p.seriesGuidelines}` : ''
   ].filter(Boolean).join('\n\n')
 
-  const prompt = [
-    `Series Title: ${p.title}`,
-    `Series Synopsis: ${p.synopsis}`,
-    epSummaries ? `Planned Episodes:\n${epSummaries}` : '',
-    `Source Story Content:\n"""\n${source.slice(0, 15000)}\n"""`
-  ].filter(Boolean).join('\n\n')
+  const merged: LorebookExtractionResult = { characters: [], derivatives: [], locations: [], props: [] }
+  // The whole source is read part by part like the episode planner, so characters, places and props that only
+  // appear late in a long novel are found too. Each part sees the names found so far, to reuse them, and the
+  // results are merged by name and alias.
+  const windows = planWindows(source, 0)
+  const ctrl = new AbortController()
+  lorebookExtractControllers.get(projectId)?.abort()
+  lorebookExtractControllers.set(projectId, ctrl)
+  try {
+    for (const [wi, w] of windows.entries()) {
+      if (ctrl.signal.aborted) break
+      const label = windows.length > 1 ? `bagian ${wi + 1} dari ${windows.length}` : 'cerita'
+      emit.storyProgress({ projectId, message: `Mengekstrak Lorebook dari ${label}...` })
+      const known = [...merged.characters, ...merged.locations, ...merged.props].map((x) => x.name)
+      const prompt = [
+        `Series Title: ${p.title}`,
+        `Series Synopsis: ${p.synopsis}`,
+        epSummaries ? `Planned Episodes:\n${epSummaries}` : '',
+        known.length ? `Already found in earlier parts (reuse these exact names when they appear again):\n${known.join(', ')}` : '',
+        `Source Story Content (${label}):\n"""\n${source.slice(w.start, w.end)}\n"""`
+      ].filter(Boolean).join('\n\n')
 
-  const res = await generateJson<any>({
-    system,
-    prompt,
-    schema: LOREBOOK_EXTRACTION_SCHEMA,
-    name: 'lorebook_extraction'
+      let res: any
+      try {
+        res = await generateJson<any>({ system, prompt, schema: LOREBOOK_EXTRACTION_SCHEMA, name: 'lorebook_extraction', signal: ctrl.signal })
+      } catch (e) {
+        if (ctrl.signal.aborted) break
+        // Earlier parts are kept: the creator can still review them instead of losing the whole run.
+        if (merged.characters.length || merged.locations.length || merged.props.length) {
+          emit.storyProgress({
+            projectId,
+            message: `Gagal mengekstrak ${label}: ${e instanceof Error ? e.message : String(e)}. Hasil bagian sebelumnya tetap bisa ditinjau.`
+          })
+          break
+        }
+        throw e
+      }
+      mergeLorebookCandidates(merged, parseLorebookCandidates(res))
+    }
+  } finally {
+    if (lorebookExtractControllers.get(projectId) === ctrl) lorebookExtractControllers.delete(projectId)
+  }
+  emit.storyProgress({
+    projectId,
+    message: ctrl.signal.aborted
+      ? 'Ekstraksi dihentikan; hasil yang sudah ditemukan tetap bisa ditinjau.'
+      : `Ekstraksi selesai: ${merged.characters.length} karakter, ${merged.derivatives.length} kostum, ${merged.locations.length} lokasi, dan ${merged.props.length} prop.`
   })
+  return merged
+}
 
+const lorebookExtractControllers = new Map<string, AbortController>()
+
+/** Stops a running Lorebook extraction; what was found so far is still returned for review. */
+export function cancelLorebookExtraction(projectId: string): void {
+  lorebookExtractControllers.get(projectId)?.abort()
+}
+
+const nameKey = (x: string): string => x.trim().toLowerCase()
+
+/** Fills the empty fields of `a` from `b`, recursing into nested profile objects. */
+function fillEmpty<T extends object>(a: T, b: T): T {
+  const out = { ...a } as Record<string, unknown>
+  for (const [k, v] of Object.entries(b)) {
+    const cur = out[k]
+    if (cur && typeof cur === 'object' && !Array.isArray(cur) && v && typeof v === 'object') out[k] = fillEmpty(cur as object, v as object)
+    else if (cur == null || cur === '') out[k] = v
+  }
+  return out as T
+}
+
+/**
+ * Merges the candidates found in one source part into the running result. The same name or a shared alias is one
+ * entry: aliases are joined and empty fields are filled from the newer find, so no duplicate reaches the review.
+ */
+export function mergeLorebookCandidates(into: LorebookExtractionResult, add: LorebookExtractionResult): void {
+  const keysOf = (x: { name: string; aliases?: string[] }) => [x.name, ...(x.aliases ?? [])].map(nameKey).filter(Boolean)
+  const mergeList = <T extends { tempId: string; name: string; aliases?: string[] }>(list: T[], items: T[]): void => {
+    for (const item of items) {
+      const keys = new Set(keysOf(item))
+      const hit = list.find((x) => keysOf(x).some((k) => keys.has(k)))
+      if (!hit) {
+        list.push(item)
+        continue
+      }
+      const aliases = [...new Set([...(hit.aliases ?? []), item.name, ...(item.aliases ?? [])])].filter((a) => nameKey(a) !== nameKey(hit.name))
+      Object.assign(hit, fillEmpty(hit, item), { tempId: hit.tempId, name: hit.name, aliases })
+    }
+  }
+  mergeList(into.characters, add.characters)
+  mergeList(into.locations, add.locations)
+  mergeList(into.props, add.props)
+  for (const d of add.derivatives) {
+    const owner = into.characters.find((c) => keysOf(c).includes(nameKey(d.characterName)))
+    const ownerKeys = new Set(owner ? keysOf(owner) : [nameKey(d.characterName)])
+    // Variants follow their character's main name, so the review links them to one entry.
+    const item = owner ? { ...d, characterName: owner.name } : d
+    const same = into.derivatives.find((x) => nameKey(x.name) === nameKey(d.name) && ownerKeys.has(nameKey(x.characterName)))
+    if (same) Object.assign(same, fillEmpty(same, item), { tempId: same.tempId })
+    else into.derivatives.push(item)
+  }
+}
+
+function parseLorebookCandidates(res: any): LorebookExtractionResult {
   const rawChars = Array.isArray(res.characters) ? res.characters : []
   const rawDerivs = Array.isArray(res.derivatives) ? res.derivatives : []
   const rawLocs = Array.isArray(res.locations) ? res.locations : []
@@ -1463,15 +1553,5 @@ export async function extractLorebookFromStory(projectId: string): Promise<Loreb
     }
   })).filter((pr: CandidateProp) => Boolean(pr.name))
 
-  emit.storyProgress({
-    projectId,
-    message: `Ekstraksi selesai: ditemukan ${characters.length} karakter, ${derivatives.length} kostum, ${locations.length} lokasi, dan ${props.length} prop.`
-  })
-
-  return {
-    characters,
-    derivatives,
-    locations,
-    props
-  }
+  return { characters, derivatives, locations, props }
 }

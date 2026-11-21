@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { dialogVoiceNote } from '@shared/validation'
 import { AudioLines, Check, Clapperboard, Copy, ExternalLink, Film, FolderOpen, Layers, Mic, Move, Music, Play, Sparkles, Type, Upload, Volume2, X } from 'lucide-react'
-import { collectReferenceSheets } from '@shared/prompts'
+import { collectReferenceSheets, hasReferenceOverride } from '@shared/prompts'
 import {
   CAPTION_FONTS,
   CAPTION_POSITIONS,
@@ -167,9 +167,9 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <span className="text-xs text-muted">
-              {Array.isArray(clip.referenceAssetIds) ? 'Override Manual' : 'Otomatis dari Tokoh/Lokasi'} ({refItems.length})
+              {hasReferenceOverride(clip) ? 'Override Manual' : 'Otomatis dari Tokoh/Lokasi'} ({refItems.length})
             </span>
-            {Array.isArray(clip.referenceAssetIds) && (
+            {hasReferenceOverride(clip) && (
               <button
                 type="button"
                 onClick={() => updateClip(clip.id, { referenceAssetIds: null })}
@@ -201,7 +201,7 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
                       title="Lepas referensi"
                       onClick={() => {
                         const nextIds = refItems.map((r) => r.sheetAssetId).filter((id) => id !== ref.sheetAssetId)
-                        updateClip(clip.id, { referenceAssetIds: nextIds })
+                        updateClip(clip.id, { referenceAssetIds: nextIds.length ? nextIds : null })
                       }}
                       className="text-muted hover:text-bad"
                     >

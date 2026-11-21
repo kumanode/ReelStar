@@ -63,6 +63,7 @@ const api: StudioApi = {
     assetUsage: call('lorebook:assetUsage'),
     merge: call('lorebook:merge'),
     extract: call('lorebook:extract'),
+    cancelExtract: call('lorebook:cancelExtract'),
     acceptCandidates: call('lorebook:acceptCandidates')
   },
   story: {

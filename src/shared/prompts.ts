@@ -43,6 +43,11 @@ export function splitAvoid(visual: string): { scene: string; avoid: string } {
  * 3. Location sheet
  * 4. Prop sheets
  */
+/** Whether the creator picked this shot's references by hand. Shared so the UI badge and generation agree. */
+export function hasReferenceOverride(clip: Pick<Clip, 'referenceAssetIds'>): clip is Pick<Clip, 'referenceAssetIds'> & { referenceAssetIds: string[] } {
+  return Array.isArray(clip.referenceAssetIds) && clip.referenceAssetIds.length > 0
+}
+
 export function collectReferenceSheets(
   clip: Clip,
   characters: Character[],
@@ -51,8 +56,8 @@ export function collectReferenceSheets(
   props: Prop[] = [],
   maxRefs = 3
 ): ReferenceSheetItem[] {
-  // If the shot explicitly specifies an override array for referenceAssetIds
-  if (Array.isArray(clip.referenceAssetIds)) {
+  // A manual list replaces the automatic choice; an empty list is not an override (it would drop every reference).
+  if (hasReferenceOverride(clip)) {
     const overrideResult: ReferenceSheetItem[] = []
     const seen = new Set<string>()
     for (const assetId of clip.referenceAssetIds) {

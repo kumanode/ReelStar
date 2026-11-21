@@ -104,6 +104,18 @@ export function computeClipVideoBasisHash(params: ClipVideoBasisParams): string 
   )
 }
 
+/**
+ * Profiles read from the database default to {} and may hold empty strings, while older callers passed none.
+ * Both mean "no profile", so they hash the same; otherwise every sheet would turn stale without any edit.
+ */
+function profileKey(profile: unknown): string | null {
+  if (!profile || typeof profile !== 'object') return null
+  const filled = Object.entries(profile as Record<string, unknown>).filter(
+    ([, v]) => v != null && !(typeof v === 'string' && !v.trim()) && !(Array.isArray(v) && !v.length)
+  )
+  return filled.length ? JSON.stringify(Object.fromEntries(filled.sort(([a], [b]) => a.localeCompare(b)))) : null
+}
+
 /** Basis hash for a character 3-view reference sheet. */
 export function computeCharacterSheetBasisHash(params: {
   name: string
@@ -119,7 +131,7 @@ export function computeCharacterSheetBasisHash(params: {
       params.description.trim(),
       params.styleId,
       params.imageModel || 'default',
-      params.profile ? JSON.stringify(params.profile) : null
+      profileKey(params.profile)
     ])
   )
 }
@@ -157,7 +169,7 @@ export function computeLocationSheetBasisHash(params: {
       (params.description || '').trim(),
       params.styleId,
       params.imageModel || 'default',
-      params.profile ? JSON.stringify(params.profile) : null
+      profileKey(params.profile)
     ])
   )
 }
@@ -177,7 +189,7 @@ export function computePropSheetBasisHash(params: {
       (params.description || '').trim(),
       params.styleId,
       params.imageModel || 'default',
-      params.profile ? JSON.stringify(params.profile) : null
+      profileKey(params.profile)
     ])
   )
 }

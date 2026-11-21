@@ -32,7 +32,7 @@ import { needsVisual } from '@shared/script'
 import { geminiVoiceName, geminiVoiceTone } from '@shared/models'
 import { dialogVoiceNote, getClipImageStatus, getClipVideoStatus, isVideoDialogue, type GenerationPrerequisitesContext } from '@shared/validation'
 import { resolveActive } from '@shared/providers'
-import { collectReferenceSheets, compileClipPrompt } from '@shared/prompts'
+import { collectReferenceSheets, compileClipPrompt, hasReferenceOverride } from '@shared/prompts'
 import { checkLockCompliance } from '@shared/lock'
 import type { AppSettings, Asset, Clip, Job, Project } from '@shared/types'
 import { AutoTextarea } from '../../components/AutoTextarea'
@@ -180,7 +180,8 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
   const narration = useNarration()
   const videoJob = jobFor(jobs, 'video', { clipId: clip.id })
   const versions = Object.values(assets)
-    .filter((a) => a.clipId === clip.id && a.kind === 'image')
+    // Uploaded reference images also carry the clipId, but they guide generation and are never the shot's picture.
+    .filter((a) => a.clipId === clip.id && a.kind === 'image' && !a.meta?.isReference)
     .sort((a, b) => a.createdAt - b.createdAt)
   const start = clips.slice(0, index).reduce((n, c) => n + c.durationMs, 0)
   const narrationChanged = !!voice && (voice.prompt ?? '').trim() !== clip.narration.trim()
@@ -489,7 +490,7 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold text-ink">Lembar Referensi Shot</span>
-              {Array.isArray(clip.referenceAssetIds) ? (
+              {hasReferenceOverride(clip) ? (
                 <Badge tone="warn" title="Shot ini menggunakan referensi khusus (override)">
                   Kustom ({refItems.length})
                 </Badge>
@@ -499,7 +500,7 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
                 </Badge>
               )}
             </div>
-            {Array.isArray(clip.referenceAssetIds) && (
+            {hasReferenceOverride(clip) && (
               <button
                 type="button"
                 onClick={() => updateClip(clip.id, { referenceAssetIds: null })}
@@ -532,7 +533,7 @@ function ClipPanel({ clip, index, total, prereqCtx }: { clip: Clip; index: numbe
                       title="Lepas referensi dari shot ini"
                       onClick={() => {
                         const nextIds = refItems.map((r) => r.sheetAssetId).filter((id) => id !== ref.sheetAssetId)
-                        updateClip(clip.id, { referenceAssetIds: nextIds })
+                        updateClip(clip.id, { referenceAssetIds: nextIds.length ? nextIds : null })
                       }}
                       className="text-muted hover:text-bad"
                     >

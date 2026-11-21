@@ -35,6 +35,7 @@ import type {
   ContinuityTier
 } from '@shared/types'
 import { buildLockWords } from '@shared/lock'
+import { resolveActive } from '@shared/providers'
 import {
   getCharacterSheetStatus,
   getDerivativeSheetStatus,
@@ -89,6 +90,15 @@ export function LorebookPage() {
     refreshLorebook
   } = useProject()
   const { toast } = useApp()
+
+  // Sheet hashes include the globally active image model, so the "Basi" badges need it to match generation.
+  const [activeImageModel, setActiveImageModel] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    void window.api.settings
+      .get()
+      .then((s) => setActiveImageModel(resolveActive(s, 'image').model))
+      .catch(() => setActiveImageModel(undefined))
+  }, [])
 
   const [activeTab, setActiveTab] = useState<LorebookTab>('character')
   const [searchQuery, setSearchQuery] = useState('')
@@ -604,6 +614,16 @@ export function LorebookPage() {
               >
                 {extracting ? 'Menganalisis cerita...' : 'Ekstrak dari Cerita'}
               </Button>
+              {extracting && project && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void window.api.lorebook.cancelExtract(project.id)}
+                  title="Berhenti membaca cerita; yang sudah ditemukan tetap bisa ditinjau"
+                >
+                  Berhenti
+                </Button>
+              )}
 
               <Button
                 variant="secondary"
@@ -697,7 +717,7 @@ export function LorebookPage() {
                         </div>
                       )}
                       <div className="absolute top-2 right-2 flex items-center gap-1">
-                        {project && getCharacterSheetStatus(char, project, assets).status === 'stale' && (
+                        {project && getCharacterSheetStatus(char, project, assets, activeImageModel).status === 'stale' && (
                           <Badge tone="warn" className="text-[10px]">
                             Basi
                           </Badge>
@@ -794,7 +814,7 @@ export function LorebookPage() {
                         </div>
                       )}
                       <div className="absolute top-2 right-2 flex items-center gap-1">
-                        {project && getLocationSheetStatus(loc, project, assets).status === 'stale' && (
+                        {project && getLocationSheetStatus(loc, project, assets, activeImageModel).status === 'stale' && (
                           <Badge tone="warn" className="text-[10px]">
                             Basi
                           </Badge>
@@ -879,7 +899,7 @@ export function LorebookPage() {
                         </div>
                       )}
                       <div className="absolute top-2 right-2 flex items-center gap-1">
-                        {project && getPropSheetStatus(pr, project, assets).status === 'stale' && (
+                        {project && getPropSheetStatus(pr, project, assets, activeImageModel).status === 'stale' && (
                           <Badge tone="warn" className="text-[10px]">
                             Basi
                           </Badge>
@@ -1642,8 +1662,10 @@ export function LorebookPage() {
                         getDerivativeSheetStatus(
                           variant,
                           selectedCharacter,
-                          { imageModel: project?.imageModel },
-                          assets
+                          { imageModel: project?.imageModel ?? null },
+                          assets,
+                          false,
+                          activeImageModel
                         ).status === 'stale'
 
                       return (

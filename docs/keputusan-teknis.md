@@ -293,3 +293,19 @@ Secara bawaan, generator gambar mengumpulkan hingga 4 lembar referensi otomatis 
 - Saat kreator mengganti model visual aktif di Pengaturan, dialog peringatan interaktif memberitahukan bahwa pergantian model akan menandai aset gambar/video yang sudah ada sebagai basi (stale) sehingga kreator mengetahui adegan mana yang perlu diselaraskan ke model baru.
 - Kredensial penyedia custom (kompatibel OpenAI Chat dan Flow2API) dapat diuji langsung dan disimpan secara terenkripsi di `secrets.ts` seperti penyedia bawaan.
 
+
+### Perbaikan tinjauan fase 7–8 (2026-11-21)
+- **Referensi per shot:** kolom `clips.reference_asset_ids_json` bernilai bawaan `'[]'`, jadi daftar kosong berarti
+  **otomatis** (`referenceAssetIds = null`), bukan override kosong. Semua pemeriksaan memakai
+  `hasReferenceOverride` di `shared/prompts.ts`; melepas chip terakhir mengembalikan shot ke mode otomatis.
+- **Hash lembar Lorebook:** `generation.ts` mengambil hash basis dari fungsi status lembar di `shared/validation.ts`
+  (dengan model gambar aktif), sehingga lembar baru tidak langsung basi. Profil kosong (`{}` atau kolom kosong)
+  di-hash sama dengan tanpa profil.
+- **Dialog video:** `isVideoDialogue` hanya benar untuk `dialogueType = 'dialogue'`. O.S., V.O., dan narasi selalu
+  lewat TTS; narasi, batch TTS, generate video, dan Storyboard memakai aturan yang sama.
+- **Model aktif:** jalur Higgsfield (gambar shot, lembar, estimasi) memakai model dari Pengaturan › Model aktif, bukan
+  `project.imageModel`.
+- **Paket kirim:** zip dibuat dengan `%SystemRoot%\System32\tar.exe` (bsdtar). `tar.exe` lewat PATH bisa
+  mengenai tar GNU dari Git yang tidak bisa menulis zip dan membaca `C:` sebagai host jarak jauh.
+- **Ekstraksi Lorebook:** membaca seluruh sumber per potongan (`planWindows`), menggabungkan kandidat berdasarkan
+  nama dan alias, dan bisa dihentikan; hasil bagian yang sudah dibaca tetap bisa ditinjau.

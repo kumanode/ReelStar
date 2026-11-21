@@ -6,6 +6,7 @@ import ffmpegStatic from 'ffmpeg-static'
 import { WHISPER_TIMING, captionNeedsSync, estimateWordTimings } from '@shared/captions'
 import { estimateNarrationMs } from '@shared/script'
 import { spokenWords, stripVoiceTags } from '@shared/speech'
+import { isVideoDialogue } from '@shared/validation'
 import type { Character, Clip, Job, Project, WordTiming } from '@shared/types'
 import { emit } from './events'
 import { runJob, type TaskCtx } from './jobs'
@@ -263,10 +264,7 @@ export function generateNarration(projectId: string, mode: 'missing' | 'all', ep
   const running = activeProjectJob(projectId, 'narration', episodeId)
   if (running) return running
   const project = getProject(projectId)
-  const isVideoDialog = (c: Clip) => {
-    const dType = c.shotDetail?.dialogueType ?? (c.speakerId ? 'dialogue' : 'narration')
-    return !!(c.speakerId && project.dialogAudio === 'video' && c.narration.trim() && dType === 'dialogue')
-  }
+  const isVideoDialog = (c: Clip) => isVideoDialogue(project, c)
   const targets = clipsOf(projectId, episodeId).filter((c) => c.narration.trim() && !isVideoDialog(c) && (mode === 'all' || !c.audioAssetId))
   if (!targets.length) throw new Error('Tidak ada naskah narasi yang perlu disuarakan.')
   const job = insertJob({ projectId, episodeId, kind: 'narration', provider: project.ttsProvider, payload: { mode, clipIds: targets.map((c) => c.id) } })

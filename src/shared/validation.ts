@@ -170,8 +170,17 @@ export function videoSecondsFor(
 }
 
 /** A line spoken on screen by a character is voiced by the video model when the series uses video dialogue. */
-export function isVideoDialogue(project: Pick<Project, 'dialogAudio'>, clip: Pick<Clip, 'speakerId' | 'narration'>): boolean {
-  return !!clip.speakerId && project.dialogAudio === 'video' && !!clip.narration.trim()
+/**
+ * Whether the video model voices this clip (with lip sync). Only on-screen dialogue qualifies: off-screen (O.S.)
+ * lines, inner monologue (V.O.) and narration have no visible speaker to sync, so they always go to TTS. Video
+ * generation, TTS batches, narration and the Storyboard all read this one rule.
+ */
+export function isVideoDialogue(
+  project: Pick<Project, 'dialogAudio'>,
+  clip: Pick<Clip, 'speakerId' | 'narration'> & { shotDetail?: Pick<ShotDetail, 'dialogueType'> | null }
+): boolean {
+  if (!clip.speakerId || project.dialogAudio !== 'video' || !clip.narration.trim()) return false
+  return (clip.shotDetail?.dialogueType ?? 'dialogue') === 'dialogue'
 }
 
 /**

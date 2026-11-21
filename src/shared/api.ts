@@ -99,6 +99,8 @@ export interface StudioApi {
     assetUsage(projectId: string, kind: 'character' | 'derivative' | 'location' | 'prop', id: string): Promise<AssetUsageSummary>
     merge(input: MergeAssetInput): Promise<{ message: string }>
     extract(projectId: string): Promise<LorebookExtractionResult>
+    /** Stops a running extraction; the parts already read are still returned for review. */
+    cancelExtract(projectId: string): Promise<void>
     acceptCandidates(input: AcceptLorebookCandidatesInput): Promise<{
       createdCharacters: Character[]
       createdDerivatives: CharacterDerivative[]
