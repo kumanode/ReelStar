@@ -64,7 +64,8 @@ const api: StudioApi = {
     merge: call('lorebook:merge'),
     extract: call('lorebook:extract'),
     cancelExtract: call('lorebook:cancelExtract'),
-    acceptCandidates: call('lorebook:acceptCandidates')
+    acceptCandidates: call('lorebook:acceptCandidates'),
+    enrich: call('lorebook:enrich')
   },
   story: {
     planEpisodes: call('story:planEpisodes'),
@@ -111,7 +112,8 @@ const api: StudioApi = {
   },
   clips: {
     split: call('clips:split'),
-    detachVoice: call('clips:detachVoice')
+    detachVoice: call('clips:detachVoice'),
+    autoTrimEpisode: call('clips:autoTrimEpisode')
   },
   assets: {
     setActive: call('assets:setActive'),

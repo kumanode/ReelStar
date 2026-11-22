@@ -114,3 +114,22 @@ Rincian pengaturan: [setting.md](setting.md).
 - [x] Tugas 57 — Status dan penanda masalah di Pengaturan dari satu `KeyStatus`.
 - [x] Tugas 58 — Dokumentasi pengaturan + salin mockup ke `docs/mockup/`.
 - [x] Checkpoint 8 — typecheck/build, dev harness (hash basi termasuk ganti model aktif, Dokter Naskah, migrasi dan normalisasi setting, penyedia custom setelah restart, `ffprobe`), screenshot 1180×720 terang dan gelap.
+
+
+## Fase 9 — Redesign Alur Produksi Short Drama Terpadu
+
+Rincian dan kriteria penerimaan: [Fase 9 di plan.md](plan.md#fase-9--redesign-alur-produksi-short-drama-terpadu).
+Urutan pengerjaan: `59 → 60 → 61 → 62 → 63 → 64`, `65` (paralel setelah 59), `66 → 67 → 68 → Checkpoint 9`.
+
+- [x] Prasyarat — Simpan perubahan lokal di `main` ke stash dan buat branch `fase-9-redesign-alur` dari `origin/fase-8-kontinuitas`.
+- [x] Tugas 59 — Kerangka Studio Episode 2 tab (`production` + `editor`), migrasi `activeTab` lama, auto-ciut sidebar di Editor.
+- [x] Tugas 60 — Halaman `ProductionStep` & `ShotCard` terpadu (gabungan `PlanStep` + `StoryboardStep`, progressive disclosure untuk Prompt/Detail, Script Doctor, Lock Words, Ritme, Snapshot).
+- [x] Tugas 61 — Alur 1 klik `Susun Shot & Prompt` + banner persetujuan aset baru inline + auto-chain `confirmEpisodeScript` → `writePrompts`.
+- [x] Tugas 62 — Pemisahan tegas tombol Buat Gambar, Buat Video, dan Buat TTS di toolbar atas, bar seleksi multi-shot, dan per kartu shot (+ `clipIds` opsional di `batchEstimate`).
+- [x] Tugas 63 — Smart Dependency Batch khusus Gambar (lembar referensi kosong otomatis dijadwalkan di Tahap 1 sebelum Gambar Tahap 2; Video tetap terpisah & tidak auto-gambar).
+- [x] Tugas 64 — Pratinjau Animatic 9:16 (`AnimaticPreviewModal`) langsung di Tab Produksi sebelum generate Video AI.
+- [x] Tugas 65 — Pemadatan `LorebookPage` (5 tab → 3 tab: Pemeran, Dunia, Aturan Serial) & auto-ekstrak Lorebook dari `EpisodeHub`.
+- [x] Tugas 66 — Auto-Trim hening video dialog berbasis timestamp Whisper (`computeSpeechTrimWindow` di `src/shared/timeline.ts`, non-destruktif, plus IPC `clips:autoTrimEpisode`).
+- [x] Tugas 67 — Bar "Finishing Drama" di `EditorStep` (Auto-Trim Hening, Smart AI SFX, Musik ElevenLabs dalam 1 akses cepat).
+- [x] Tugas 68 — Salin mockup ke `docs/mockup/redesign-alur.html`, hapus `PlanStep.tsx`/`StoryboardStep.tsx` usang, dan perbarui dokumentasi (`AGENTS.md`, `docs/alur-produksi.md`, `docs/keputusan-teknis.md`).
+- [x] Checkpoint 9 — `npm run typecheck`, `npm run build`, uji dev harness end-to-end, screenshot 1180×720 & 1600×900 tema terang/gelap.

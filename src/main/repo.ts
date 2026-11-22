@@ -36,6 +36,7 @@ import type {
   ScriptVersion,
   StoryPlan
 } from '@shared/types'
+import { buildLockWords } from '@shared/lock'
 import { isDefaultCostume, isNarratorName, visualSourceOf } from '@shared/script'
 import { detectGender, FEMALE_GEMINI_VOICES, MALE_GEMINI_VOICES, geminiVoiceGender } from '@shared/models'
 import { resolveActive } from '@shared/providers'
@@ -257,22 +258,35 @@ export const toAsset = (r: Row): Asset => ({
   createdAt: r.created_at
 })
 
-export const toJob = (r: Row): Job => ({
-  id: r.id,
-  projectId: r.project_id,
-  episodeId: r.episode_id ?? null,
-  clipId: r.clip_id,
-  characterId: r.character_id,
-  kind: r.kind,
-  provider: r.provider,
-  status: r.status,
-  progress: r.progress,
-  message: r.message,
-  error: r.error,
-  resultAssetId: r.result_asset_id,
-  createdAt: r.created_at,
-  updatedAt: r.updated_at
-})
+export const toJob = (r: Row): Job => {
+  let payload: Record<string, unknown> = {}
+  if (typeof r.payload_json === 'string' && r.payload_json) {
+    try {
+      payload = JSON.parse(r.payload_json) as Record<string, unknown>
+    } catch {
+      payload = {}
+    }
+  }
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    episodeId: r.episode_id ?? null,
+    clipId: r.clip_id,
+    characterId: r.character_id,
+    derivativeId: typeof payload.derivativeId === 'string' ? payload.derivativeId : null,
+    locationId: typeof payload.locationId === 'string' ? payload.locationId : null,
+    propId: typeof payload.propId === 'string' ? payload.propId : null,
+    kind: r.kind,
+    provider: r.provider,
+    status: r.status,
+    progress: r.progress,
+    message: r.message,
+    error: r.error,
+    resultAssetId: r.result_asset_id,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  }
+}
 
 export const toContinuityItem = (r: Row): ContinuityItem => ({
   id: r.id,
@@ -508,6 +522,11 @@ export function createProject(input: NewProjectInput): Project {
   const imgModel = input.imageModel ?? activeImage.model
   const vidModel = input.videoModel ?? activeVideo.model
 
+  const syn = (input.synopsis ?? '').trim()
+  const src = (input.sourceText ?? '').trim()
+  const syncedSource = src || syn
+  const syncedSynopsis = syn || (src ? src.slice(0, 400) : '')
+
   const db = getDb()
   db.transaction(() => {
     db.prepare(
@@ -517,7 +536,7 @@ export function createProject(input: NewProjectInput): Project {
     ).run(
       id,
       input.title?.trim() || 'Serial Baru',
-      input.synopsis ?? '',
+      syncedSynopsis,
       input.durationSec ?? 60,
       input.targetEpisodeCount !== undefined ? input.targetEpisodeCount : 3,
       input.seriesGuidelines ?? '',
@@ -531,7 +550,7 @@ export function createProject(input: NewProjectInput): Project {
       imgModel,
       vidModel,
       JSON.stringify(DEFAULT_EDITOR),
-      input.sourceText ?? '',
+      syncedSource,
       input.sourceKind ?? 'novel',
       dialogAudio,
       now,
@@ -1271,7 +1290,13 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
           if (targetChar) {
             const derivs = derivativesOf(projectId).filter((d) => d.characterId === targetChar.id)
             if (!derivs.some((d) => d.name.toLowerCase() === pName.toLowerCase())) {
-              createDerivative({ projectId, characterId: targetChar.id, name: pName, promptChange: p.description || '' })
+              createDerivative({
+                projectId,
+                characterId: targetChar.id,
+                name: pName,
+                promptChange: p.description || '',
+                costumeKeyphrase: (p.description || pName).slice(0, 120)
+              })
             }
           }
         } else if (p.kind === 'location') {
@@ -1310,7 +1335,13 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
         if (targetChar) {
           const derivs = derivativesOf(projectId).filter((d) => d.characterId === targetChar.id)
           if (!derivs.some((d) => d.name.toLowerCase() === pName.toLowerCase())) {
-            createDerivative({ projectId, characterId: targetChar.id, name: pName, promptChange: p.description || '' })
+            createDerivative({
+              projectId,
+              characterId: targetChar.id,
+              name: pName,
+              promptChange: p.description || '',
+              costumeKeyphrase: (p.description || pName).slice(0, 120)
+            })
           }
         }
       }
@@ -1390,6 +1421,7 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
       )
     `)
 
+    let prevLocId: string | null = null
     for (const [idx, shot] of (draft.shots ?? []).entries()) {
       const clipId = randomUUID()
       const charIds = (shot.characters ?? []).map((cn) => findChar(cn)?.id).filter((id): id is string => !!id)
@@ -1406,6 +1438,34 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
       }
 
       const durMs = Math.max(1000, Math.round((shot.durationSec || 5) * 1000))
+      const motionCue = `${shot.shotDetail?.cameraMotion || ''} ${shot.framing || ''} ${shot.visualAction || ''}`.toLowerCase()
+      const cameraPreset: Clip['cameraPreset'] =
+        /shake|handheld|tampar|slap|bentak|syok|jolt|impact/.test(motionCue)
+          ? 'shake'
+          : /pan\s*left|geser\s*kiri/.test(motionCue)
+            ? 'panleft'
+            : /pan\s*right|geser\s*kanan/.test(motionCue)
+              ? 'panright'
+              : /zoom\s*out|pull\s*back|wide|establishing/.test(motionCue)
+                ? 'zoomout'
+                : /static|diam|locked/.test(motionCue)
+                  ? 'static'
+                  : 'zoomin'
+      const motionStrength: Clip['motionStrength'] =
+        shot.beat === 'twist' || shot.beat === 'hook' || cameraPreset === 'shake'
+          ? 'kuat'
+          : cameraPreset === 'static' || cameraPreset === 'zoomout'
+            ? 'halus'
+            : 'sedang'
+      const transition: Clip['transition'] =
+        idx === 0
+          ? 'cut'
+          : prevLocId && locId && prevLocId !== locId
+            ? 'fade'
+            : shot.beat === 'twist'
+              ? 'zoomin'
+              : 'cut'
+      prevLocId = locId
 
       insertClip.run(
         clipId,
@@ -1418,10 +1478,10 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
         durMs,
         JSON.stringify(charIds),
         'camera',
-        'zoomin',
-        'sedang',
+        cameraPreset,
+        motionStrength,
         '',
-        'fade',
+        transition,
         speakerId,
         shot.emotion || '',
         JSON.stringify(costumeMap),
@@ -1435,7 +1495,8 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
       )
     }
 
-    // 5. Update episode
+    // 5. Update episode & auto-sync series locks with any newly created Lorebook assets
+    syncProjectSeriesLocks(projectId)
     db.prepare('UPDATE episodes SET script_draft_json = NULL, status = ?, updated_at = ? WHERE id = ?').run('script', Date.now(), episodeId)
     touchProject(projectId)
   })()
@@ -2121,6 +2182,8 @@ export function acceptLorebookCandidates(input: AcceptLorebookCandidatesInput): 
       }
     }
 
+    syncProjectSeriesLocks(input.projectId)
+
     return {
       createdCharacters,
       createdDerivatives,
@@ -2128,6 +2191,19 @@ export function acceptLorebookCandidates(input: AcceptLorebookCandidatesInput): 
       createdProps
     }
   })()
+}
+
+/** Keeps project.seriesLock up to date with Lorebook entries while preserving user toggles & manual locks. */
+export function syncProjectSeriesLocks(projectId: string): void {
+  const project = getProject(projectId)
+  const synced = buildLockWords({
+    characters: charactersOf(projectId),
+    derivatives: derivativesOf(projectId),
+    locations: locationsOf(projectId),
+    props: propsOf(projectId),
+    existing: project.seriesLock ?? []
+  })
+  getDb().prepare('UPDATE projects SET series_lock_json = ? WHERE id = ?').run(JSON.stringify(synced), projectId)
 }
 
 // --- Asset usage and merge ---

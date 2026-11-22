@@ -7,6 +7,8 @@ export interface Flow2ApiModel {
   kind: 'image' | 'video'
   /** Model name sent to Flow2API; its resolver picks the internal Veo key from image count, aspect and duration. */
   apiModel?: string
+  /** When true, Flow2API expects duration and orientation in the model slug: `<apiModel>-<dur>s-<portrait|landscape>`. */
+  slugWithDurationAspect?: boolean
   durations: number[]
   supportsRef: boolean
   maxRefs: number
@@ -24,9 +26,9 @@ export const FLOW2API_IMAGE_MODELS: Flow2ApiModel[] = [
     kind: 'image',
     durations: [],
     supportsRef: true,
-    maxRefs: 3,
+    maxRefs: 6,
     tags: ['Rekomendasi', 'Cepat', 'Nano Banana'],
-    description: 'Generasi gambar cepat dan konsisten dengan dukungan referensi karakter'
+    description: 'Generasi gambar cepat dan konsisten dengan dukungan hingga 6 referensi karakter, lokasi, & prop'
   },
   {
     id: 'imagen-3.0',
@@ -67,6 +69,20 @@ export const FLOW2API_VIDEO_MODELS: Flow2ApiModel[] = [
     nativeAudio: true,
     tags: ['Hemat Kuota', 'Gambar ke Video'],
     description: 'Varian ringan Veo 3.1 untuk rendering lebih cepat'
+  },
+  {
+    id: 'omni-1.2-flash',
+    apiModel: 'omni-1.2-flash',
+    slugWithDurationAspect: true,
+    name: 'Omni 1.2 Flash',
+    family: 'Google Flow',
+    kind: 'video',
+    durations: [3, 4, 5, 6, 7, 8, 9, 10],
+    supportsRef: true,
+    maxRefs: 3,
+    nativeAudio: true,
+    tags: ['Terbaru', 'Multi-Ref', 'Gambar ke Video', 'Google Flow'],
+    description: 'Model terbaru Google Flow (3–10 dtk) dengan dukungan hingga 3 referensi & audio dialog native'
   },
   {
     id: 'omni-1.1-flash',
@@ -139,10 +155,14 @@ export function resolveFlow2ApiVideo(baseId: string, aspectRatio: AspectRatio, d
   // The shortest length that covers the clip, so a spoken line is never cut; the longest when none does.
   const sorted = [...allowed].sort((x, y) => x - y)
   const dur = sorted.length ? (sorted.find((d) => d >= durationSec) ?? sorted[sorted.length - 1]) : durationSec
+  const ar: '16:9' | '9:16' = aspectRatio === '9:16' ? '9:16' : '16:9'
+  const orient = ar === '9:16' ? 'portrait' : 'landscape'
+  const baseApiModel = model?.apiModel ?? clean
+  const resolvedModel = model?.slugWithDurationAspect ? `${baseApiModel}-${dur}s-${orient}` : baseApiModel
   return {
     // Unknown IDs are passed through so users can type any model Flow2API itself lists.
-    model: model?.apiModel ?? clean,
-    aspectRatio: aspectRatio === '9:16' ? '9:16' : '16:9',
+    model: resolvedModel,
+    aspectRatio: ar,
     durationSec: dur,
     withImage: model ? model.supportsRef : true
   }

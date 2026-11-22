@@ -86,3 +86,57 @@ export function wordGapNear(words: WordTiming[], t: number, reach = 0.4): number
   }
   return best
 }
+
+export interface SpeechTrimWindow {
+  mediaInMs: number
+  durationMs: number
+  voiceInMs: number
+  voiceOutMs: number
+  voiceStartMs: number
+  savedMs: number
+}
+
+/**
+ * Computes a non-destructive trim window around spoken words (e.g. from Whisper DTW on a 4/6/8s Veo clip)
+ * so leading and trailing silence does not slow down vertical drama pacing. Keeps full media untouched on disk.
+ */
+export function computeSpeechTrimWindow(
+  words: WordTiming[],
+  totalDurationMs: number,
+  opts?: { leadMs?: number; tailMs?: number; minDurationMs?: number; minSavingMs?: number }
+): SpeechTrimWindow | null {
+  if (!words.length || totalDurationMs <= 0) return null
+  const leadMs = opts?.leadMs ?? 250
+  const tailMs = opts?.tailMs ?? 350
+  const minDurationMs = Math.min(totalDurationMs, opts?.minDurationMs ?? 1200)
+  const minSavingMs = opts?.minSavingMs ?? 250
+
+  const firstStartMs = Math.max(0, Math.round(words[0].start * 1000))
+  const lastEndMs = Math.min(totalDurationMs, Math.round(words[words.length - 1].end * 1000))
+  if (lastEndMs <= firstStartMs) return null
+
+  let startMs = Math.max(0, firstStartMs - leadMs)
+  let endMs = Math.min(totalDurationMs, lastEndMs + tailMs)
+
+  // Expand symmetrically if the spoken span is shorter than the minimum clip length.
+  if (endMs - startMs < minDurationMs) {
+    const deficit = minDurationMs - (endMs - startMs)
+    const padBefore = Math.min(startMs, Math.floor(deficit / 2))
+    startMs -= padBefore
+    endMs = Math.min(totalDurationMs, startMs + minDurationMs)
+    startMs = Math.max(0, endMs - minDurationMs)
+  }
+
+  const durationMs = Math.max(MIN_ITEM_MS, Math.round(endMs - startMs))
+  const savedMs = Math.max(0, Math.round(totalDurationMs - durationMs))
+  if (savedMs < minSavingMs) return null
+
+  return {
+    mediaInMs: Math.round(startMs),
+    durationMs,
+    voiceInMs: Math.round(startMs),
+    voiceOutMs: Math.round(endMs),
+    voiceStartMs: 0,
+    savedMs
+  }
+}

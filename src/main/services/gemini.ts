@@ -66,16 +66,17 @@ export async function listModels(kind: 'text' | 'tts'): Promise<ModelOption[]> {
 }
 
 /** Structured JSON output; falls back to schema-in-prompt for models without JSON mode (e.g. Gemma). */
-export async function generateJson(model: string, system: string, prompt: string, schema: object): Promise<unknown> {
+export async function generateJson(model: string, system: string, prompt: string, schema: object, signal?: AbortSignal): Promise<unknown> {
   const ai = client()
   try {
     const res = await ai.models.generateContent({
       model,
       contents: prompt,
-      config: { systemInstruction: system, responseMimeType: 'application/json', responseJsonSchema: schema }
+      config: { abortSignal: signal, systemInstruction: system, responseMimeType: 'application/json', responseJsonSchema: schema }
     })
     return JSON.parse(res.text ?? '')
   } catch (e) {
+    if (signal?.aborted) throw new Error('Dibatalkan')
     const msg = (e as Error)?.message ?? ''
     if (!/json|schema|mime|not supported|INVALID_ARGUMENT|Unexpected token|Expected/i.test(msg)) throw friendly(e)
   }
@@ -84,11 +85,13 @@ export async function generateJson(model: string, system: string, prompt: string
       model,
       contents: prompt,
       config: {
+        abortSignal: signal,
         systemInstruction: `${system}\n\nReply with ONE JSON object only (no markdown, no commentary) that matches this JSON Schema:\n${JSON.stringify(schema)}`
       }
     })
     return extractJson(res.text ?? '')
   } catch (e) {
+    if (signal?.aborted) throw new Error('Dibatalkan')
     throw friendly(e)
   }
 }

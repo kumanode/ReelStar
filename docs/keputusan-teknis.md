@@ -315,3 +315,104 @@ Secara bawaan, generator gambar mengumpulkan hingga 4 lembar referensi otomatis 
   penyedia aktif dipakai (ElevenLabs tidak punya suara bawaan, jadi kreator diminta memilih suara).
 - **Preset ekspor:** hanya preset dengan rasio yang sama dengan proyek (plus Kustom) yang ditawarkan, karena
   exporter selalu merender dalam rasio proyek; crop/pad ke rasio lain belum ada.
+
+
+### Redesign Alur Produksi Terpadu (Fase 9 — 2026-11-22)
+- **Penggabungan `PlanStep` + `StoryboardStep` menjadi `ProductionStep` (`activeTab = 'production' | 'editor'`)**:
+  Mengurangi gerbang manual per episode dari 3 tab menjadi 2 tab (**Produksi** dan **Editor & Rilis**). Nilai
+  `last_tab` lama (`plan` / `storyboard`) otomatis dipetakan ke `production` di `store/project.ts` agar proyek lama
+  tidak pernah membuka tab kosong. Seluruh alat Fase 8 (`Script Doctor`, `Lock Words`, `Bar Ritme`, `Versi/Snapshot`,
+  `Prompt Visual`, dan `Override Referensi`) tetap aktif penuh lewat pola *progressive disclosure* (pill + drawer).
+- **Auto-chain `confirmEpisodeScript` → `writePrompts`**:
+  Menyetujui draf episode dari `NewAssetsBanner` inline langsung menulis prompt visual & video tanpa perlu pindah
+  halaman atau menekan tombol *"Tulis prompt visual"* terpisah.
+- **Pemisahan tegas tombol Generate Gambar, Video, dan TTS**:
+  Toolbar `ProductionStep`, bar seleksi multi-shot, dan tombol per kartu `ShotCard` memisahkan aksi **Buat Gambar**,
+  **Buat Video**, dan **Buat TTS** secara eksplisit. `batchEstimate` menerima `clipIds?: string[]` opsional; untuk
+  `kind = 'video'`, klip yang belum punya gambar storyboard selalu dilewati (`skippedMissingImageCount`) dan tidak
+  pernah diam-diam memicu pembuatan gambar.
+- **Smart Dependency Batch khusus Gambar**:
+  Pada `batchEstimate` & `generateMissingImages` dengan `autoGenerateSheets = true`, lembar Lorebook terdaftar yang
+  masih kosong tidak lagi memblokir batch dan memaksa bolak-balik ke Lorebook, melainkan dihitung di
+  `prerequisiteSheets` dan dijalankan berantai (Gelombang 1: karakter dasar/lokasi/prop → Gelombang 2: varian kostum
+  → Gelombang 3: gambar klip). Pembatalan di gelombang awal menghentikan gelombang berikutnya agar tidak membakar kredit.
+- **Pemadatan `LorebookPage` (5 tab → 3 tab) & Auto-ekstrak dari `EpisodeHub`**:
+  Lorebook dipadatkan menjadi **Pemeran**, **Dunia** (Lokasi & Prop dengan filter chip), dan **Aturan Serial**
+  (Lock Words, Kontinuitas, dan Arahan & Template Prompt). Merencanakan serial baru saat Lorebook kosong langsung
+  mengalihkan ke ekstraksi Lorebook otomatis.
+- **Auto-Trim Hening Video Dialog non-destruktif (`computeSpeechTrimWindow`)**:
+  Ditulis sekali di `src/shared/timeline.ts` untuk memangkas jeda hening awal/akhir klip dialog Veo 4/6/8 detik
+  berbasis timestamp Whisper (`leadMs = 250`, `tailMs = 350`, `minDurationMs = 1200`) melalui `mediaInMs`, `durationMs`,
+  `voiceInMs`, dan `voiceOutMs` tanpa memotong file fisik di disk. Diterapkan opsional saat `extractVideoDialogueAudio`
+  dan bisa dijalankan/direset kapan saja lewat `clips:autoTrimEpisode` di Bar Finishing Drama (`EditorStep`).
+
+### Optimasi Konsistensi Visual, Alokasi Referensi 3-Slot, & AI Visual Director (2026-11-22)
+- **Alokasi Referensi Seimbang (`collectAllAvailableReferenceSheets` / `collectReferenceSheets`)**:
+  Model Flow2API (`gemini-3.1-flash-image`) dibatasi maksimal 3 gambar referensi. Sebelumnya urutan prioritas statis
+  membuat 2–3 karakter menghabiskan seluruh slot sehingga lembar lokasi dan prop terbuang diam-diam. Kini alokasi
+  slot menyeimbangkan tokoh fokus, lawan bicara/prop hero (pada insert/detail shot), dan lokasi agar lingkungan dan
+  benda kunci tetap terkunci secara visual. Di `generation.ts`, daftar `loadedRefs` disinkronkan langsung dengan
+  `refBuffers` agar indeks `Reference Image 1..N` di teks tidak pernah bergeser jika ada file yang hilang.
+- **Scoping Lock Words per Shot (`filterLockWordsForClip`)**:
+  Lock words serial sebelumnya menempelkan seluruh tokoh, kostum, lokasi, dan prop serial ke setiap shot sehingga
+  memicu kebocoran visual (*concept bleeding*). Kini `compileClipPrompt`, `compileClipVideoPrompt`, dan indikator
+  kepatuhan di `ShotCard` otomatis menyaring hanya lock milik entitas yang tampil di shot terkait (plus lock manual
+  global). Ekstraksi Lorebook dan konfirmasi draf otomatis menyinkronkan `seriesLock`.
+- **Pembacaan Penuh Profil Lorebook & Lembar Referensi Close-Up + Turnaround**:
+  `formatCharacterTraits`, `formatLocationDetails`, dan `formatPropDetails` membaca seluruh kolom profil visual
+  (termasuk alias field `face`/`body`/`distinguishingFeatures`/`fixedDetails`/`material`/`shape`) baik di prompt
+  lembar Lorebook maupun di `compileClipPrompt`. Lembar karakter menyertakan potret close-up wajah di sisi kiri
+  bersama 3 sudut penuh agar wajah tetap tajam pada close-up vertikal 9:16; lembar varian kostum mengunci identitas
+  tegas ke `Reference Image 1`.
+- **AI Visual Director di `writePrompts()` + Fallback Deterministik**:
+  `writePrompts()` kini menggunakan LLM per kelompok shot dengan konteks tetangga dan Lorebook lengkap untuk menulis
+  prompt gambar & video berbahasa Inggris sinematik, menentukan `lighting`, `blocking` spasial (kiri/kanan/depth),
+  `cameraPreset`, `motionStrength`, dan `transition` dinamis. Jika LLM tidak tersedia (misal uji offline/devharness),
+  ia otomatis jatuh ke penyusun deterministik yang tetap menghormati seluruh `shotDetail` dan profil Lorebook.
+  Template kustom di `project.promptTemplates` kini juga dibaca penuh oleh planner, naskah, prompt visual/video,
+  dan lembar Lorebook.
+
+### Sinkronisasi Sinopsis ↔ Sumber Cerita, Guard Dialog Naskah, Animasi Generate, & Layout Produksi 2-Bar
+- **Sinkronisasi `synopsis` ↔ `sourceText` & Auto-Plan Episode**:
+  Saat proyek dibuat lewat `createProject()` (`src/main/repo.ts`), `synopsis` dan `sourceText` disinkronkan secara
+  otomatis sehingga kreator tidak perlu mengetik ulang teks cerita di Episode Hub. Modal "Buat Serial Baru" di
+  `Home.tsx` menyediakan satu input cerita terpadu (termasuk unggah `.txt/.md`) dan centang *"Langsung pecah jadi
+  episode otomatis"* yang memicu `requestAutoPlan(projectId)` di store `useProject` dan dieksekusi sekali saat
+  `EpisodeHub` termuat.
+- **Guard Dialog Naskah (`planEpisodeScript`)**:
+  LLM kadang mengembalikan semua shot dengan teks `narration` kosong atau memakai nama key alternatif (`dialogue`,
+  `line`, `spoken_text`), yang mengakibatkan seluruh klip video diproduksi sebagai klip hening. `normalizeDraftShots`
+  kini membaca key alternatif tersebut dan otomatis mengisi `speaker` dari tokoh pertama pada shot `dialogue`. Jika
+  rasio shot bersuara di bawah 40% (pada episode ≥ 4 shot), `planEpisodeScript` otomatis melakukan 1 kali retry dengan
+  instruksi korektif, sementara `ProductionStep` menampilkan peringatan kontekstual bila seluruh shot masih hening.
+- **Animasi Generate Terpadu & Perbaikan Bug Video Overlay**:
+  `ShotCard` sebelumnya meneruskan `job={imageJob || videoJob}` ke `ClipVisual`. Karena `jobFor('image')` tetap
+  mengembalikan job gambar yang sudah `done`, animasi video tidak pernah tampil saat `videoJob` berjalan. Kini
+  `activeVisualJob` memprioritaskan job yang sedang berjalan (`isRunning(videoJob)` lalu `isRunning(imageJob)`).
+  `toJob()` di `repo.ts` juga mem-parse `derivativeId`, `locationId`, dan `propId` dari `payload_json` agar
+  `GeneratingOverlay` (shimmer diagonal, scanline, progress bar bawah, dan aksen visual berbeda antara Gambar/Video/Lembar)
+  bekerja merata di seluruh kartu Produksi dan 4 jenis lembar Lorebook tanpa migrasi database baru.
+- **Layout Produksi 2-Bar & `AutoTextarea` Tanpa Resize Handle**:
+  `AutoTextarea` dulu selalu menyertakan kelas `resize-y` yang menimpa `resize-none` pada caller dan memunculkan
+  handle `//` di sudut kanan bawah; kini `resize-y` hanya ditambahkan jika caller tidak menentukan `resize-*`. Halaman
+  Produksi dipadatkan menjadi 2 bar responsif (aksi utama + utilitas/kesiapan/filter) agar bebas terpotong di lebar
+  jendela standar (1180×720).
+
+### Kontinuitas POV + Scene Anchor Otomatis & Pendetailan Lorebook (Tokoh, Lokasi, Prop)
+- **Kapasitas 6 Referensi Flow2API (`gemini-3.1-flash-image`) & Scene Continuity Anchor**:
+  Batas referensi `gemini-3.1-flash-image` dinaikkan dari 3 menjadi 6 (`flow2api-catalog.ts`, `flow2api.ts`) agar shot
+  3 tokoh + lokasi + prop + jangkar adegan tidak membuang karakter. Untuk rangkaian shot berurutan di lokasi yang sama,
+  `findSceneAnchorForClip()` (`src/shared/prompts.ts`) otomatis mengambil gambar shot pembuka (*establishing*) yang
+  sudah ter-render sebagai `Reference Image [SCENE CONTINUITY ANCHOR]` (kecuali dimatikan via `sceneAnchorMode: 'off'`).
+  `generateClipImage()` menunggu jangkar lewat `beforeQueue` (`waitForSceneAnchorImage`) tanpa menahan slot antrean,
+  sehingga batch gambar merender 1 jangkar per blok lokasi terlebih dulu lalu merender variasi POV sisanya secara paralel.
+- **Perintah POV Dua Arah & Strict Costume Lock**:
+  `compileClipPrompt()` menempatkan `REFERENCE IMAGE BINDING` di paling atas prompt (batas 6000 kar untuk Flow2API),
+  mengikat indeks `[Reference Image N]` langsung ke tiap tokoh pada blok `Wardrobe:` dengan larangan menimpa pakaian
+  referensi (seperti batik) dengan jas/blazer generik, serta memisahkan instruksi perubahan `Camera POV & angle` dari
+  kunci tata ruang/prop (`propPlacement`) agar perubahan sudut kamera tidak menggeser latar belakang atau prop.
+- **Pendetailan Tokoh, Lokasi, Prop & Fitur "Perkaya Detail AI"**:
+  Profil Lorebook diperluas (`accessories` tokoh, `spatialLayout` & `colorPalette` lokasi, `sizeScale` &
+  `distinctiveDetails` prop), lembar lokasi diarahkan ke *3-wall corner establishing* bebas grid, lembar prop ke 2 sudut
+  (*3/4 hero + detail/top-down*), dan tersedia IPC `lorebook:enrich` (`enrichLorebookDetails`) untuk melengkapi profil
+  proyek lama secara otomatis tanpa mengubah konsep awal kreator.

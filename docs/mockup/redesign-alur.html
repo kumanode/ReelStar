@@ -1,0 +1,1745 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ReelStar — Mockup Redesign Alur Short Drama AI</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    /* ReelStar "Kertas & Tinta" Design Tokens scoped to .rs-app */
+    .rs-app {
+      --rs-paper: #faf7f2;
+      --rs-surface: #ffffff;
+      --rs-sand: #f3efe8;
+      --rs-ink: #1f1d1a;
+      --rs-ink-2: #57524a;
+      --rs-muted: #6b665e;
+      --rs-line: #e6dfd3;
+      --rs-line-2: #d4cbbb;
+      --rs-line-3: #bfb5a4;
+      --rs-accent: #c93a1b;
+      --rs-accent-dark: #9e2c13;
+      --rs-accent-soft: #fff6f2;
+      --rs-sun: #ffc93c;
+      --rs-sun-soft: #fff1c7;
+      --rs-sun-ink: #6b4e00;
+      --rs-ok-soft: #e1f0dd;
+      --rs-ok-ink: #25572b;
+      --rs-info-soft: #e3ecf8;
+      --rs-info-ink: #1e4a7a;
+      --rs-bad-soft: #fbe3e1;
+      --rs-bad-ink: #8a1f14;
+      --rs-draft: #efeae2;
+      --rs-shadow: 2px 2px 0 #1f1d1a;
+      --rs-shadow-md: 3px 3px 0 #1f1d1a;
+      background-color: var(--rs-paper);
+      color: var(--rs-ink);
+      font-family: 'Plus Jakarta Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    }
+
+    .rs-app.rs-dark {
+      --rs-paper: #141311;
+      --rs-surface: #1e1c19;
+      --rs-sand: #282521;
+      --rs-ink: #f5f2eb;
+      --rs-ink-2: #aba296;
+      --rs-muted: #8a8276;
+      --rs-line: #2f2a24;
+      --rs-line-2: #403931;
+      --rs-line-3: #5a5145;
+      --rs-accent: #e24a24;
+      --rs-accent-dark: #b83818;
+      --rs-accent-soft: #2d1914;
+      --rs-sun: #f6c035;
+      --rs-sun-soft: #32270e;
+      --rs-sun-ink: #fee085;
+      --rs-ok-soft: #152a1a;
+      --rs-ok-ink: #76df88;
+      --rs-info-soft: #13253b;
+      --rs-info-ink: #7eb7f5;
+      --rs-bad-soft: #381614;
+      --rs-bad-ink: #f87171;
+      --rs-draft: #22201c;
+      --rs-shadow: 2px 2px 0 #080706;
+      --rs-shadow-md: 3px 3px 0 #080706;
+    }
+
+    .rs-paper { background-color: var(--rs-paper); }
+    .rs-surface { background-color: var(--rs-surface); }
+    .rs-sand { background-color: var(--rs-sand); }
+    .rs-draft { background-color: var(--rs-draft); }
+    .rs-ink { color: var(--rs-ink); }
+    .rs-ink-2 { color: var(--rs-ink-2); }
+    .rs-muted { color: var(--rs-muted); }
+    .rs-border { border-color: var(--rs-line); }
+    .rs-border-2 { border-color: var(--rs-line-2); }
+    .rs-accent-bg { background-color: var(--rs-accent); color: #ffffff; }
+    .rs-accent-bg:hover { background-color: var(--rs-accent-dark); }
+    .rs-accent-soft { background-color: var(--rs-accent-soft); color: var(--rs-accent); }
+    .rs-sun-soft { background-color: var(--rs-sun-soft); color: var(--rs-sun-ink); }
+    .rs-ok-soft { background-color: var(--rs-ok-soft); color: var(--rs-ok-ink); }
+    .rs-info-soft { background-color: var(--rs-info-soft); color: var(--rs-info-ink); }
+    .rs-bad-soft { background-color: var(--rs-bad-soft); color: var(--rs-bad-ink); }
+    .rs-ink-pill { background-color: var(--rs-ink); color: var(--rs-paper); }
+    .rs-shadow { box-shadow: var(--rs-shadow); }
+    .rs-shadow-md { box-shadow: var(--rs-shadow-md); }
+
+    .rs-display { font-family: 'Bricolage Grotesque', 'Segoe UI', system-ui, sans-serif; letter-spacing: -0.02em; }
+    .rs-mono { font-family: 'JetBrains Mono', Consolas, monospace; font-variant-numeric: tabular-nums; }
+
+    .rs-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+    .rs-scroll::-webkit-scrollbar-track { background: transparent; }
+    .rs-scroll::-webkit-scrollbar-thumb { background: var(--rs-line-2); border-radius: 999px; }
+
+    .btn-rs {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 12px;
+      transition: all 0.14s ease;
+      cursor: pointer;
+      user-select: none;
+    }
+    .btn-rs:active { transform: translateY(1px); }
+
+    .shot-card {
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .shot-card:hover {
+      border-color: var(--rs-line-3);
+    }
+
+    @keyframes fadeSlide {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .anim-in { animation: fadeSlide 0.18s ease-out; }
+  </style>
+</head>
+<body class="m-0 p-0 overflow-hidden bg-[var(--background)]">
+  <div id="app" class="rs-app flex flex-col h-screen w-screen overflow-hidden select-none">
+
+    <!-- TOP DEMO GUIDE STRIP -->
+    <div class="flex items-center justify-between gap-3 px-4 py-1.5 border-b rs-border rs-sun-soft text-xs shrink-0">
+      <div class="flex items-center gap-2 min-w-0">
+        <span class="px-2 py-0.5 rounded-md rs-ink-pill font-bold text-[11px] shrink-0">MOCKUP REDESIGN</span>
+        <span class="truncate font-medium">Klik antar layar: <strong>Hub Serial</strong> · <strong>Dunia &amp; Pemeran (3 tab)</strong> · <strong>Studio Episode (2 tab: Produksi &amp; Editor)</strong> · coba tombol <strong>Setujui Aset</strong>, <strong>Gambar &amp; Suara</strong>, <strong>Animatic</strong>, dan <strong>Auto-Trim</strong>!</span>
+      </div>
+      <button onclick="openCompareModal()" class="btn-rs px-2.5 py-1 border rs-border-2 rs-surface rs-ink shrink-0 hover:opacity-90">
+        ⇄ Bandingkan Lama vs Baru
+      </button>
+    </div>
+
+    <!-- STUDIO HEADER -->
+    <header class="h-[60px] shrink-0 border-b rs-border rs-surface px-4 flex items-center justify-between gap-3">
+      <!-- Left: Back + Title + Aspect + Episode Switcher -->
+      <div class="flex items-center gap-2.5 min-w-0">
+        <button onclick="showToast('Kembali ke Beranda Serial')" class="size-8 rounded-lg border rs-border rs-sand flex items-center justify-center rs-ink-2 hover:rs-ink" title="Kembali ke Beranda">
+          ←
+        </button>
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="rs-display font-bold text-[15px] truncate">Pembalasan Sang Pewaris</span>
+          <span class="rs-mono text-[11px] font-semibold px-1.5 py-0.5 rounded border rs-border rs-sand rs-ink-2">9:16</span>
+        </div>
+
+        <div class="h-5 w-px bg-[var(--rs-line)] mx-1"></div>
+
+        <!-- Always-available Episode Picker -->
+        <div class="relative">
+          <select id="headerEpSelect" onchange="switchEpisode(Number(this.value))" class="h-8 pl-2.5 pr-7 rounded-lg border rs-border-2 rs-sand text-xs font-semibold rs-ink cursor-pointer outline-none">
+            <option value="1">Ep 1 · Penghinaan di Lobi</option>
+            <option value="2" selected>Ep 2 · Rahasia di Ruang Rapat</option>
+            <option value="3">Ep 3 · Pengakuan Sang Pewaris</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Center: ONLY 2 TABS WHEN IN EPISODE VIEW -->
+      <div id="episodeTabBar" class="flex items-center gap-1 p-1 rounded-xl border rs-border rs-sand">
+        <button id="tabBtnProduction" onclick="setEpisodeTab('production')" class="btn-rs px-3.5 py-1.5 rounded-lg text-xs">
+          <span>🎬</span> Produksi <span class="text-[10px] opacity-75 font-normal">(Shot &amp; Storyboard)</span>
+        </button>
+        <button id="tabBtnEditor" onclick="setEpisodeTab('editor')" class="btn-rs px-3.5 py-1.5 rounded-lg text-xs">
+          <span>✂</span> Editor &amp; Rilis
+        </button>
+      </div>
+
+      <!-- Right: Credits + Task Center + Theme + Export -->
+      <div class="flex items-center gap-2 shrink-0">
+        <button onclick="showToast('Ep 2 terpakai 140 kr · Total serial 340 kr (Higgsfield)')" class="btn-rs h-8 px-2.5 border rs-border rs-sand rs-ink">
+          <span style="color: var(--rs-accent)">◆</span>
+          <span class="rs-mono text-xs" id="headerCredits">340 kr</span>
+        </button>
+
+        <button id="taskBtn" onclick="openTaskModal()" class="btn-rs h-8 px-2.5 border rs-border rs-surface rs-ink">
+          <span id="taskDot" class="size-2 rounded-full" style="background: var(--rs-ok-ink)"></span>
+          <span>Tugas</span>
+          <span id="taskCount" class="hidden rs-mono text-[10px] px-1.5 rounded-full rs-accent-bg">0</span>
+        </button>
+
+        <button onclick="toggleTheme()" class="size-8 rounded-lg border rs-border rs-sand flex items-center justify-center text-sm" title="Ganti Tema Terang / Gelap">
+          <span id="themeIcon">🌙</span>
+        </button>
+
+        <button onclick="showToast('Membuka dialog Ekspor MP4 + Paket Rilis Ep ' + state.currentEp)" class="btn-rs h-8 px-3 rs-accent-bg rs-shadow">
+          ⬇ Ekspor Ep <span id="exportEpNum">2</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- MAIN BODY: SIDEBAR + WORKSPACE -->
+    <div class="flex flex-1 min-h-0 overflow-hidden">
+
+      <!-- COLLAPSIBLE SIDEBAR -->
+      <aside id="sidebar" class="shrink-0 border-r rs-border rs-surface flex flex-col transition-all duration-200" style="width: 214px;">
+        <div class="h-11 px-3 border-b rs-border flex items-center justify-between">
+          <span class="sidebar-label rs-display text-[11px] font-bold uppercase tracking-wider rs-muted">Serial</span>
+          <button onclick="toggleSidebar()" class="size-7 rounded-lg hover:rs-sand flex items-center justify-center rs-muted text-xs" title="Ciutkan / Buka Sidebar">
+            ☰
+          </button>
+        </div>
+
+        <!-- Top Level Serial Nav -->
+        <div class="p-2 flex flex-col gap-1">
+          <button id="navHub" onclick="setView('hub')" class="btn-rs w-full justify-start h-9 px-2.5 text-xs">
+            <span class="text-sm">🗂</span>
+            <span class="sidebar-label">Hub Serial</span>
+          </button>
+          <button id="navLorebook" onclick="setView('lorebook')" class="btn-rs w-full justify-start h-9 px-2.5 text-xs">
+            <span class="text-sm">🎭</span>
+            <span class="sidebar-label flex-1 text-left">Dunia &amp; Pemeran</span>
+            <span id="sidebarAssetBadge" class="sidebar-label rs-mono text-[10px] px-1.5 py-0.5 rounded-full rs-sun-soft font-bold">2 baru</span>
+          </button>
+        </div>
+
+        <div class="px-3"><div class="border-t rs-border"></div></div>
+
+        <!-- Episode List -->
+        <div class="px-3 pt-3 pb-1 flex items-center justify-between">
+          <span class="sidebar-label rs-display text-[11px] font-bold uppercase tracking-wider rs-muted">Episode</span>
+          <button onclick="showToast('Episode 4 ditambahkan!')" class="size-6 rounded-md hover:rs-sand flex items-center justify-center rs-muted text-sm" title="Tambah episode">+</button>
+        </div>
+
+        <div id="sidebarEpisodes" class="flex-1 overflow-y-auto rs-scroll p-2 flex flex-col gap-1">
+          <!-- rendered by JS -->
+        </div>
+
+        <!-- Mini footer -->
+        <div class="sidebar-label p-2.5 border-t rs-border text-[11px] rs-muted flex items-center justify-between">
+          <span>Model Aktif</span>
+          <span class="rs-mono font-semibold rs-ink-2">Veo 3.1 · Flux</span>
+        </div>
+      </aside>
+
+      <!-- MAIN WORKSPACE -->
+      <main id="workspace" class="flex-1 min-w-0 flex flex-col overflow-hidden rs-paper">
+        <!-- Rendered dynamically by JS -->
+      </main>
+    </div>
+  </div>
+
+  <!-- MODAL CONTAINER -->
+  <div id="modalRoot" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" style="background: rgba(15, 13, 10, 0.55); backdrop-filter: blur(2px);">
+    <div id="modalBox" class="rs-app rs-surface border rs-border-2 rounded-2xl rs-shadow-md max-w-2xl w-full max-h-[86vh] flex flex-col overflow-hidden anim-in">
+      <!-- content injected by JS -->
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toastRoot" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <script>
+    const state = {
+      dark: false,
+      sidebarCollapsed: false,
+      view: 'episode', // 'hub' | 'lorebook' | 'episode'
+      episodeTab: 'production', // 'production' | 'editor'
+      lorebookTab: 'cast', // 'cast' | 'world' | 'rules'
+      worldFilter: 'all', // 'all' | 'location' | 'prop'
+      currentEp: 2,
+      statusFilter: 'all', // 'all' | 'missing' | 'stale' | 'ready'
+      newAssetsApproved: false,
+      expandedShotIds: new Set(),
+      selectedShotIds: new Set(),
+      ttsDone: false,
+      doctorOpen: false,
+      locksOpen: false,
+      animaticPlaying: false,
+      animaticIndex: 0,
+      animaticTimer: null,
+      autoTrimmed: false,
+      smartSfxApplied: false,
+      musicApplied: false,
+      creditsUsed: 340,
+      activeTasks: 0,
+      episodes: [
+        {
+          num: 1,
+          title: 'Penghinaan di Lobi',
+          status: 'exported',
+          statusLabel: 'Terekspor',
+          duration: 64,
+          hook: 'Satria disiram kopi panas oleh manajer lobi di depan seluruh karyawan.',
+          cliffhanger: 'Konvoi Rolls-Royce keluarga Mahardika berhenti tepat di depan lobi.',
+          summary: 'Satria menyamar sebagai satpam baru. Manajer lobi merendahkannya, namun Alina diam-diam membela.',
+          shotsDone: 12,
+          shotsTotal: 12
+        },
+        {
+          num: 2,
+          title: 'Rahasia di Ruang Rapat',
+          status: 'storyboard',
+          statusLabel: 'Produksi',
+          duration: 68,
+          hook: 'Manajer menyeret Satria ke Ruang Rapat VIP untuk memecatnya di depan direksi.',
+          cliffhanger: 'Pak Hendra membungkuk 90 derajat dan memanggil Satria "Tuan Muda".',
+          summary: 'Di ruang rapat, Manajer memfitnah Satria mencuri jam tangan. Saat surat pemecatan hendak ditandatangani, pintu terbuka.',
+          shotsDone: 3,
+          shotsTotal: 4
+        },
+        {
+          num: 3,
+          title: 'Pengakuan Sang Pewaris',
+          status: 'planned',
+          statusLabel: 'Siap Shot',
+          duration: 72,
+          hook: 'Seluruh direksi membeku saat melihat cincin segel Mahardika di jari Satria.',
+          cliffhanger: 'Alina sadar pria yang ia tolong kemarin adalah tunangan yang ia hindari.',
+          summary: 'Satria mengambil alih kendali rapat dan membongkar penggelapan dana sang manajer.',
+          shotsDone: 0,
+          shotsTotal: 0
+        }
+      ],
+      shots: [
+        {
+          id: 's1',
+          num: '01',
+          framing: 'Close Up',
+          speechType: 'dialogue', // 'dialogue' | 'vo' | 'action'
+          speaker: 'Manajer Riko',
+          emotion: 'Marah / Menghina',
+          text: '"Satpam miskin macam kamu berani masuk ruang rapat VIP? Keluar sebelum kupanggil polisi!"',
+          action: 'Manajer Riko membanting berkas ke meja kaca sambil menunjuk tajam ke arah kamera.',
+          tags: ['@Manajer Riko', '@Ruang Rapat VIP', '@Berkas Pemecatan'],
+          rawDur: 4.0,
+          trimmedDur: 2.6,
+          imgStatus: 'current',
+          vidStatus: 'current',
+          audioLabel: 'Audio Veo · Whisper sinkron',
+          colorA: '#3b1f1a',
+          colorB: '#9e2c13',
+          prompt: '9:16 vertical cinematic drama. Close-up angry corporate manager in tailored dark grey suit slamming folder onto glass table in luxury VIP boardroom, harsh cool overhead lighting, shallow depth of field. Dialogue: Indonesian male 35yo sharp arrogant voice.',
+          refs: ['Lembar: Manajer Riko', 'Lembar: Ruang Rapat VIP']
+        },
+        {
+          id: 's2',
+          num: '02',
+          framing: 'Extreme Close Up',
+          speechType: 'vo',
+          speaker: 'Satria (Batin)',
+          emotion: 'Dingin / Tenang',
+          text: '"Dia belum tahu, gedung 40 lantai tempatnya berdiri ini dibangun atas namaku."',
+          action: 'Satria hanya menatap tenang tanpa berkedip, sudut bibirnya terangkat tipis penuh wibawa.',
+          tags: ['@Satria / Seragam Satpam', '@Ruang Rapat VIP'],
+          rawDur: 3.4,
+          trimmedDur: 3.4,
+          imgStatus: 'current',
+          vidStatus: 'missing',
+          audioLabel: 'TTS ElevenLabs · 1 take Ep 2',
+          colorA: '#162538',
+          colorB: '#2d4b6e',
+          prompt: '9:16 vertical drama. Extreme close-up calm handsome Indonesian man late 20s in crisp dark blue security uniform, subtle confident smirk, silent expression (no lip movement), moody blue rim light.',
+          refs: ['Varian: Satria (Seragam Satpam)', 'Lembar: Ruang Rapat VIP']
+        },
+        {
+          id: 's3',
+          num: '03',
+          framing: 'Medium Shot',
+          speechType: 'dialogue',
+          speaker: 'Alina',
+          emotion: 'Tegas / Khawatir',
+          text: '"Tunggu, Pak Riko! CCTV lobi jelas menunjukkan jam itu terjatuh sendiri, bukan dicuri Satria!"',
+          action: 'Alina berdiri cepat dari kursinya, mencondongkan tubuh menahan map surat pemecatan.',
+          tags: ['@Alina / Blazer Putih', '@Ruang Rapat VIP'],
+          rawDur: 4.0,
+          trimmedDur: 2.9,
+          imgStatus: 'current',
+          vidStatus: 'missing',
+          audioLabel: 'Audio dari Veo (saat video dibuat)',
+          colorA: '#2f271e',
+          colorB: '#7a5a32',
+          prompt: '9:16 vertical drama. Medium shot young Indonesian woman in sharp white blazer standing up assertively at boardroom table, worried determined eyes. Dialogue: Indonesian female 26yo clear firm voice.',
+          refs: ['Varian: Alina (Blazer Putih)', 'Lembar: Ruang Rapat VIP']
+        },
+        {
+          id: 's4',
+          num: '04',
+          framing: 'Wide → Push In',
+          speechType: 'action',
+          speaker: null,
+          emotion: 'Klimaks / Cliffhanger',
+          text: '(Pintu ganda terbuka keras — Pak Hendra melangkah masuk lalu membungkuk 90° di hadapan Satria)',
+          action: 'Pintu kayu berat terbuka lebar, cahaya lorong menyinari siluet Pak Hendra (CEO) yang langsung berjalan melewati Manajer Riko dan menunduk hormat pada Satria.',
+          tags: ['@Pak Hendra (Baru)', '@Satria / Seragam Satpam', '@Ruang Rapat VIP (Baru)'],
+          rawDur: 4.0,
+          trimmedDur: 3.2,
+          imgStatus: 'needs_sheet',
+          vidStatus: 'missing',
+          audioLabel: 'Tanpa ucapan · SFX Pintu + Sting',
+          colorA: '#1c241b',
+          colorB: '#445e3e',
+          prompt: '9:16 vertical dramatic reveal. Wide push-in shot as double mahogany doors swing open with bright hallway backlight; distinguished 55yo Indonesian executive in bespoke black suit bows deeply 90 degrees toward young security guard.',
+          refs: ['Lembar: Pak Hendra (perlu dibuat)', 'Lembar: Ruang Rapat VIP (perlu dibuat)']
+        }
+      ],
+      cast: [
+        { id: 'c1', name: 'Satria', role: 'Pemeran Utama', voice: 'Pria 28th, bariton tenang', sheet: 'current', variants: [{ name: 'Seragam Satpam', status: 'current' }, { name: 'Jas Formal (Baru)', status: 'missing' }] },
+        { id: 'c2', name: 'Alina', role: 'Pemeran Utama', voice: 'Wanita 26th, tegas lembut', sheet: 'current', variants: [{ name: 'Blazer Putih', status: 'current' }] },
+        { id: 'c3', name: 'Manajer Riko', role: 'Antagonis', voice: 'Pria 35th, tajam arogan', sheet: 'current', variants: [] },
+        { id: 'c4', name: 'Pak Hendra', role: 'CEO / Baru di Ep 2', voice: 'Pria 55th, berwibawa', sheet: 'missing', variants: [] }
+      ],
+      world: [
+        { id: 'l1', kind: 'location', name: 'Lobi Menara Mahardika', desc: 'Lobi marmer putih mewah, lampu gantung kristal, pintu kaca tinggi.', status: 'current', eps: 'Ep 1, Ep 3' },
+        { id: 'l2', kind: 'location', name: 'Ruang Rapat VIP', desc: 'Meja kaca panjang hitam, dinding panel kayu gelap, jendela pemandangan kota.', status: 'missing', eps: 'Ep 2, Ep 3' },
+        { id: 'p1', kind: 'prop', name: 'Cincin Segel Mahardika', desc: 'Cincin emas tua berukir elang, tanda pewaris sah keluarga.', status: 'current', eps: 'Ep 1, Ep 3' },
+        { id: 'p2', kind: 'prop', name: 'Berkas Pemecatan', desc: 'Map merah tua berstempel HRD dengan surat peringatan.', status: 'current', eps: 'Ep 2' }
+      ],
+      locks: [
+        { label: 'Gaya Sinematik', text: '9:16 Indonesian modern vertical drama, 35mm anamorphic look, crisp skin texture', enabled: true, scope: 'Serial' },
+        { label: 'Wajah Konsisten', text: 'Keep exact facial features from reference sheet, no sudden age change', enabled: true, scope: 'Serial' },
+        { label: 'Lampu Ruang Rapat', text: 'Cool corporate overhead tungsten + city night bokeh outside windows', enabled: true, scope: 'Ep 2' }
+      ],
+      continuity: [
+        { name: 'Noda kopi di bahu kiri Satria', kind: 'Kostum', status: 'Aktif (Ep 1 → Ep 2)', note: 'Sisa siraman kopi dari lobi masih sedikit terlihat di bahu seragam.' },
+        { name: 'Identitas asli Satria', kind: 'Rahasia', status: 'Terungkap di akhir Ep 2', note: 'Alina baru curiga di Ep 2; direksi baru tahu di akhir Ep 2.' }
+      ]
+    };
+
+    function showToast(msg, tone = 'info') {
+      const root = document.getElementById('toastRoot');
+      const el = document.createElement('div');
+      const toneCls = tone === 'ok' ? 'rs-ok-soft' : tone === 'warn' ? 'rs-sun-soft' : 'rs-surface rs-ink';
+      el.className = `pointer-events-auto px-3.5 py-2.5 rounded-xl border rs-border-2 rs-shadow text-xs font-semibold flex items-center gap-2 anim-in ${toneCls}`;
+      el.innerHTML = `<span>${tone === 'ok' ? '✓' : tone === 'warn' ? '⚡' : 'ℹ'}</span><span>${msg}</span>`;
+      root.appendChild(el);
+      setTimeout(() => {
+        el.style.opacity = '0';
+        el.style.transition = 'opacity 0.25s';
+        setTimeout(() => el.remove(), 260);
+      }, 2800);
+    }
+
+    function toggleTheme() {
+      state.dark = !state.dark;
+      document.getElementById('app').classList.toggle('rs-dark', state.dark);
+      document.getElementById('modalBox').classList.toggle('rs-dark', state.dark);
+      document.getElementById('themeIcon').textContent = state.dark ? '☀' : '🌙';
+    }
+
+    function toggleSidebar(force) {
+      state.sidebarCollapsed = typeof force === 'boolean' ? force : !state.sidebarCollapsed;
+      const sb = document.getElementById('sidebar');
+      sb.style.width = state.sidebarCollapsed ? '52px' : '214px';
+      sb.querySelectorAll('.sidebar-label').forEach(el => {
+        el.style.display = state.sidebarCollapsed ? 'none' : '';
+      });
+    }
+
+    function setView(v) {
+      state.view = v;
+      if (v !== 'episode' && state.sidebarCollapsed) toggleSidebar(false);
+      renderAll();
+    }
+
+    function setEpisodeTab(tab) {
+      state.view = 'episode';
+      state.episodeTab = tab;
+      // Auto-collapse sidebar in Editor for full width, restore in Produksi
+      toggleSidebar(tab === 'editor');
+      renderAll();
+    }
+
+    function switchEpisode(num) {
+      state.currentEp = num;
+      document.getElementById('headerEpSelect').value = String(num);
+      document.getElementById('exportEpNum').textContent = String(num);
+      state.view = 'episode';
+      renderAll();
+      showToast(`Membuka Episode ${num}`);
+    }
+
+    function renderSidebarAndHeader() {
+      // Nav active states
+      const navHub = document.getElementById('navHub');
+      const navLore = document.getElementById('navLorebook');
+      navHub.className = `btn-rs w-full justify-start h-9 px-2.5 text-xs ${state.view === 'hub' ? 'rs-sun-soft' : 'rs-ink-2 hover:rs-sand'}`;
+      navLore.className = `btn-rs w-full justify-start h-9 px-2.5 text-xs ${state.view === 'lorebook' ? 'rs-sun-soft' : 'rs-ink-2 hover:rs-sand'}`;
+
+      const badge = document.getElementById('sidebarAssetBadge');
+      if (badge) {
+        const missingCount = state.cast.filter(c => c.sheet === 'missing').length + state.world.filter(w => w.status === 'missing').length;
+        badge.style.display = (!state.sidebarCollapsed && missingCount > 0) ? '' : 'none';
+        badge.textContent = `${missingCount} kosong`;
+      }
+
+      // Episode list
+      const epList = document.getElementById('sidebarEpisodes');
+      epList.innerHTML = state.episodes.map(ep => {
+        const active = state.view === 'episode' && state.currentEp === ep.num;
+        const dotColor = ep.status === 'exported' ? 'var(--rs-ok-ink)' : ep.status === 'storyboard' ? 'var(--rs-accent)' : 'var(--rs-info-ink)';
+        return `
+          <button onclick="switchEpisode(${ep.num})" title="Ep ${ep.num} · ${ep.title}"
+            class="btn-rs w-full justify-start h-9 px-2.5 text-xs ${active ? 'rs-sun-soft' : 'rs-ink-2 hover:rs-sand'}">
+            <span class="rs-mono text-[11px] font-bold w-4 text-center shrink-0">${ep.num}</span>
+            <span class="sidebar-label truncate flex-1 text-left">${ep.title}</span>
+            <span class="sidebar-label size-2 rounded-full shrink-0" style="background:${dotColor}"></span>
+          </button>
+        `;
+      }).join('');
+      if (state.sidebarCollapsed) {
+        epList.querySelectorAll('.sidebar-label').forEach(el => el.style.display = 'none');
+      }
+
+      // Header tab bar visibility
+      const tabBar = document.getElementById('episodeTabBar');
+      tabBar.style.visibility = state.view === 'episode' ? 'visible' : 'hidden';
+
+      const btnProd = document.getElementById('tabBtnProduction');
+      const btnEd = document.getElementById('tabBtnEditor');
+      btnProd.className = `btn-rs px-3.5 py-1.5 rounded-lg text-xs ${state.episodeTab === 'production' ? 'rs-surface rs-ink rs-shadow border rs-border-2' : 'rs-ink-2'}`;
+      btnEd.className = `btn-rs px-3.5 py-1.5 rounded-lg text-xs ${state.episodeTab === 'editor' ? 'rs-surface rs-ink rs-shadow border rs-border-2' : 'rs-ink-2'}`;
+
+      document.getElementById('headerCredits').textContent = `${state.creditsUsed} kr`;
+      const tc = document.getElementById('taskCount');
+      if (state.activeTasks > 0) {
+        tc.classList.remove('hidden');
+        tc.textContent = String(state.activeTasks);
+        document.getElementById('taskDot').style.background = 'var(--rs-accent)';
+      } else {
+        tc.classList.add('hidden');
+        document.getElementById('taskDot').style.background = 'var(--rs-ok-ink)';
+      }
+    }
+
+    function renderAll() {
+      renderSidebarAndHeader();
+      const ws = document.getElementById('workspace');
+      if (state.view === 'hub') ws.innerHTML = renderHub();
+      else if (state.view === 'lorebook') ws.innerHTML = renderLorebook();
+      else if (state.episodeTab === 'production') ws.innerHTML = renderProduction();
+      else ws.innerHTML = renderEditor();
+    }
+
+    /* ================= VIEW 1: HUB SERIAL ================= */
+    function renderHub() {
+      return `
+        <div class="flex-1 overflow-y-auto rs-scroll p-6">
+          <div class="max-w-5xl mx-auto flex flex-col gap-5 anim-in">
+            <!-- Header -->
+            <div class="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h1 class="rs-display text-2xl font-bold">Hub Serial</h1>
+                <p class="text-xs rs-muted mt-0.5">Tempel novel atau naskah jadi — satu klik memecah episode sekaligus mengekstrak pemeran &amp; lokasi utama.</p>
+              </div>
+              <button onclick="setView('lorebook')" class="btn-rs h-9 px-3.5 border rs-border-2 rs-surface rs-ink">
+                🎭 Buka Dunia &amp; Pemeran
+              </button>
+            </div>
+
+            <!-- Compact Source Card -->
+            <section class="rounded-2xl border rs-border rs-surface p-4 flex flex-col gap-3">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="flex items-center gap-2">
+                  <span class="rs-display font-bold text-sm">Sumber Cerita Serial</span>
+                  <div class="inline-flex p-0.5 rounded-lg border rs-border rs-sand text-[11px]">
+                    <span class="px-2.5 py-1 rounded-md rs-surface font-semibold rs-ink">Novel / Premis</span>
+                    <span class="px-2.5 py-1 rounded-md rs-muted">Naskah Jadi</span>
+                  </div>
+                </div>
+                <div class="flex items-center gap-2 text-xs">
+                  <span class="rs-muted">Target:</span>
+                  <span class="rs-mono font-semibold px-2 py-1 rounded-lg border rs-border rs-sand">3 Episode · 65 dtk/ep</span>
+                </div>
+              </div>
+
+              <textarea rows="3" class="w-full rounded-xl border rs-border rs-paper p-3 text-xs leading-relaxed rs-ink outline-none resize-none">Satria, pewaris tunggal konglomerasi Mahardika, menyamar sebagai satpam baru di menara kantornya sendiri untuk menguji integritas para manajer. Di hari pertama, Manajer Riko menyiramnya dengan kopi panas dan memfitnahnya mencuri jam tangan mewah di ruang rapat VIP—tanpa tahu bahwa CEO Pak Hendra sedang dalam perjalanan untuk menyerahkan kendali penuh perusahaan kepada Satria.</textarea>
+
+              <div class="flex flex-wrap items-center justify-between gap-2 pt-1">
+                <div class="flex items-center gap-2 text-[11px] rs-ok-soft px-2.5 py-1 rounded-lg font-medium">
+                  <span>✓</span> 1 alur otomatis: Rencanakan Episode → Ekstrak Lorebook Utama (tanpa klik terpisah)
+                </div>
+                <div class="flex items-center gap-2">
+                  <button onclick="showToast('Mengunggah file .txt / .md...')" class="btn-rs h-9 px-3 border rs-border-2 rs-sand rs-ink">
+                    ⬆ Unggah Teks
+                  </button>
+                  <button onclick="simulateSerialPlan()" class="btn-rs h-9 px-4 rs-accent-bg rs-shadow">
+                    ⚡ Rencanakan Serial &amp; Casting
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <!-- Episode Cards -->
+            <section class="flex flex-col gap-3">
+              <div class="flex items-center justify-between">
+                <h2 class="rs-display font-bold text-base">Daftar Episode (${state.episodes.length})</h2>
+                <span class="text-xs rs-muted">Klik kartu untuk langsung masuk Tab Produksi</span>
+              </div>
+
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                ${state.episodes.map(ep => {
+                  const pct = ep.shotsTotal ? Math.round((ep.shotsDone / ep.shotsTotal) * 100) : 0;
+                  const badgeCls = ep.status === 'exported' ? 'rs-ok-soft' : ep.status === 'storyboard' ? 'rs-sun-soft' : 'rs-info-soft';
+                  return `
+                    <div class="rounded-2xl border rs-border rs-surface p-4 flex flex-col gap-3 hover:border-[var(--rs-line-3)] transition-colors">
+                      <div class="flex items-start justify-between gap-2">
+                        <div>
+                          <div class="flex items-center gap-2">
+                            <span class="rs-mono text-[11px] font-bold px-1.5 py-0.5 rounded rs-ink-pill">EP ${ep.num}</span>
+                            <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full ${badgeCls}">${ep.statusLabel}</span>
+                          </div>
+                          <h3 class="rs-display font-bold text-sm mt-2">${ep.title}</h3>
+                        </div>
+                        <span class="rs-mono text-[11px] rs-muted">${ep.duration} dtk</span>
+                      </div>
+
+                      <div class="flex flex-col gap-1.5 rounded-xl border rs-border rs-paper p-2.5 text-[11px]">
+                        <div><span class="font-bold rs-ink">Hook:</span> <span class="rs-ink-2">${ep.hook}</span></div>
+                        <div class="border-t rs-border pt-1.5"><span class="font-bold rs-ink">Cliffhanger:</span> <span class="rs-ink-2">${ep.cliffhanger}</span></div>
+                      </div>
+
+                      <div class="mt-auto pt-1 flex flex-col gap-2">
+                        <div class="flex items-center justify-between text-[11px] rs-muted">
+                          <span>Progres visual</span>
+                          <span class="rs-mono font-semibold rs-ink-2">${ep.shotsTotal ? `${ep.shotsDone}/${ep.shotsTotal} shot` : 'Belum disusun'}</span>
+                        </div>
+                        <div class="h-1.5 rounded-full rs-sand overflow-hidden">
+                          <div class="h-full rounded-full" style="width:${pct}%; background:${ep.status === 'exported' ? 'var(--rs-ok-ink)' : 'var(--rs-accent)'}"></div>
+                        </div>
+                        <button onclick="switchEpisode(${ep.num})" class="btn-rs w-full h-8 mt-1 border rs-border-2 rs-sand rs-ink hover:rs-surface">
+                          Buka Studio Ep ${ep.num} →
+                        </button>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </section>
+          </div>
+        </div>
+      `;
+    }
+
+    function simulateSerialPlan() {
+      showToast('Menyusun ulang kerangka 3 episode + mengekstrak Lorebook otomatis...', 'warn');
+      setTimeout(() => showToast('Selesai! 3 episode siap & 4 pemeran utama sudah masuk Dunia & Pemeran.', 'ok'), 1100);
+    }
+
+    /* ================= VIEW 2: LOREBOOK (3 TAB PADAT) ================= */
+    function renderLorebook() {
+      const missingSheets = state.cast.filter(c => c.sheet === 'missing').length
+        + state.cast.reduce((acc, c) => acc + c.variants.filter(v => v.status === 'missing').length, 0)
+        + state.world.filter(w => w.status === 'missing').length;
+
+      return `
+        <div class="flex-1 overflow-y-auto rs-scroll p-6">
+          <div class="max-w-5xl mx-auto flex flex-col gap-5 anim-in">
+            <!-- Top Bar -->
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h1 class="rs-display text-2xl font-bold">Dunia &amp; Pemeran</h1>
+                <p class="text-xs rs-muted mt-0.5">Dipadatkan dari 5 tab + 2 modal menjadi <strong>3 tab bersih</strong>: Pemeran, Dunia, dan Aturan Serial.</p>
+              </div>
+              <div class="flex items-center gap-2">
+                ${missingSheets > 0 ? `
+                  <button onclick="generateAllMissingSheets()" class="btn-rs h-9 px-3.5 rs-accent-bg rs-shadow">
+                    ✨ Buat Semua Lembar Kosong (${missingSheets}) · ${missingSheets * 20} kr
+                  </button>
+                ` : `
+                  <span class="px-3 py-1.5 rounded-xl rs-ok-soft text-xs font-semibold">✓ Semua lembar referensi lengkap</span>
+                `}
+              </div>
+            </div>
+
+            <!-- 3 Tabs -->
+            <div class="inline-flex self-start p-1 rounded-xl border rs-border rs-sand gap-1">
+              <button onclick="state.lorebookTab='cast'; renderAll()" class="btn-rs px-4 py-1.5 rounded-lg text-xs ${state.lorebookTab === 'cast' ? 'rs-surface rs-ink rs-shadow border rs-border-2' : 'rs-ink-2'}">
+                👤 Pemeran (${state.cast.length})
+              </button>
+              <button onclick="state.lorebookTab='world'; renderAll()" class="btn-rs px-4 py-1.5 rounded-lg text-xs ${state.lorebookTab === 'world' ? 'rs-surface rs-ink rs-shadow border rs-border-2' : 'rs-ink-2'}">
+                🏛 Dunia: Lokasi &amp; Prop (${state.world.length})
+              </button>
+              <button onclick="state.lorebookTab='rules'; renderAll()" class="btn-rs px-4 py-1.5 rounded-lg text-xs ${state.lorebookTab === 'rules' ? 'rs-surface rs-ink rs-shadow border rs-border-2' : 'rs-ink-2'}">
+                🔒 Aturan Serial &amp; Kontinuitas (${state.locks.length + state.continuity.length})
+              </button>
+            </div>
+
+            <!-- Tab Content -->
+            ${state.lorebookTab === 'cast' ? `
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                ${state.cast.map(c => `
+                  <div class="rounded-2xl border rs-border rs-surface p-4 flex gap-4">
+                    <div class="w-24 h-28 rounded-xl border rs-border shrink-0 flex flex-col items-center justify-center text-center p-2 ${c.sheet === 'current' ? 'rs-sand' : 'rs-bad-soft border-dashed'}">
+                      <span class="text-2xl">${c.sheet === 'current' ? '🧍' : '◌'}</span>
+                      <span class="text-[10px] font-bold mt-1">${c.sheet === 'current' ? '3 Tampak' : 'Belum ada'}</span>
+                    </div>
+                    <div class="flex-1 min-w-0 flex flex-col gap-2">
+                      <div class="flex items-start justify-between gap-2">
+                        <div>
+                          <h3 class="rs-display font-bold text-sm">${c.name}</h3>
+                          <span class="text-[11px] rs-muted">${c.role}</span>
+                        </div>
+                        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${c.sheet === 'current' ? 'rs-ok-soft' : 'rs-sun-soft'}">
+                          ${c.sheet === 'current' ? 'Terkini' : 'Perlu lembar'}
+                        </span>
+                      </div>
+                      <div class="text-[11px] rs-ink-2"><strong>Gaya Suara:</strong> ${c.voice}</div>
+                      <div class="flex flex-wrap gap-1.5 mt-auto pt-1">
+                        ${c.variants.map(v => `
+                          <span class="text-[11px] px-2 py-0.5 rounded-lg border rs-border ${v.status === 'current' ? 'rs-sand rs-ink' : 'rs-sun-soft'}">
+                            👔 ${v.name} ${v.status === 'missing' ? '(kosong)' : '✓'}
+                          </span>
+                        `).join('')}
+                        ${c.variants.length === 0 ? '<span class="text-[11px] rs-muted">Kostum bawaan saja</span>' : ''}
+                      </div>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            ` : state.lorebookTab === 'world' ? `
+              <div class="flex flex-col gap-3">
+                <div class="flex items-center gap-1.5">
+                  ${['all', 'location', 'prop'].map(f => `
+                    <button onclick="state.worldFilter='${f}'; renderAll()" class="btn-rs px-3 py-1 rounded-full border text-xs ${state.worldFilter === f ? 'rs-ink-pill border-transparent' : 'rs-surface rs-border rs-ink-2'}">
+                      ${f === 'all' ? 'Semua' : f === 'location' ? '📍 Lokasi' : '📦 Prop'}
+                    </button>
+                  `).join('')}
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  ${state.world.filter(w => state.worldFilter === 'all' || w.kind === state.worldFilter).map(w => `
+                    <div class="rounded-2xl border rs-border rs-surface p-4 flex gap-3.5">
+                      <div class="size-20 rounded-xl border rs-border shrink-0 flex flex-col items-center justify-center ${w.status === 'current' ? 'rs-sand' : 'rs-sun-soft border-dashed'}">
+                        <span class="text-xl">${w.kind === 'location' ? '🏢' : '💍'}</span>
+                        <span class="text-[10px] font-bold mt-0.5">${w.status === 'current' ? 'Siap' : 'Kosong'}</span>
+                      </div>
+                      <div class="flex-1 min-w-0 flex flex-col gap-1">
+                        <div class="flex items-center justify-between gap-2">
+                          <span class="rs-display font-bold text-sm truncate">${w.name}</span>
+                          <span class="text-[10px] px-2 py-0.5 rounded-full ${w.status === 'current' ? 'rs-ok-soft' : 'rs-sun-soft'} font-bold">${w.status === 'current' ? 'Terkini' : 'Perlu lembar'}</span>
+                        </div>
+                        <p class="text-[11px] rs-ink-2 leading-snug">${w.desc}</p>
+                        <span class="text-[10px] rs-muted mt-auto">Dipakai di: ${w.eps}</span>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            ` : `
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="rounded-2xl border rs-border rs-surface p-4 flex flex-col gap-3">
+                  <div class="flex items-center justify-between">
+                    <h3 class="rs-display font-bold text-sm">🔒 Kunci Kontinuitas (Lock Words)</h3>
+                    <span class="text-[11px] rs-muted">Ditempel verbatim ke prompt</span>
+                  </div>
+                  ${state.locks.map(l => `
+                    <div class="rounded-xl border rs-border rs-paper p-3 flex flex-col gap-1">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold">${l.label}</span>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded rs-sand rs-ink-2 font-semibold">${l.scope}</span>
+                      </div>
+                      <p class="text-[11px] rs-muted rs-mono">${l.text}</p>
+                    </div>
+                  `).join('')}
+                </div>
+
+                <div class="rounded-2xl border rs-border rs-surface p-4 flex flex-col gap-3">
+                  <div class="flex items-center justify-between">
+                    <h3 class="rs-display font-bold text-sm">📓 Catatan Kontinuitas Lintas Episode</h3>
+                    <span class="text-[11px] rs-muted">Dibaca AI saat menyusun Ep baru</span>
+                  </div>
+                  ${state.continuity.map(ct => `
+                    <div class="rounded-xl border rs-border rs-paper p-3 flex flex-col gap-1">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold">${ct.name}</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded-full rs-info-soft font-semibold">${ct.status}</span>
+                      </div>
+                      <p class="text-[11px] rs-ink-2">${ct.note}</p>
+                    </div>
+                  `).join('')}
+                  <div class="rounded-xl border rs-border rs-sand p-3 text-[11px] rs-ink-2">
+                    <strong>Arahan Gaya Serial:</strong> Drama vertikal tempo cepat (fast-cut 2–3,5 dtk), banyak close-up ekspresi, akhir episode wajib cliffhanger tajam.
+                  </div>
+                </div>
+              </div>
+            `}
+          </div>
+        </div>
+      `;
+    }
+
+    function generateAllMissingSheets() {
+      state.cast.forEach(c => {
+        c.sheet = 'current';
+        c.variants.forEach(v => v.status = 'current');
+      });
+      state.world.forEach(w => w.status = 'current');
+      state.newAssetsApproved = true;
+      state.shots[3].imgStatus = 'missing';
+      state.shots[3].tags = ['@Pak Hendra', '@Satria / Seragam Satpam', '@Ruang Rapat VIP'];
+      state.shots[3].refs = ['Lembar: Pak Hendra ✓', 'Lembar: Ruang Rapat VIP ✓'];
+      state.creditsUsed += 60;
+      renderAll();
+      showToast('Semua lembar referensi selesai berantai (Karakter → Varian → Lokasi)!', 'ok');
+    }
+
+    /* ================= VIEW 3: TAB 1 PRODUKSI (GABUNGAN PLAN + STORYBOARD) ================= */
+    function renderProduction() {
+      const ep = state.episodes.find(e => e.num === state.currentEp) || state.episodes[1];
+      const missingImgCount = state.shots.filter(s => s.imgStatus !== 'current').length;
+      const missingVidCount = state.shots.filter(s => s.vidStatus !== 'current').length;
+      const voCount = state.shots.filter(s => s.speechType === 'vo').length;
+      const needSheetCount = state.newAssetsApproved ? 0 : 2;
+      const totalDur = state.shots.reduce((a, s) => a + (state.autoTrimmed ? s.trimmedDur : s.rawDur), 0);
+      const selCount = state.selectedShotIds.size;
+
+      const visibleShots = state.shots.filter(s => {
+        if (state.statusFilter === 'missing') return s.imgStatus !== 'current' || s.vidStatus !== 'current';
+        if (state.statusFilter === 'ready') return s.imgStatus === 'current' && s.vidStatus === 'current';
+        return true;
+      });
+
+      return `
+        <div class="flex flex-col flex-1 min-h-0 overflow-hidden">
+
+          <!-- SEPARATED GENERATION TOOLBAR: SHOT | GAMBAR | VIDEO | TTS -->
+          <div class="shrink-0 border-b rs-border rs-surface px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+            <!-- Left: Clearly separated generation buttons -->
+            <div class="flex flex-wrap items-center gap-2">
+              <button onclick="simulateWriteShots()" class="btn-rs h-9 px-3 border rs-border-2 rs-sand rs-ink" title="Susun ulang shot + prompt visual otomatis dalam 1 alur">
+                <span>📝</span>
+                <span>Susun Shot &amp; Prompt</span>
+              </button>
+
+              <div class="h-5 w-px bg-[var(--rs-line)] mx-0.5"></div>
+
+              <!-- Dedicated IMAGE generation button -->
+              <button onclick="openSmartBatchModal('image')" class="btn-rs h-9 px-3.5 ${missingImgCount > 0 ? 'rs-accent-bg rs-shadow' : 'border rs-border-2 rs-ok-soft'}">
+                <span>🖼</span>
+                <span>${missingImgCount > 0 ? `Buat Gambar (${missingImgCount})` : 'Gambar Lengkap ✓'}</span>
+                ${missingImgCount > 0 && needSheetCount ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-black/20">+${needSheetCount} lembar</span>` : ''}
+              </button>
+
+              <!-- Dedicated VIDEO generation button (strictly separated from image!) -->
+              <button onclick="openSmartBatchModal('video')" class="btn-rs h-9 px-3.5 ${missingImgCount === 0 && missingVidCount > 0 ? 'rs-accent-bg rs-shadow' : 'border rs-border-2 rs-surface rs-ink'}">
+                <span>🎬</span>
+                <span>${missingVidCount > 0 ? `Buat Video (${missingVidCount})` : 'Video Lengkap ✓'}</span>
+              </button>
+
+              <!-- Dedicated TTS button for VO / Narration -->
+              ${voCount > 0 ? `
+                <button onclick="openSmartBatchModal('tts')" class="btn-rs h-9 px-3 border rs-border-2 ${state.ttsDone ? 'rs-ok-soft' : 'rs-surface rs-ink'}" title="Khusus shot Monolog Batin / Narator (dialog tetap dari suara video Veo)">
+                  <span>🎙</span>
+                  <span>${state.ttsDone ? 'TTS Batin ✓' : `Buat TTS (${voCount})`}</span>
+                </button>
+              ` : ''}
+            </div>
+
+            <!-- Right: Animatic Preview -->
+            <div class="flex items-center gap-2">
+              <button onclick="toggleSelectAllShots()" class="btn-rs h-9 px-3 border rs-border rs-paper rs-ink-2 hover:rs-ink">
+                ${selCount === state.shots.length ? '☑ Batal Pilih' : '☐ Pilih Shot'}
+              </button>
+              <button onclick="openAnimaticModal()" class="btn-rs h-9 px-3.5 border rs-border-2 rs-surface rs-ink rs-shadow">
+                ▶ Putar Animatic
+              </button>
+            </div>
+          </div>
+
+          <!-- MULTI-SELECT BATCH BAR (Appears when user checks specific shots) -->
+          ${selCount > 0 ? `
+            <div class="shrink-0 border-b rs-border rs-ink-pill px-5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs anim-in">
+              <div class="flex items-center gap-2">
+                <span class="rs-mono font-bold px-2 py-0.5 rounded bg-white/15">${selCount} shot dipilih</span>
+                <span class="opacity-80">Generate hanya untuk shot yang dicentang:</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <button onclick="openSmartBatchModal('image', true)" class="btn-rs h-8 px-3 bg-white text-[#1f1d1a] hover:opacity-90">
+                  🖼 Buat Gambar Terpilih (${selCount})
+                </button>
+                <button onclick="openSmartBatchModal('video', true)" class="btn-rs h-8 px-3 rs-accent-bg">
+                  🎬 Buat Video Terpilih (${selCount})
+                </button>
+                <button onclick="state.selectedShotIds.clear(); renderAll()" class="btn-rs h-8 px-2.5 bg-white/10 text-white hover:bg-white/20">
+                  Batal ✕
+                </button>
+              </div>
+            </div>
+          ` : ''}
+
+          <!-- SUB-HEADER: PROGRESSIVE DISCLOSURE PILLS (Phase 8 tools neatly tucked away!) -->
+          <div class="shrink-0 border-b rs-border rs-paper px-5 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rs-display font-bold text-xs rs-ink">Ep ${ep.num} · ${ep.title}</span>
+              <span class="rs-muted">•</span>
+              <button onclick="state.doctorOpen=!state.doctorOpen; state.locksOpen=false; renderAll()" class="btn-rs px-2.5 py-1 rounded-full border ${state.doctorOpen ? 'rs-sun-soft rs-border-2' : 'rs-surface rs-border rs-ink-2'}">
+                🩺 Cek Naskah <span class="rs-mono px-1.5 rounded-full rs-sun-soft text-[10px]">2</span>
+              </button>
+              <button onclick="state.locksOpen=!state.locksOpen; state.doctorOpen=false; renderAll()" class="btn-rs px-2.5 py-1 rounded-full border ${state.locksOpen ? 'rs-info-soft rs-border-2' : 'rs-surface rs-border rs-ink-2'}">
+                🔒 Kunci Kontinuitas <span class="rs-mono text-[10px]">(3)</span>
+              </button>
+              <button onclick="showToast('Riwayat Snapshot Naskah: 2 versi tersimpan')" class="btn-rs px-2.5 py-1 rounded-full border rs-border rs-surface rs-ink-2">
+                🕒 Versi
+              </button>
+              <div class="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full border rs-border rs-surface" title="Bar Ritme Episode">
+                <span class="text-[11px] rs-muted">Ritme</span>
+                <div class="flex items-center gap-0.5 w-20 h-2 rounded overflow-hidden">
+                  <div class="h-full flex-1" style="background: var(--rs-accent)"></div>
+                  <div class="h-full flex-1" style="background: var(--rs-info-ink)"></div>
+                  <div class="h-full flex-1" style="background: var(--rs-accent)"></div>
+                  <div class="h-full flex-1" style="background: var(--rs-sun)"></div>
+                </div>
+                <span class="rs-mono text-[11px] font-semibold">${totalDur.toFixed(1).replace('.', ',')} dtk</span>
+              </div>
+            </div>
+
+            <!-- Filter Pills -->
+            <div class="flex items-center gap-1">
+              ${[
+                { k: 'all', l: `Semua (${state.shots.length})` },
+                { k: 'missing', l: `Belum selesai (${state.shots.filter(s => s.imgStatus !== 'current' || s.vidStatus !== 'current').length})` },
+                { k: 'ready', l: `Siap (${state.shots.filter(s => s.imgStatus === 'current' && s.vidStatus === 'current').length})` }
+              ].map(f => `
+                <button onclick="state.statusFilter='${f.k}'; renderAll()" class="btn-rs px-2.5 py-1 rounded-full text-[11px] ${state.statusFilter === f.k ? 'rs-ink-pill' : 'rs-ink-2 hover:rs-sand'}">
+                  ${f.l}
+                </button>
+              `).join('')}
+            </div>
+          </div>
+
+          <!-- COLLAPSIBLE DRAWERS (Script Doctor / Locks) -->
+          ${state.doctorOpen ? `
+            <div class="shrink-0 border-b rs-border rs-sun-soft px-5 py-3 flex flex-wrap items-start justify-between gap-3 text-xs anim-in">
+              <div class="flex flex-col gap-1.5">
+                <div class="font-bold flex items-center gap-1.5">🩺 Catatan Script Doctor (tidak memblokir edit)</div>
+                <div>• <strong>Shot 01:</strong> Dialog 15 kata di durasi 4 dtk — otomatis dirapikan jadi 2,6 dtk setelah ekstraksi Whisper.</div>
+                <div>• <strong>Shot 04:</strong> Merujuk <em>Pak Hendra</em> &amp; <em>Ruang Rapat VIP</em> — ${state.newAssetsApproved ? 'lembar sudah disiapkan ✓' : 'akan otomatis dibuatkan lembarnya di Batch Gambar.'}</div>
+              </div>
+              <button onclick="state.doctorOpen=false; renderAll()" class="btn-rs px-2 py-1 rs-surface border rs-border rs-ink">Tutup ✕</button>
+            </div>
+          ` : ''}
+
+          ${state.locksOpen ? `
+            <div class="shrink-0 border-b rs-border rs-info-soft px-5 py-3 flex flex-wrap items-start justify-between gap-3 text-xs anim-in">
+              <div class="flex flex-col gap-1">
+                <div class="font-bold">🔒 Kunci Kontinuitas Aktif (otomatis masuk ke semua prompt Ep ${ep.num})</div>
+                <div class="flex flex-wrap gap-2 mt-1">
+                  ${state.locks.map(l => `<span class="px-2 py-0.5 rounded-lg rs-surface border rs-border rs-ink text-[11px]">✓ ${l.label} (${l.scope})</span>`).join('')}
+                </div>
+              </div>
+              <button onclick="state.locksOpen=false; renderAll()" class="btn-rs px-2 py-1 rs-surface border rs-border rs-ink">Tutup ✕</button>
+            </div>
+          ` : ''}
+
+          <!-- SCROLLABLE PRODUCTION CANVAS -->
+          <div class="flex-1 overflow-y-auto rs-scroll p-5">
+            <div class="max-w-5xl mx-auto flex flex-col gap-4">
+
+              <!-- INLINE NEW ASSET BANNER (Replaces jumping back & forth to Lorebook!) -->
+              ${!state.newAssetsApproved ? `
+                <div class="rounded-2xl border-2 p-4 flex flex-wrap items-center justify-between gap-4 rs-surface rs-shadow anim-in" style="border-color: var(--rs-sun);">
+                  <div class="flex items-start gap-3 min-w-0 flex-1">
+                    <div class="size-9 rounded-xl rs-sun-soft flex items-center justify-center text-base shrink-0">✨</div>
+                    <div class="min-w-0">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span class="rs-display font-bold text-sm">3 aset baru terdeteksi di Episode ${ep.num}</span>
+                        <span class="text-[11px] rs-muted">— selesaikan di sini tanpa pindah ke Lorebook</span>
+                      </div>
+                      <div class="flex flex-wrap gap-1.5 mt-2">
+                        <span class="text-[11px] font-semibold px-2.5 py-1 rounded-lg border rs-border rs-sand">👤 Pak Hendra <span class="rs-muted font-normal">(Karakter baru)</span></span>
+                        <span class="text-[11px] font-semibold px-2.5 py-1 rounded-lg border rs-border rs-sand">👔 Jas Formal <span class="rs-muted font-normal">(Varian Satria)</span></span>
+                        <span class="text-[11px] font-semibold px-2.5 py-1 rounded-lg border rs-border rs-sand">🏢 Ruang Rapat VIP <span class="rs-muted font-normal">(Lokasi baru)</span></span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-2 shrink-0">
+                    <button onclick="setView('lorebook')" class="btn-rs h-9 px-3 border rs-border-2 rs-sand rs-ink">Tinjau Detail</button>
+                    <button onclick="approveInlineAssets()" class="btn-rs h-9 px-3.5 rs-accent-bg rs-shadow">
+                      ✓ Setujui &amp; Buat Lembar (60 kr)
+                    </button>
+                  </div>
+                </div>
+              ` : ''}
+
+              <!-- UNIFIED SHOT CARDS -->
+              <div class="flex flex-col gap-3">
+                ${visibleShots.map(s => renderShotCard(s)).join('')}
+              </div>
+
+              <!-- Quick add shot -->
+              <button onclick="showToast('Menambahkan shot baru di akhir Episode ' + state.currentEp)" class="btn-rs h-11 w-full border border-dashed rs-border-2 rs-surface rs-ink-2 hover:rs-ink">
+                + Tambah Shot Baru
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderShotCard(s) {
+      const expanded = state.expandedShotIds.has(s.id);
+      const checked = state.selectedShotIds.has(s.id);
+      const speechMeta = s.speechType === 'dialogue'
+        ? { label: 'Dialog · Lip-Sync Veo', cls: 'rs-accent-soft', icon: '💬' }
+        : s.speechType === 'vo'
+          ? { label: 'Monolog Batin · TTS', cls: 'rs-info-soft', icon: '💭' }
+          : { label: 'Aksi / Cliffhanger · SFX', cls: 'rs-sun-soft', icon: '⚡' };
+
+      const imgBadge = s.imgStatus === 'current'
+        ? { label: '🖼 Gambar ✓', cls: 'rs-ok-soft' }
+        : s.imgStatus === 'needs_sheet'
+          ? { label: '🖼 Perlu Lembar', cls: 'rs-sun-soft' }
+          : { label: '🖼 Belum Ada', cls: 'rs-draft rs-ink-2' };
+
+      const vidBadge = s.vidStatus === 'current'
+        ? { label: '🎬 Video ✓', cls: 'rs-ok-soft' }
+        : { label: '🎬 Belum Video', cls: 'rs-draft rs-ink-2' };
+
+      const durDisplay = (state.autoTrimmed && s.trimmedDur < s.rawDur)
+        ? `<span class="line-through opacity-50">${s.rawDur}</span> → <strong>${s.trimmedDur} dtk</strong>`
+        : `${s.rawDur} dtk`;
+
+      return `
+        <article class="shot-card rounded-2xl border ${checked ? 'border-2 rs-shadow' : 'rs-border'} rs-surface p-4 flex flex-col gap-3" style="${checked ? 'border-color: var(--rs-accent);' : ''}">
+          <div class="flex flex-col sm:flex-row gap-4">
+
+            <!-- LEFT: 9:16 VISUAL THUMBNAIL + SELECT CHECKBOX -->
+            <div class="w-[104px] h-[156px] shrink-0 rounded-xl overflow-hidden border rs-border relative flex flex-col justify-between p-2"
+                 style="background: ${s.imgStatus === 'current' ? `linear-gradient(155deg, ${s.colorA}, ${s.colorB})` : 'var(--rs-sand)'};">
+              <div class="flex items-center justify-between">
+                <label class="flex items-center gap-1 cursor-pointer bg-black/65 text-white px-1.5 py-0.5 rounded" title="Pilih shot untuk batch Gambar / Video">
+                  <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleSelectShot('${s.id}')" class="size-3 accent-[#c93a1b] cursor-pointer" />
+                  <span class="rs-mono text-[10px] font-bold">${s.num}</span>
+                </label>
+                ${s.vidStatus === 'current' ? `<span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/90 text-white">▶ VID</span>` : ''}
+              </div>
+
+              ${s.imgStatus === 'current' ? `
+                <div class="flex items-center justify-center flex-1">
+                  <button onclick="openAnimaticModal('${s.id}')" class="size-9 rounded-full bg-black/55 hover:bg-black/80 text-white flex items-center justify-center text-xs transition" title="Pratinjau Shot">
+                    ▶
+                  </button>
+                </div>
+                <div class="text-[10px] text-white/90 font-medium truncate bg-black/45 px-1.5 py-0.5 rounded">${s.framing}</div>
+              ` : `
+                <div class="flex-1 flex flex-col items-center justify-center text-center px-1">
+                  <span class="text-xl opacity-50">🖼</span>
+                  <span class="text-[10px] font-semibold rs-muted mt-1">${s.imgStatus === 'needs_sheet' ? 'Lembar + Gambar' : 'Belum dibuat'}</span>
+                </div>
+                <button onclick="generateSingleImage('${s.id}')" class="btn-rs w-full py-1 text-[10px] rs-accent-bg">🖼 Gambar</button>
+              `}
+            </div>
+
+            <!-- RIGHT: UNIFIED SCRIPT + STORYBOARD CONTENT -->
+            <div class="flex-1 min-w-0 flex flex-col gap-2.5">
+              <!-- Row 1: Speech Type + Speaker + Separate Image & Video Status Badges + Duration -->
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="text-[11px] font-bold px-2 py-0.5 rounded-lg ${speechMeta.cls}">${speechMeta.icon} ${speechMeta.label}</span>
+                  ${s.speaker ? `<span class="text-xs font-bold rs-ink">${s.speaker}</span>` : ''}
+                  <span class="text-[11px] px-2 py-0.5 rounded-lg border rs-border rs-sand rs-ink-2">${s.emotion}</span>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full ${imgBadge.cls}">${imgBadge.label}</span>
+                  <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full ${vidBadge.cls}">${vidBadge.label}</span>
+                  <span class="rs-mono text-[11px] px-2 py-0.5 rounded-lg border rs-border rs-paper rs-ink-2">${durDisplay}</span>
+                </div>
+              </div>
+
+              <!-- Row 2: Editable Speech / Action Box -->
+              <div class="rounded-xl border rs-border p-3 ${s.speechType === 'vo' ? 'rs-sand italic' : 'rs-paper'}">
+                <div contenteditable="true" class="text-[13px] font-medium leading-relaxed rs-ink outline-none">${s.text}</div>
+                <div class="text-[11px] rs-muted mt-1.5 not-italic">
+                  <strong class="rs-ink-2">Visual:</strong> ${s.action}
+                </div>
+              </div>
+
+              <!-- Row 3: Entity Chips + Separated Per-Shot Image / Video / TTS Actions -->
+              <div class="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                <div class="flex flex-wrap items-center gap-1.5">
+                  ${s.tags.map(t => `
+                    <span class="text-[11px] font-medium px-2 py-0.5 rounded-md border rs-border ${t.includes('(Baru)') ? 'rs-sun-soft' : 'rs-sand rs-ink-2'}">${t}</span>
+                  `).join('')}
+                </div>
+
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <button onclick="toggleShotDetail('${s.id}')" class="btn-rs h-7 px-2.5 border rs-border rs-paper rs-ink-2 hover:rs-ink text-[11px]">
+                    ${expanded ? '▾ Tutup Prompt' : '▸ Detail & Prompt'}
+                  </button>
+                  <button onclick="generateSingleImage('${s.id}')" class="btn-rs h-7 px-2.5 ${s.imgStatus !== 'current' ? 'rs-accent-bg' : 'border rs-border rs-surface rs-ink'} text-[11px]">
+                    ${s.imgStatus === 'current' ? '🖼 Ulang Gambar' : '🖼 Buat Gambar'}
+                  </button>
+                  <button onclick="generateSingleVideo('${s.id}')" class="btn-rs h-7 px-2.5 ${s.imgStatus === 'current' && s.vidStatus !== 'current' ? 'rs-ink-pill' : 'border rs-border rs-surface rs-ink'} text-[11px] ${s.imgStatus !== 'current' ? 'opacity-55' : ''}" title="${s.imgStatus !== 'current' ? 'Buat gambar storyboard dulu sebelum membuat video' : 'Generate video AI khusus shot ini'}">
+                    ${s.vidStatus === 'current' ? '🎬 Ulang Video' : '🎬 Buat Video'}
+                  </button>
+                  ${s.speechType === 'vo' ? `
+                    <button onclick="generateSingleTts('${s.id}')" class="btn-rs h-7 px-2.5 border rs-border ${state.ttsDone ? 'rs-ok-soft' : 'rs-info-soft'} text-[11px]">
+                      🎙 ${state.ttsDone ? 'Ulang TTS' : 'Buat TTS'}
+                    </button>
+                  ` : ''}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- COLLAPSED BY DEFAULT: PROMPT + CINEMATOGRAPHY + REF OVERRIDE -->
+          ${expanded ? `
+            <div class="border-t rs-border pt-3 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs anim-in">
+              <div class="md:col-span-2 flex flex-col gap-1">
+                <div class="flex items-center justify-between">
+                  <span class="font-bold text-[11px] rs-muted uppercase">Prompt Visual &amp; Video (otomatis disusun AI)</span>
+                  <span class="text-[10px] rs-ok-soft px-2 py-0.5 rounded-full font-semibold">✓ 3/3 Lock Words cocok</span>
+                </div>
+                <textarea rows="3" class="w-full rounded-xl border rs-border rs-paper p-2.5 rs-mono text-[11px] rs-ink outline-none">${s.prompt}</textarea>
+              </div>
+              <div class="flex flex-col gap-1.5">
+                <span class="font-bold text-[11px] rs-muted uppercase">Referensi &amp; Audio</span>
+                <div class="rounded-xl border rs-border rs-paper p-2.5 flex flex-col gap-1.5 text-[11px]">
+                  <div class="rs-ink-2"><strong>Audio:</strong> ${s.audioLabel}</div>
+                  <div class="border-t rs-border pt-1.5 flex flex-col gap-1">
+                    <span class="rs-muted">Lembar referensi terpasang:</span>
+                    ${s.refs.map(r => `<span class="px-2 py-0.5 rounded rs-sand rs-ink font-medium">${r}</span>`).join('')}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ` : ''}
+        </article>
+      `;
+    }
+
+    function toggleShotDetail(id) {
+      if (state.expandedShotIds.has(id)) state.expandedShotIds.delete(id);
+      else state.expandedShotIds.add(id);
+      renderAll();
+    }
+
+    function toggleSelectShot(id) {
+      if (state.selectedShotIds.has(id)) state.selectedShotIds.delete(id);
+      else state.selectedShotIds.add(id);
+      renderAll();
+    }
+
+    function toggleSelectAllShots() {
+      if (state.selectedShotIds.size === state.shots.length) state.selectedShotIds.clear();
+      else state.shots.forEach(s => state.selectedShotIds.add(s.id));
+      renderAll();
+    }
+
+    function approveInlineAssets() {
+      generateAllMissingSheets();
+    }
+
+    function simulateWriteShots() {
+      showToast('Menyusun shot + otomatis menulis prompt visual (1 alur tanpa klik terpisah)...', 'warn');
+      setTimeout(() => showToast('4 shot & prompt visual siap diproduksi!', 'ok'), 900);
+    }
+
+    function generateSingleImage(id) {
+      const s = state.shots.find(x => x.id === id);
+      if (!s) return;
+      if (s.imgStatus === 'needs_sheet') {
+        approveInlineAssets();
+      }
+      s.imgStatus = 'current';
+      state.creditsUsed += 15;
+      renderAll();
+      showToast(`Gambar Shot ${s.num} selesai dibuat!`, 'ok');
+    }
+
+    function generateSingleVideo(id) {
+      const s = state.shots.find(x => x.id === id);
+      if (!s) return;
+      if (s.imgStatus !== 'current') {
+        showToast(`Buat gambar Shot ${s.num} dulu sebelum membuat videonya.`, 'warn');
+        return;
+      }
+      s.vidStatus = 'current';
+      state.creditsUsed += 60;
+      renderAll();
+      showToast(`Video AI Shot ${s.num} selesai dibuat!`, 'ok');
+    }
+
+    function generateSingleTts(id) {
+      const s = state.shots.find(x => x.id === id);
+      if (!s) return;
+      state.ttsDone = true;
+      renderAll();
+      showToast(`Suara TTS Monolog Batin Shot ${s.num} selesai direkam!`, 'ok');
+    }
+
+    /* ================= VIEW 4: TAB 2 EDITOR & RILIS ================= */
+    function renderEditor() {
+      const totalRaw = state.shots.reduce((a, s) => a + s.rawDur, 0);
+      const totalNow = state.shots.reduce((a, s) => a + (state.autoTrimmed ? s.trimmedDur : s.rawDur), 0);
+      const savedSec = (totalRaw - totalNow).toFixed(1).replace('.', ',');
+
+      return `
+        <div class="flex-1 flex flex-col min-h-0 overflow-hidden anim-in">
+
+          <!-- TOP DRAMA FINISHING BAR (One-click polish!) -->
+          <div class="shrink-0 border-b rs-border rs-surface px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rs-display text-xs font-bold rs-muted uppercase tracking-wider mr-1">Finishing Drama:</span>
+
+              <button onclick="toggleAutoTrim()" class="btn-rs h-8 px-3 border ${state.autoTrimmed ? 'rs-ok-soft rs-border-2' : 'rs-accent-bg rs-shadow'}">
+                ✂ ${state.autoTrimmed ? `Auto-Trim Aktif (-${savedSec} dtk hening) ✓` : 'Auto-Trim Hening Veo (-3,3 dtk)'}
+              </button>
+
+              <button onclick="toggleSmartSfx()" class="btn-rs h-8 px-3 border ${state.smartSfxApplied ? 'rs-ok-soft rs-border-2' : 'rs-border-2 rs-surface rs-ink'}">
+                🔊 ${state.smartSfxApplied ? 'Smart AI SFX Terpasang (3) ✓' : 'Pasang Smart AI SFX'}
+              </button>
+
+              <button onclick="toggleMusic()" class="btn-rs h-8 px-3 border ${state.musicApplied ? 'rs-ok-soft rs-border-2' : 'rs-border-2 rs-surface rs-ink'}">
+                🎵 ${state.musicApplied ? 'Musik Drama + Ducking ✓' : 'Buat Musik Drama (ElevenLabs)'}
+              </button>
+            </div>
+
+            <div class="flex items-center gap-2 text-xs">
+              <span class="rs-mono px-2 py-1 rounded-lg rs-sand rs-ink-2">Durasi: <strong>${totalNow.toFixed(1).replace('.', ',')} dtk</strong></span>
+              <span class="text-[11px] rs-muted hidden md:inline">Sidebar otomatis ciut</span>
+            </div>
+          </div>
+
+          <!-- MIDDLE: 9:16 PLAYER + INSPECTOR -->
+          <div class="flex-1 min-h-0 flex overflow-hidden">
+            <!-- Player Stage -->
+            <div class="flex-1 flex items-center justify-center p-4 rs-paper relative overflow-hidden">
+              <div class="h-full max-h-[340px] aspect-[9/16] rounded-2xl overflow-hidden border-2 rs-border-2 rs-shadow-md relative flex flex-col justify-between p-3"
+                   style="background: linear-gradient(155deg, #162538, #2d4b6e);">
+                <!-- Safe Zone Guides -->
+                <div class="flex items-center justify-between text-[10px] text-white/75">
+                  <span class="px-1.5 py-0.5 rounded bg-black/45 rs-mono">9:16 SAFE ZONE</span>
+                  <span class="px-1.5 py-0.5 rounded bg-black/45">Ep 2 · 00:04,2</span>
+                </div>
+
+                <!-- Simulated Drama Frame -->
+                <div class="flex-1 flex flex-col items-center justify-center text-center px-2">
+                  <div class="size-14 rounded-full bg-white/10 border border-white/25 flex items-center justify-center text-2xl mb-2">🎭</div>
+                  <div class="text-[11px] text-white/75 font-medium">Shot 02 · Extreme Close Up Satria</div>
+                </div>
+
+                <!-- Live Caption Preview -->
+                <div class="mb-6 px-2 py-1.5 rounded-lg bg-black/70 text-center">
+                  <div class="text-[11px] italic font-semibold text-amber-300 leading-snug">
+                    "Dia belum tahu, gedung 40 lantai ini dibangun atas namaku."
+                  </div>
+                </div>
+
+                <!-- TikTok/Reels right safe-zone icon hints -->
+                <div class="absolute right-2 bottom-10 flex flex-col gap-1.5 opacity-35 text-white text-[10px]">
+                  <span>♥</span><span>💬</span><span>↪</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right Inspector -->
+            <div class="w-[270px] shrink-0 border-l rs-border rs-surface p-3.5 overflow-y-auto rs-scroll flex flex-col gap-3 text-xs">
+              <div class="rs-display font-bold text-sm border-b rs-border pb-2">Inspector Klip &amp; Caption</div>
+              <div class="flex flex-col gap-1.5">
+                <span class="text-[11px] font-semibold rs-muted">Gaya Caption 9:16</span>
+                <div class="grid grid-cols-2 gap-1.5">
+                  <div class="p-2 rounded-lg border-2 text-center font-bold text-[11px] rs-sun-soft" style="border-color: var(--rs-accent)">Drama Bold</div>
+                  <div class="p-2 rounded-lg border rs-border text-center text-[11px] rs-sand">Karaoke Pill</div>
+                </div>
+                <label class="flex items-center gap-2 mt-1 text-[11px] rs-ink-2">
+                  <input type="checkbox" checked /> Bedakan Monolog Batin (miring)
+                </label>
+              </div>
+              <div class="border-t rs-border pt-2.5 flex flex-col gap-1.5">
+                <span class="text-[11px] font-semibold rs-muted">Sumber Suara Shot 02</span>
+                <div class="p-2 rounded-lg rs-info-soft text-[11px] font-semibold">💭 Monolog Batin (TTS ElevenLabs)</div>
+                <span class="text-[10px] rs-muted">Video dibuat bisu agar ekspresi tajam tanpa lip-sync liar.</span>
+              </div>
+              <div class="border-t rs-border pt-2.5 flex flex-col gap-1.5">
+                <span class="text-[11px] font-semibold rs-muted">Preset Paket Rilis (Fase 8)</span>
+                <div class="p-2 rounded-lg border rs-border rs-paper text-[11px] rs-ink-2">
+                  MP4 H.264 1080×1920 + SRT + Thumbnail Ep 2 + Metadata Seri
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- BOTTOM: MULTI-TRACK TIMELINE -->
+          <div class="h-[195px] shrink-0 border-t rs-border rs-surface flex flex-col">
+            <div class="h-8 px-4 border-b rs-border flex items-center justify-between text-[11px] rs-muted">
+              <div class="flex items-center gap-3">
+                <button onclick="showToast('Memutar timeline Ep 2')" class="btn-rs px-2 py-0.5 rs-ink-pill text-[11px]">▶ Putar</button>
+                <span class="rs-mono">00:04,2 / 00:${totalNow.toFixed(1).replace('.', ',')}</span>
+              </div>
+              <span>${state.autoTrimmed ? '⚡ Ritme fast-cut aktif (jeda kosong Veo dipangkas otomatis)' : 'Tip: Klik Auto-Trim Hening Veo di atas untuk merapatkan jeda dialog'}</span>
+            </div>
+
+            <div class="flex-1 overflow-x-auto rs-scroll p-3 flex flex-col gap-1.5 text-[11px]">
+              <!-- Track: Video Clips -->
+              <div class="flex items-center gap-2">
+                <span class="w-16 shrink-0 font-semibold rs-muted">Video</span>
+                <div class="flex-1 flex gap-1">
+                  ${state.shots.map(s => {
+                    const d = state.autoTrimmed ? s.trimmedDur : s.rawDur;
+                    const wPct = Math.round((d / totalNow) * 100);
+                    return `
+                      <div style="width:${wPct}%; background:${s.colorB}" class="h-8 rounded-lg px-2 text-white flex items-center justify-between overflow-hidden border border-black/20">
+                        <span class="font-bold truncate">${s.num} ${s.speaker || 'Klimaks'}</span>
+                        <span class="rs-mono text-[10px] opacity-85">${d}s</span>
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+
+              <!-- Track: Audio / Dialog -->
+              <div class="flex items-center gap-2">
+                <span class="w-16 shrink-0 font-semibold rs-muted">Suara</span>
+                <div class="flex-1 flex gap-1">
+                  ${state.shots.map(s => {
+                    const d = state.autoTrimmed ? s.trimmedDur : s.rawDur;
+                    const wPct = Math.round((d / totalNow) * 100);
+                    const cls = s.speechType === 'dialogue' ? 'rs-accent-soft' : s.speechType === 'vo' ? 'rs-info-soft' : 'rs-sand rs-muted';
+                    return `
+                      <div style="width:${wPct}%" class="h-6 rounded-md px-2 flex items-center truncate border rs-border ${cls} text-[10px] font-semibold">
+                        ${s.speechType === 'dialogue' ? '🎙 Veo Audio' : s.speechType === 'vo' ? '💭 TTS Batin' : '— hening —'}
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+
+              <!-- Track: SFX -->
+              <div class="flex items-center gap-2">
+                <span class="w-16 shrink-0 font-semibold rs-muted">SFX AI</span>
+                <div class="flex-1 h-6 rounded-md rs-paper border rs-border relative overflow-hidden flex items-center px-2">
+                  ${state.smartSfxApplied ? `
+                    <div class="absolute left-[8%] px-2 py-0.5 rounded rs-sun-soft text-[10px] font-bold border rs-border">💥 Banting Berkas</div>
+                    <div class="absolute left-[74%] px-2 py-0.5 rounded rs-sun-soft text-[10px] font-bold border rs-border">🚪 Pintu Terbuka</div>
+                    <div class="absolute left-[87%] px-2 py-0.5 rounded rs-accent-soft text-[10px] font-bold border rs-border">🎻 Sting</div>
+                  ` : `<span class="text-[10px] rs-muted">Klik "Pasang Smart AI SFX" di atas untuk mengisi otomatis</span>`}
+                </div>
+              </div>
+
+              <!-- Track: Music -->
+              <div class="flex items-center gap-2">
+                <span class="w-16 shrink-0 font-semibold rs-muted">Musik</span>
+                <div class="flex-1 h-6 rounded-md border rs-border overflow-hidden flex items-center px-2 ${state.musicApplied ? 'rs-ok-soft' : 'rs-paper'}">
+                  ${state.musicApplied
+                    ? `<span class="text-[10px] font-bold">🎵 Tension Corporate Drama (ElevenLabs Music · Ducking -14 dB saat dialog)</span>`
+                    : `<span class="text-[10px] rs-muted">Belum ada musik latar</span>`}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function toggleAutoTrim() {
+      state.autoTrimmed = !state.autoTrimmed;
+      renderAll();
+      showToast(state.autoTrimmed ? 'Auto-Trim aktif! Jeda kosong klip Veo dipangkas berbasis timestamp Whisper.' : 'Durasi klip dikembalikan ke panjang video penuh.', 'ok');
+    }
+
+    function toggleSmartSfx() {
+      state.smartSfxApplied = !state.smartSfxApplied;
+      renderAll();
+      showToast(state.smartSfxApplied ? '3 efek suara dramatis dipasang otomatis di momen kunci!' : 'SFX otomatis dilepas.', 'ok');
+    }
+
+    function toggleMusic() {
+      state.musicApplied = !state.musicApplied;
+      renderAll();
+      showToast(state.musicApplied ? 'Musik latar tegang dipasang dengan auto-ducking!' : 'Musik latar dilepas.', 'ok');
+    }
+
+    /* ================= MODALS ================= */
+    function openModal(html) {
+      const box = document.getElementById('modalBox');
+      box.classList.toggle('rs-dark', state.dark);
+      box.innerHTML = html;
+      document.getElementById('modalRoot').classList.remove('hidden');
+    }
+
+    function closeModal() {
+      stopAnimatic();
+      document.getElementById('modalRoot').classList.add('hidden');
+    }
+
+    document.getElementById('modalRoot').addEventListener('click', (e) => {
+      if (e.target.id === 'modalRoot') closeModal();
+    });
+
+    function openSmartBatchModal(kind, onlySelected = false) {
+      const targetShots = onlySelected
+        ? state.shots.filter(s => state.selectedShotIds.has(s.id))
+        : state.shots;
+
+      const needSheets = (!state.newAssetsApproved && targetShots.some(s => s.imgStatus === 'needs_sheet')) ? 2 : 0;
+      const imgTargets = onlySelected ? targetShots : targetShots.filter(s => s.imgStatus !== 'current');
+      const vidTargets = onlySelected
+        ? targetShots.filter(s => s.imgStatus === 'current')
+        : targetShots.filter(s => s.imgStatus === 'current' && s.vidStatus !== 'current');
+      const blockedVidCount = (onlySelected ? targetShots : targetShots.filter(s => s.vidStatus !== 'current')).filter(s => s.imgStatus !== 'current').length;
+
+      if (kind === 'image') {
+        const sheetCost = needSheets * 20;
+        const imgCost = imgTargets.length * 15;
+        openModal(`
+          <div class="p-5 border-b rs-border flex items-center justify-between">
+            <div>
+              <h2 class="rs-display font-bold text-base">🖼 Generate Gambar Storyboard (Ep ${state.currentEp})</h2>
+              <p class="text-xs rs-muted mt-0.5">Khusus pembuatan gambar — <strong>tidak menjalankan Video AI</strong>.</p>
+            </div>
+            <button onclick="closeModal()" class="size-8 rounded-lg rs-sand flex items-center justify-center">✕</button>
+          </div>
+          <div class="p-5 flex flex-col gap-3 text-xs">
+            ${needSheets > 0 ? `
+              <div class="rounded-xl border rs-border rs-sun-soft p-3 flex items-center justify-between">
+                <div>
+                  <div class="font-bold">Tahap 1 (Prasyarat Otomatis): ${needSheets} Lembar Referensi</div>
+                  <div class="text-[11px] opacity-85">Pak Hendra (3 tampak) + Ruang Rapat VIP (lokasi) — tanpa keluar ke Lorebook!</div>
+                </div>
+                <span class="rs-mono font-bold">${sheetCost} kr</span>
+              </div>
+            ` : ''}
+            <div class="rounded-xl border rs-border rs-paper p-3 flex items-center justify-between">
+              <div>
+                <div class="font-bold">${needSheets > 0 ? 'Tahap 2' : 'Target'}: ${imgTargets.length} Gambar Storyboard ${onlySelected ? '(shot terpilih)' : '(belum ada)'}</div>
+                <div class="text-[11px] rs-muted">Model gambar aktif: Flux / Flow2API · paralel 3 antrean.</div>
+              </div>
+              <span class="rs-mono font-bold">${imgCost} kr</span>
+            </div>
+            <div class="flex items-center justify-between pt-2 border-t rs-border text-sm font-bold">
+              <span>Estimasi Biaya Gambar</span>
+              <span class="rs-mono" style="color: var(--rs-accent)">${sheetCost + imgCost} kredit</span>
+            </div>
+          </div>
+          <div class="p-4 border-t rs-border rs-sand flex justify-end gap-2">
+            <button onclick="closeModal()" class="btn-rs h-9 px-3.5 border rs-border-2 rs-surface rs-ink">Batal</button>
+            <button onclick="runSmartBatch('image', ${sheetCost + imgCost}, ${onlySelected})" class="btn-rs h-9 px-4 rs-accent-bg rs-shadow">
+              🖼 Buat ${imgTargets.length} Gambar Sekarang
+            </button>
+          </div>
+        `);
+      } else if (kind === 'video') {
+        const vidCost = vidTargets.length * 60;
+        openModal(`
+          <div class="p-5 border-b rs-border flex items-center justify-between">
+            <div>
+              <h2 class="rs-display font-bold text-base">🎬 Generate Video AI (Ep ${state.currentEp})</h2>
+              <p class="text-xs rs-muted mt-0.5">Terpisah penuh dari gambar — hanya memproses shot yang gambarnya sudah siap.</p>
+            </div>
+            <button onclick="closeModal()" class="size-8 rounded-lg rs-sand flex items-center justify-center">✕</button>
+          </div>
+          <div class="p-5 flex flex-col gap-3 text-xs">
+            <div class="rounded-xl border rs-border rs-paper p-3 flex items-center justify-between">
+              <div>
+                <div class="font-bold">${vidTargets.length} Klip Video (Veo 3.1) ${onlySelected ? '(shot terpilih)' : '(siap dari gambar)'}</div>
+                <div class="text-[11px] rs-muted">Dialog memakai audio native + ekstraksi Whisper; Monolog Batin &amp; Aksi dibuat bisu.</div>
+              </div>
+              <span class="rs-mono font-bold">${vidCost} kr</span>
+            </div>
+            ${blockedVidCount > 0 ? `
+              <div class="rounded-xl border rs-border rs-sun-soft p-3 text-[11px]">
+                <strong>Catatan:</strong> ${blockedVidCount} shot dilewati karena belum punya gambar storyboard. Buat gambarnya dulu lewat tombol <strong>🖼 Buat Gambar</strong>.
+              </div>
+            ` : ''}
+            <label class="rounded-xl border rs-border rs-sand p-3 flex items-center gap-2.5 cursor-pointer">
+              <input id="chkAutoTrim" type="checkbox" checked />
+              <div>
+                <div class="font-bold">Aktifkan Auto-Trim Hening setelah ekstraksi Whisper</div>
+                <div class="text-[11px] rs-muted">Pangkas jeda kosong awal/akhir klip 4 detik agar ritme drama langsung kencang.</div>
+              </div>
+            </label>
+            <div class="flex items-center justify-between pt-2 border-t rs-border text-sm font-bold">
+              <span>Estimasi Biaya Video</span>
+              <span class="rs-mono" style="color: var(--rs-accent)">${vidCost} kredit</span>
+            </div>
+          </div>
+          <div class="p-4 border-t rs-border rs-sand flex justify-end gap-2">
+            <button onclick="closeModal()" class="btn-rs h-9 px-3.5 border rs-border-2 rs-surface rs-ink">Batal</button>
+            <button ${vidTargets.length === 0 ? 'disabled' : ''} onclick="runSmartBatch('video', ${vidCost}, ${onlySelected})" class="btn-rs h-9 px-4 rs-accent-bg rs-shadow ${vidTargets.length === 0 ? 'opacity-50' : ''}">
+              🎬 Buat ${vidTargets.length} Video AI
+            </button>
+          </div>
+        `);
+      } else {
+        openModal(`
+          <div class="p-5 border-b rs-border flex items-center justify-between">
+            <div>
+              <h2 class="rs-display font-bold text-base">🎙 Generate Suara TTS (Monolog Batin &amp; Narator)</h2>
+              <p class="text-xs rs-muted mt-0.5">Direkam 1 take per suara agar intonasi konsisten, lalu dipotong otomatis oleh Whisper.</p>
+            </div>
+            <button onclick="closeModal()" class="size-8 rounded-lg rs-sand flex items-center justify-center">✕</button>
+          </div>
+          <div class="p-5 flex flex-col gap-3 text-xs">
+            <div class="rounded-xl border rs-border rs-info-soft p-3">
+              <strong>Shot 02 · Satria (Batin)</strong> — 1 take ElevenLabs + sinkron caption Whisper.<br/>
+              <span class="opacity-80">Shot dialog (01 &amp; 03) dilewati karena suaranya dibuat oleh model video Veo.</span>
+            </div>
+          </div>
+          <div class="p-4 border-t rs-border rs-sand flex justify-end gap-2">
+            <button onclick="closeModal()" class="btn-rs h-9 px-3.5 border rs-border-2 rs-surface rs-ink">Batal</button>
+            <button onclick="runSmartBatch('tts', 0, false)" class="btn-rs h-9 px-4 rs-accent-bg rs-shadow">🎙 Buat Suara TTS</button>
+          </div>
+        `);
+      }
+    }
+
+    function runSmartBatch(kind, cost, onlySelected = false) {
+      closeModal();
+      const targetIds = onlySelected ? new Set(state.selectedShotIds) : null;
+      state.activeTasks = 2;
+      renderAll();
+      const msg = kind === 'image'
+        ? 'Menjalankan Generate Gambar Storyboard...'
+        : kind === 'video'
+          ? 'Menjalankan Generate Video AI + Ekstraksi Audio Whisper...'
+          : 'Merekam suara TTS Monolog Batin + sinkron Whisper...';
+      showToast(msg, 'warn');
+      setTimeout(() => {
+        if (kind === 'image') {
+          state.shots.forEach(s => {
+            if (!targetIds || targetIds.has(s.id)) {
+              if (s.imgStatus === 'needs_sheet') {
+                state.newAssetsApproved = true;
+                state.cast.forEach(c => { c.sheet = 'current'; c.variants.forEach(v => v.status = 'current'); });
+                state.world.forEach(w => w.status = 'current');
+              }
+              s.imgStatus = 'current';
+              s.tags = s.tags.map(t => t.replace(' (Baru)', ''));
+            }
+          });
+        } else if (kind === 'video') {
+          state.shots.forEach(s => {
+            if ((!targetIds || targetIds.has(s.id)) && s.imgStatus === 'current') {
+              s.vidStatus = 'current';
+            }
+          });
+          state.autoTrimmed = true;
+        } else {
+          state.ttsDone = true;
+        }
+        if (onlySelected) state.selectedShotIds.clear();
+        state.creditsUsed += cost;
+        state.activeTasks = 0;
+        renderAll();
+        showToast(
+          kind === 'image'
+            ? 'Gambar selesai dibuat! Kamu bisa cek di "Putar Animatic" dulu sebelum lanjut ke Video AI.'
+            : kind === 'video'
+              ? 'Video AI selesai + otomatis di-trim! Siap dipoles di tab Editor & Rilis.'
+              : 'Suara TTS Monolog Batin selesai direkam & sinkron caption!',
+          'ok'
+        );
+      }, 950);
+    }
+
+    function openAutoProduceModal() {
+      openModal(`
+        <div class="p-5 border-b rs-border flex items-center justify-between">
+          <div>
+            <h2 class="rs-display font-bold text-base">⚡ Auto-Produce Episode ${state.currentEp} (1 Klik)</h2>
+            <p class="text-xs rs-muted mt-0.5">Cocok untuk episode lanjutan setelah Lorebook serial sudah matang.</p>
+          </div>
+          <button onclick="closeModal()" class="size-8 rounded-lg rs-sand flex items-center justify-center">✕</button>
+        </div>
+        <div class="p-5 flex flex-col gap-2.5 text-xs">
+          <div class="p-3 rounded-xl border rs-border rs-paper flex items-center justify-between">
+            <span>1. Setujui aset &amp; buat lembar kosong (otomatis berantai)</span>
+            <span class="rs-mono font-semibold">40 kr</span>
+          </div>
+          <div class="p-3 rounded-xl border rs-border rs-paper flex items-center justify-between">
+            <span>2. Buat semua gambar storyboard + TTS Monolog Batin</span>
+            <span class="rs-mono font-semibold">15 kr</span>
+          </div>
+          <div class="p-3 rounded-xl border rs-border rs-paper flex items-center justify-between">
+            <span>3. Buat Video AI (Veo 3.1) + Ekstrak Audio + Auto-Trim Whisper</span>
+            <span class="rs-mono font-semibold">180 kr</span>
+          </div>
+          <div class="p-3 rounded-xl border rs-border rs-paper flex items-center justify-between">
+            <span>4. Pasang Smart AI SFX &amp; Musik Drama otomatis di Editor</span>
+            <span class="rs-mono font-semibold">ElevenLabs</span>
+          </div>
+        </div>
+        <div class="p-4 border-t rs-border rs-sand flex items-center justify-between">
+          <span class="rs-mono text-xs font-bold">Total Estimasi: 235 kr</span>
+          <div class="flex gap-2">
+            <button onclick="closeModal()" class="btn-rs h-9 px-3.5 border rs-border-2 rs-surface rs-ink">Batal</button>
+            <button onclick="runFullAutoProduce()" class="btn-rs h-9 px-4 rs-accent-bg rs-shadow">⚡ Jalankan Semua</button>
+          </div>
+        </div>
+      `);
+    }
+
+    function runFullAutoProduce() {
+      closeModal();
+      state.activeTasks = 4;
+      renderAll();
+      showToast('Auto-Produce berjalan: Lembar → Gambar → Video → Auto-Trim → SFX & Musik...', 'warn');
+      setTimeout(() => {
+        state.newAssetsApproved = true;
+        state.cast.forEach(c => { c.sheet = 'current'; c.variants.forEach(v => v.status = 'current'); });
+        state.world.forEach(w => w.status = 'current');
+        state.shots.forEach(s => { s.imgStatus = 'current'; s.vidStatus = 'current'; s.tags = s.tags.map(t => t.replace(' (Baru)', '')); });
+        state.autoTrimmed = true;
+        state.smartSfxApplied = true;
+        state.musicApplied = true;
+        state.creditsUsed += 235;
+        state.activeTasks = 0;
+        setEpisodeTab('editor');
+        showToast('Episode 2 selesai diproduksi otomatis & siap ditinjau di Editor!', 'ok');
+      }, 1300);
+    }
+
+    function openAnimaticModal(startId) {
+      const idx = startId ? Math.max(0, state.shots.findIndex(s => s.id === startId)) : 0;
+      state.animaticIndex = idx;
+      state.animaticPlaying = true;
+      renderAnimaticModal();
+      state.animaticTimer = setInterval(() => {
+        if (!state.animaticPlaying) return;
+        state.animaticIndex = (state.animaticIndex + 1) % state.shots.length;
+        renderAnimaticModal();
+      }, 2400);
+    }
+
+    function stopAnimatic() {
+      state.animaticPlaying = false;
+      if (state.animaticTimer) { clearInterval(state.animaticTimer); state.animaticTimer = null; }
+    }
+
+    function renderAnimaticModal() {
+      const s = state.shots[state.animaticIndex];
+      openModal(`
+        <div class="p-4 border-b rs-border flex items-center justify-between">
+          <div>
+            <h2 class="rs-display font-bold text-sm">▶ Pratinjau Animatic — Ep ${state.currentEp}</h2>
+            <p class="text-[11px] rs-muted">Cek tempo &amp; alur visual sebelum membakar kredit Video AI.</p>
+          </div>
+          <button onclick="closeModal()" class="size-8 rounded-lg rs-sand flex items-center justify-center">✕</button>
+        </div>
+        <div class="p-5 flex flex-col items-center gap-4 rs-paper">
+          <div class="w-[210px] aspect-[9/16] rounded-2xl border-2 rs-border-2 rs-shadow-md p-3 flex flex-col justify-between text-white relative overflow-hidden"
+               style="background: linear-gradient(155deg, ${s.colorA}, ${s.colorB});">
+            <div class="flex items-center justify-between text-[10px]">
+              <span class="px-1.5 py-0.5 rounded bg-black/60 rs-mono font-bold">SHOT ${s.num}</span>
+              <span class="px-1.5 py-0.5 rounded bg-black/60">${s.framing}</span>
+            </div>
+            <div class="text-center px-2">
+              <div class="text-xs font-bold opacity-90">${s.speaker || 'Aksi / Cliffhanger'}</div>
+              <div class="text-[10px] opacity-75 mt-1">${s.emotion}</div>
+            </div>
+            <div class="p-2 rounded-lg bg-black/70 text-[11px] text-center leading-snug ${s.speechType === 'vo' ? 'italic text-amber-300' : 'text-white'}">
+              ${s.text}
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <button onclick="state.animaticIndex=(state.animaticIndex-1+${state.shots.length})%${state.shots.length}; renderAnimaticModal()" class="btn-rs h-8 px-3 border rs-border-2 rs-surface rs-ink">⏮ Prev</button>
+            <button onclick="state.animaticPlaying=!state.animaticPlaying; renderAnimaticModal()" class="btn-rs h-8 px-4 rs-accent-bg">
+              ${state.animaticPlaying ? '⏸ Jeda' : '▶ Putar'}
+            </button>
+            <button onclick="state.animaticIndex=(state.animaticIndex+1)%${state.shots.length}; renderAnimaticModal()" class="btn-rs h-8 px-3 border rs-border-2 rs-surface rs-ink">Next ⏭</button>
+          </div>
+        </div>
+      `);
+    }
+
+    function openTaskModal() {
+      openModal(`
+        <div class="p-5 border-b rs-border flex items-center justify-between">
+          <h2 class="rs-display font-bold text-base">Pusat Tugas (Task Center)</h2>
+          <button onclick="closeModal()" class="size-8 rounded-lg rs-sand flex items-center justify-center">✕</button>
+        </div>
+        <div class="p-5 text-xs flex flex-col gap-2">
+          <div class="p-3 rounded-xl border rs-border rs-paper flex items-center justify-between">
+            <span>✓ Ekstraksi Audio + Whisper Shot 01 (Ep 2)</span>
+            <span class="rs-ok-soft px-2 py-0.5 rounded-full font-bold">Selesai</span>
+          </div>
+          <div class="p-3 rounded-xl border rs-border rs-paper flex items-center justify-between">
+            <span>✓ TTS Monolog Batin (1 take Ep 2 · ElevenLabs)</span>
+            <span class="rs-ok-soft px-2 py-0.5 rounded-full font-bold">Selesai</span>
+          </div>
+          <div class="p-3 rounded-xl border rs-border rs-paper flex items-center justify-between">
+            <span>✓ Ekspor Ep 1 · Penghinaan di Lobi.mp4</span>
+            <span class="rs-ok-soft px-2 py-0.5 rounded-full font-bold">Selesai</span>
+          </div>
+        </div>
+      `);
+    }
+
+    function openCompareModal() {
+      openModal(`
+        <div class="p-5 border-b rs-border flex items-center justify-between">
+          <div>
+            <h2 class="rs-display font-bold text-base">Perbandingan: Alur Fase 8 Lama vs Redesign</h2>
+            <p class="text-xs rs-muted mt-0.5">Semua mesin Fase 8 tetap dipakai, tapi gesekan antar langkah dipangkas drastis.</p>
+          </div>
+          <button onclick="closeModal()" class="size-8 rounded-lg rs-sand flex items-center justify-center">✕</button>
+        </div>
+        <div class="p-5 overflow-y-auto text-xs">
+          <table class="w-full border-collapse">
+            <thead>
+              <tr class="border-b rs-border text-left rs-muted">
+                <th class="py-2 pr-3">Bagian</th>
+                <th class="py-2 pr-3">Fase 8 Sekarang</th>
+                <th class="py-2">Redesign (Mockup Ini)</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-[var(--rs-line)]">
+              <tr>
+                <td class="py-2.5 pr-3 font-bold">Tab Episode</td>
+                <td class="py-2.5 pr-3 rs-ink-2">3 Tab (Rencana, Storyboard, Editor)</td>
+                <td class="py-2.5 font-semibold">2 Tab (Produksi Terpadu + Editor &amp; Rilis)</td>
+              </tr>
+              <tr>
+                <td class="py-2.5 pr-3 font-bold">Naskah → Prompt</td>
+                <td class="py-2.5 pr-3 rs-ink-2">Buat Rencana → Konfirmasi → Pindah Tab → Tulis Prompt</td>
+                <td class="py-2.5 font-semibold">1 Aksi Otomatis (prompt langsung tersusun)</td>
+              </tr>
+              <tr>
+                <td class="py-2.5 pr-3 font-bold">Aset Tanpa Lembar</td>
+                <td class="py-2.5 pr-3 rs-ink-2">Batch diblokir → keluar ke Lorebook → balik lagi</td>
+                <td class="py-2.5 font-semibold">Banner inline + Smart Batch (Lembar → Gambar berantai)</td>
+              </tr>
+              <tr>
+                <td class="py-2.5 pr-3 font-bold">Lorebook</td>
+                <td class="py-2.5 pr-3 rs-ink-2">5 Tab + SeriesGuidelinesModal terpisah</td>
+                <td class="py-2.5 font-semibold">3 Tab (Pemeran, Dunia, Aturan Serial)</td>
+              </tr>
+              <tr>
+                <td class="py-2.5 pr-3 font-bold">Fitur Pro (Doctor/Lock)</td>
+                <td class="py-2.5 pr-3 rs-ink-2">Menumpuk penuh di atas daftar shot</td>
+                <td class="py-2.5 font-semibold">Pill ringkas + drawer lipat (Progressive Disclosure)</td>
+              </tr>
+              <tr>
+                <td class="py-2.5 pr-3 font-bold">Tempo Video Veo</td>
+                <td class="py-2.5 pr-3 rs-ink-2">Utuh 4/6/8 dtk (sering bengong di akhir dialog)</td>
+                <td class="py-2.5 font-semibold">Auto-Trim Hening berbasis timestamp Whisper</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="p-4 border-t rs-border rs-sand flex justify-end">
+          <button onclick="closeModal()" class="btn-rs h-9 px-4 rs-accent-bg">Mengerti</button>
+        </div>
+      `);
+    }
+
+    // Initial render
+    renderAll();
+  </script>
+</body>
+</html>

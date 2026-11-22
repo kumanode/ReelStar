@@ -305,7 +305,8 @@ export async function generateImage(opts: GenerateImageOptions): Promise<{ media
   ]
 
   if (opts.referenceImages?.length) {
-    for (const ref of opts.referenceImages.slice(0, 3)) {
+    // Gemini 3.1 Flash Image (Nano Banana 2) supports multi-reference conditioning (up to 6 sheets: cast + location + props).
+    for (const ref of opts.referenceImages.slice(0, 6)) {
       contentItems.push({
         type: 'image_url',
         image_url: { url: imageDataUrl(ref) }
@@ -370,7 +371,10 @@ export async function generateVideo(opts: GenerateVideoOptions): Promise<{ media
   }
 
   opts.onProgress?.(0.08, 'Mengirim ke Flow2API')
-  const markdown = await streamCompletionWithRetry(body, opts.signal, opts.onProgress, 'Membuat video di Flow2API (Google Veo)')
+  const videoLabel = opts.model.toLowerCase().includes('omni')
+    ? 'Membuat video di Flow2API (Google Omni)'
+    : 'Membuat video di Flow2API (Google Veo)'
+  const markdown = await streamCompletionWithRetry(body, opts.signal, opts.onProgress, videoLabel)
 
   const urls = extractMediaUrls(markdown)
   if (!urls.length) {

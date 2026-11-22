@@ -55,7 +55,7 @@ import { cancelEpisodeJobs, cancelJob, cancelProjectJobs } from './jobs'
 import { generateNarration, syncCaptions } from './narration'
 import { cancelDownload, downloadModel, openModelFolder, removeModel, whisperStatus } from './whisper'
 import { assetAbsPath, sfxDir } from './paths'
-import { detachVoice, splitClip } from './editing'
+import { autoTrimEpisode, detachVoice, splitClip } from './editing'
 import { emit } from './events'
 import {
   acceptLorebookCandidates,
@@ -122,6 +122,7 @@ import * as hf from './services/higgsfield'
 import * as llm from './services/llm'
 import {
   confirmEpisodeScript,
+  enrichLorebookDetails,
   extractLorebookFromStory,
   cancelLorebookExtraction,
   generateVisuals,
@@ -357,13 +358,22 @@ export function registerIpc(): void {
   handle('lorebook:extract', (projectId: string) => extractLorebookFromStory(projectId))
   handle('lorebook:cancelExtract', (projectId: string) => cancelLorebookExtraction(projectId))
   handle('lorebook:acceptCandidates', (input: any) => acceptLorebookCandidates(input))
+  handle(
+    'lorebook:enrich',
+    (projectId: string, target?: { kind: 'character' | 'location' | 'prop'; id: string }) =>
+      enrichLorebookDetails(projectId, target)
+  )
 
   handle('story:planEpisodes', (input: PlanEpisodesInput) => planEpisodes(input))
   handle('story:planEpisodeScript', (projectId: string, episodeId: string) => planEpisodeScript(projectId, episodeId))
   handle('story:planAllScripts', (projectId: string) => planAllMissingEpisodeScripts(projectId))
   handle('story:cancelBatchScripts', (projectId: string) => cancelBatchScripts(projectId))
   handle('story:confirmEpisodeScript', (projectId: string, episodeId: string, draft: EpisodeScriptDraft) => confirmEpisodeScript(projectId, episodeId, draft))
-  handle('story:writePrompts', (projectId: string, episodeId: string, clipIds?: string[]) => writePrompts(projectId, episodeId, clipIds))
+  handle(
+    'story:writePrompts',
+    (projectId: string, episodeId: string, clipIds?: string[], options?: { force?: boolean; useAi?: boolean; requireAi?: boolean }) =>
+      writePrompts(projectId, episodeId, clipIds, options)
+  )
 
   handle('continuity:list', (projectId: string) => listContinuityItems(projectId))
   handle(
@@ -445,15 +455,27 @@ export function registerIpc(): void {
   handle('generate:clipVideo', (clipId: string) => generateClipVideo(clipId))
   handle('generate:clipTts', (clipId: string) => generateClipTts(clipId))
   handle('generate:characterSheet', (characterId: string) => generateCharacterSheet(characterId))
-  handle('generate:missingImages', (projectId: string, episodeId?: string, includeStale?: boolean) =>
-    generateMissingImages(projectId, episodeId, includeStale)
+  handle(
+    'generate:missingImages',
+    (projectId: string, episodeId?: string, includeStale?: boolean, clipIds?: string[], autoGenerateSheets?: boolean) =>
+      generateMissingImages(projectId, episodeId, includeStale, clipIds, autoGenerateSheets)
   )
-  handle('generate:missingVideos', (projectId: string, episodeId?: string, includeStale?: boolean) =>
-    generateMissingVideos(projectId, episodeId, includeStale)
+  handle(
+    'generate:missingVideos',
+    (projectId: string, episodeId?: string, includeStale?: boolean, clipIds?: string[], autoTrimSilence?: boolean) =>
+      generateMissingVideos(projectId, episodeId, includeStale, clipIds, autoTrimSilence)
   )
-  handle('generate:clipsVideo', (clipIds: string[]) => generateClipsVideo(clipIds))
-  handle('generate:batchEstimate', (projectId: string, episodeId: string | undefined, kind: 'image' | 'video', includeStale?: boolean) =>
-    batchEstimate(projectId, episodeId, kind, includeStale)
+  handle('generate:clipsVideo', (clipIds: string[], autoTrimSilence?: boolean) => generateClipsVideo(clipIds, autoTrimSilence))
+  handle(
+    'generate:batchEstimate',
+    (
+      projectId: string,
+      episodeId: string | undefined,
+      kind: 'image' | 'video',
+      includeStale?: boolean,
+      clipIds?: string[],
+      autoGenerateSheets?: boolean
+    ) => batchEstimate(projectId, episodeId, kind, includeStale, clipIds, autoGenerateSheets)
   )
   handle('generate:batchEstimateSheets', (projectId: string, includeStale?: boolean) =>
     batchEstimateSheets(projectId, includeStale)
@@ -482,6 +504,9 @@ export function registerIpc(): void {
   handle('assets:setActive', (clipId: string, assetId: string) => setActiveAsset(clipId, assetId))
   handle('clips:split', (clipId: string, atMs: number) => splitClip(clipId, Number(atMs)))
   handle('clips:detachVoice', (clipId: string) => detachVoice(clipId))
+  handle('clips:autoTrimEpisode', (projectId: string, episodeId: string, mode?: 'apply' | 'reset') =>
+    autoTrimEpisode(projectId, episodeId, mode === 'reset' ? 'reset' : 'apply')
+  )
   // Caption text fixed by hand in the editor; the words keep their times.
   handle('assets:setWords', (assetId: string, words: WordTiming[]) => {
     const a = getAsset(assetId)

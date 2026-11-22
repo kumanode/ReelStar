@@ -27,7 +27,7 @@ export { NO_TEXT } from './styleText'
 
 export const VISUAL_STYLES: VisualStyle[] = [
   // ==========================================
-  // LIVE ACTION (16 styles)
+  // LIVE ACTION (20 styles)
   // ==========================================
   {
     id: 'premium_drama',
@@ -37,9 +37,36 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#3D342D',
     ink: '#F5EBE6',
     prompt:
-      'High-end prestige TV drama cinematography, master framing, Arri Alexa LF cinema camera, naturalistic motivated interior lighting, shallow depth of field, sophisticated wardrobe, subtle elegant color grading, crisp 4K texture, television broadcast quality. ' +
+      'High-end prestige TV drama cinematography, master framing, Arri Alexa LF cinema camera, naturalistic motivated lighting, shallow depth of field, warm-neutral subtle elegant color grading, crisp 4K photographic texture, television broadcast quality. ' +
       NO_TEXT,
-    characterHint: 'a character in high-end prestige television drama attire, naturalistic cinematic lighting and elegant styling'
+    characterHint:
+      'a photorealistic prestige television drama character captured with naturalistic cinematic lighting and refined 4K skin texture'
+  },
+  {
+    id: 'sinetron_indonesia',
+    name: 'Sinetron Indonesia',
+    category: 'liveaction',
+    niche: 'Melodrama TV · Pencahayaan terang',
+    swatch: '#8B5E3C',
+    ink: '#FEF3C7',
+    prompt:
+      'Indonesian prime-time television soap opera (sinetron) cinematography, crisp high-clarity digital broadcast TV camera look, bright even high-key warm studio and motivated lighting, flattering key and fill light with clean glossy skin highlights, warm cream and vibrant natural color grading, shallow-to-moderate depth of field, minimal film grain, expressive melodramatic television drama framing. ' +
+      NO_TEXT,
+    characterHint:
+      'a realistic contemporary Indonesian television drama character with polished TV-ready styling and expressive eyes, lit by bright even warm broadcast lighting'
+  },
+  {
+    id: 'horor_indonesia',
+    name: 'Horor Indonesia',
+    category: 'liveaction',
+    niche: 'Mistis lokal · Gelap mencekam',
+    swatch: '#1C2621',
+    ink: '#D6E2D8',
+    prompt:
+      'Indonesian supernatural horror cinema still, atmospheric 35mm filmic live-action cinematography with subtle organic grain, dark low-key chiaroscuro lighting, sickly desaturated teal-green and damp earthy umber color grading, dim warm flickering practical tungsten or oil-lamp side glow against deep ink-black shadows, humid tropical night mist, eerie negative space, haunting Indonesian mystical dread aesthetic. ' +
+      NO_TEXT,
+    characterHint:
+      'a realistic Indonesian horror cinema character with pale natural skin texture and tense atmosphere, dramatically sculpted by dim warm side light and cold eerie low-key shadows'
   },
   {
     id: 'cinematic_historical',
@@ -49,9 +76,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#4A3326',
     ink: '#EAD7C5',
     prompt:
-      'High-budget historical period drama cinematography, authentic period costumes and ornate imperial set decoration, warm dramatic side lighting, atmospheric candle and lantern glow, soft atmospheric haze, cinematic depth, television broadcast production value. ' +
+      'High-budget historical period drama cinematography, rich theatrical color palette, warm dramatic side lighting and soft rim highlights, atmospheric candle and lantern-toned glow, delicate atmospheric haze, shallow cinematic depth of field, prestige television broadcast production value. ' +
       NO_TEXT,
-    characterHint: 'a historical period drama character in elaborate traditional royal or noble attire, cinematic side lighting'
+    characterHint:
+      'a photorealistic historical period drama character lit by warm dramatic side light and subtle rim glow, captured on cinema cameras'
   },
   {
     id: 'zhang_yimou',
@@ -61,9 +89,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#8B1E1E',
     ink: '#FBE8A6',
     prompt:
-      'Zhang Yimou cinematic aesthetic, rich saturated primary colors, lavish crimson and gold silks, grand architectural symmetry, ritualistic composition, flowing fabrics, intense atmospheric mood, poetic dramatic lighting, monumental scale. ' +
+      'Zhang Yimou cinematic aesthetic, rich saturated jewel-tone primary colors accented with lavish crimson and gold tones, grand symmetrical composition, bold ceremonial visual balance, intense atmospheric mood, poetic dramatic lighting, monumental live-action cinema scale. ' +
       NO_TEXT,
-    characterHint: 'a character draped in lavish ceremonial silk with striking bold monochromatic accents in the style of Zhang Yimou'
+    characterHint:
+      'a photorealistic live-action cinema character styled in Zhang Yimou theatrical lighting with rich saturated color harmony and dramatic contrast'
   },
   {
     id: 'ancient_xianxia',
@@ -73,9 +102,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#3A506B',
     ink: '#E0FBFC',
     prompt:
-      'Ethereal ancient Chinese Xianxia fantasy live-action drama still, flowing white silk robes, misty heavenly peaks and ethereal glowing particles, soft focus romantic bloom filter, celestial atmospheric lighting, serene mythological fantasy tone. ' +
+      'Ethereal ancient Chinese Xianxia fantasy live-action drama cinematography, luminous soft-focus romantic bloom filter, swirling atmospheric mist, subtle glowing ethereal light motes, serene jade-teal and pearlescent ivory-gold celestial lighting, dreamlike mythological fantasy tone. ' +
       NO_TEXT,
-    characterHint: 'a graceful immortal Xianxia practitioner with pristine flowing robes and ethereal magical glow'
+    characterHint:
+      'a photorealistic ethereal Xianxia fantasy character bathed in soft luminous bloom and celestial atmospheric lighting'
   },
   {
     id: 'theatrical_film',
@@ -85,9 +115,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#242B35',
     ink: '#F0F3F4',
     prompt:
-      'Theatrical film still, master DaVinci Resolve color grading, organic 35mm film grain, anamorphic lens flare, rich shadow roll-off, cinematic filmic contrast, dramatic storytelling framing, blockbuster film aesthetic. ' +
+      'Theatrical feature film still, master DaVinci Resolve color grading, subtle organic 35mm film grain, rich deep shadow roll-off, moody teal and warm amber cinematic contrast, creamy shallow depth-of-field bokeh, dramatic storytelling framing, blockbuster cinema aesthetic. ' +
       NO_TEXT,
-    characterHint: 'a cinematic character in a dramatic film scene, nuanced expression and rich cinematic grading'
+    characterHint:
+      'a photorealistic theatrical feature film character with natural textured skin, nuanced lighting, and rich cinema color grading'
   },
   {
     id: 'spartan_epic',
@@ -97,9 +128,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#5C2D1E',
     ink: '#F5D6BA',
     prompt:
-      'Gritty Spartan epic film still, Gladiator aesthetic, harsh dramatic contrast, battle-worn leather and bronze armor, sweat and battlefield dust, fiery embers in the smoke, intense muscular dynamism, epic historical warfare atmosphere. ' +
+      'Gritty Spartan epic film still, Gladiator live-action aesthetic, harsh high-contrast dramatic lighting with piercing sunbeams, desaturated bronze-ochre and scorched charcoal color grading, gritty dust and airborne ember atmosphere, raw weathered texture, visceral epic cinema intensity. ' +
       NO_TEXT,
-    characterHint: 'a fierce battle-tested warrior in weathered bronze armor and crimson cloak with grit and scars'
+    characterHint:
+      'a photorealistic gritty epic film character with raw weathered skin texture, harsh dramatic contrast, and intense cinematic lighting'
   },
   {
     id: 'blade_runner',
@@ -109,9 +141,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#0E3B43',
     ink: '#48E5C2',
     prompt:
-      'Blade Runner 2049 aesthetic, neo-noir cyberpunk live action still, minimalist monolithic brutalist architecture, neon billboard reflections in rainy streets, floating volumetric dust and cyber particles, anamorphic lens flares, moody cyan and amber lighting. ' +
+      'Blade Runner 2049 neo-noir sci-fi live-action cinematography, stark moody cold cyan and deep slate-blue color palette, wet rain-slicked surface reflections, dense volumetric mist and atmospheric haze, dark minimalist architectural shadows, crisp realistic cinematic contrast. ' +
       NO_TEXT,
-    characterHint: 'a futuristic cyber-noir investigator in a heavy trench coat against neon-lit rainy reflections'
+    characterHint:
+      'a photorealistic neo-noir sci-fi live-action character lit by cold moody cyan rim light and soft rainy night reflections'
   },
   {
     id: 'game_of_thrones',
@@ -121,9 +154,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#2B2D42',
     ink: '#EDF2F4',
     prompt:
-      'Grimdark medieval fantasy live action film still, Game of Thrones aesthetic, heavy fur cloaks and weathered iron plate armor, cold desaturated slate-gray and muted earth tones, stone fortress interior, flickering torchlight, somber political intrigue mood. ' +
+      'Grimdark medieval epic live-action film still, Game of Thrones cinematography aesthetic, cold desaturated slate-gray and muted earth tones, overcast diffused natural lighting, chilling atmospheric mist, gritty weathered organic textures, somber dramatic realism. ' +
       NO_TEXT,
-    characterHint: 'a rugged noble lord or warrior in heavy layered fur cloak and weathered chainmail, somber gaze'
+    characterHint:
+      'a photorealistic grimdark medieval drama character with raw weathered realistic features under cold desaturated overcast lighting'
   },
   {
     id: 'breaking_bad',
@@ -133,9 +167,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#8C5A24',
     ink: '#FDE68A',
     prompt:
-      'Crime drama cinematography, iconic New Mexico Latin yellow-orange sun-bleached color grade, harsh desert sun and sharp desert shadows, asphalt highway, gritty realism, high-tension crime thriller atmosphere. ' +
+      'Gritty crime thriller cinematography, intense New Mexico sun-bleached amber and burnt-orange color grade, harsh direct sunlight with razor-sharp shadows, raw unpolished photographic realism, crisp dry texture, high-tension neo-western crime drama atmosphere. ' +
       NO_TEXT,
-    characterHint: 'an intense grounded character with weathered features and rimmed glasses under harsh desert sunlight'
+    characterHint:
+      'a photorealistic grounded crime drama character with raw natural weathered skin texture under harsh high-contrast sunlight'
   },
   {
     id: 'kdrama_idol',
@@ -145,9 +180,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#D4A373',
     ink: '#FEFAE0',
     prompt:
-      'Korean romantic drama close-up film still, soft diffused beauty lighting, pastel knit sweater, porcelain skin, shallow depth of field with sunlit sheer curtains, tender romantic atmosphere, pristine modern Seoul aesthetic. ' +
+      'Korean romantic drama live-action film still, airy high-key soft diffused beauty lighting, clean bright natural backlight, gentle pastel-neutral color palette, smooth luminous skin tones, dreamy shallow depth of field, tender polished contemporary Seoul drama aesthetic. ' +
       NO_TEXT,
-    characterHint: 'an attractive stylish Korean drama protagonist with soft styled hair and gentle warm gaze'
+    characterHint:
+      'a photorealistic stylish Korean drama character with luminous natural skin and gentle flattering diffused lighting'
   },
   {
     id: 'kurosawa',
@@ -157,9 +193,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#262626',
     ink: '#F5F5F5',
     prompt:
-      'Akira Kurosawa cinema still, deep high-contrast black and white 35mm cinematography, wind-swept pampas grass fields, stoic samurai warrior in traditional armor, dramatic storm clouds, dynamic staging, legendary Japanese cinematic realism. ' +
+      'Akira Kurosawa epic cinema still, deep high-contrast black and white 35mm cinematography, dramatic chiaroscuro sky lighting, crisp silver highlights and rich charcoal blacks, swirling atmospheric mist and wind energy, bold dynamic staging, classic Japanese cinematic realism. ' +
       NO_TEXT,
-    characterHint: 'a stoic weathered samurai warrior with tied hair in ornate traditional armor, dramatic black and white'
+    characterHint:
+      'a photorealistic dramatic black-and-white cinema character sculpted by stark high-contrast classic Japanese film lighting'
   },
   {
     id: 'nolan',
@@ -169,9 +206,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#1E293B',
     ink: '#E2E8F0',
     prompt:
-      'Christopher Nolan film still, 70mm IMAX cinematography, clean cool blue-gray color palette, modern glass skyscraper reflections, tailored bespoke dark suit, crisp realistic lighting, intense cerebral atmosphere, practical cinematic scale. ' +
+      'Christopher Nolan film still, crisp 70mm IMAX live-action cinematography, clean cool steely blue-gray color palette, sharp high-clarity realistic lighting, grounded practical cinematic scale, deep restrained contrast, intense cerebral thriller atmosphere. ' +
       NO_TEXT,
-    characterHint: 'a sharp-eyed professional in a tailored dark suit and tie, sleek modern architectural backdrop'
+    characterHint:
+      'a photorealistic live-action thriller character captured on 70mm IMAX with crisp cool blue-gray natural lighting'
   },
   {
     id: 'tarantino',
@@ -181,9 +219,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#7F1D1D',
     ink: '#FEF08A',
     prompt:
-      'Quentin Tarantino retro cinema still, vibrant 1970s Technicolor aesthetic, retro American neon diner booth, high-contrast saturated red and yellow tones, snappy wide-angle framing, edgy pulp crime atmosphere. ' +
+      'Quentin Tarantino retro cinema still, punchy vibrant 1970s Technicolor aesthetic, high-contrast saturated crimson red and bold yellow-amber tones, crisp theatrical lighting, snappy wide-angle cinematic framing, bold edgy pulp crime atmosphere. ' +
       NO_TEXT,
-    characterHint: 'a charismatic sharp-dressed mobster or gangster in a vibrant collared shirt and blazer inside a retro diner'
+    characterHint:
+      'a photorealistic charismatic retro pulp cinema character lit with bold high-contrast vibrant 1970s color grading'
   },
   {
     id: 'david_lynch',
@@ -193,9 +232,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#31101E',
     ink: '#FCA5A5',
     prompt:
-      'David Lynch surrealist film still, eerie unsettling dreamlike atmosphere, uncanny vintage hotel room, red velvet lampshade casting sinister shadows, deep enigmatic contrast, haunting subconscious thriller aesthetic. ' +
+      'David Lynch surrealist live-action film still, eerie unsettling dreamlike atmosphere, deep oppressive noir shadows pierced by sinister crimson-red ambient light, high enigmatic contrast, textured vintage film grain, haunting subconscious thriller aesthetic. ' +
       NO_TEXT,
-    characterHint: 'a character with an enigmatic haunting expression, stylized vintage makeup, dramatic moody red lamp lighting'
+    characterHint:
+      'a photorealistic surrealist thriller character lit by moody sinister crimson side light and deep uncanny shadows'
   },
   {
     id: 'wes_anderson',
@@ -205,9 +245,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#BE185D',
     ink: '#FCE7F3',
     prompt:
-      'Wes Anderson whimsical film still, perfect center-framed symmetrical composition, quirky color-blocked pastel palette of pistachio green, pale candy pink and mustard yellow, eccentric tailored costume, deadpan vintage aesthetic. ' +
+      'Wes Anderson whimsical live-action film still, meticulous symmetrical balanced composition, quirky color-blocked pastel palette of pistachio green, pale candy pink, and soft mustard yellow, crisp flat-lit vintage storybook lighting, clean stylized deadpan aesthetic. ' +
       NO_TEXT,
-    characterHint: 'an eccentric quirky character in a sharply pressed retro suit standing dead-center with a deadpan expression'
+    characterHint:
+      'a photorealistic deadpan whimsical cinema character photographed with crisp even lighting and clean pastel color harmony'
   },
   {
     id: 'wong_kar_wai',
@@ -217,9 +258,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#1C312E',
     ink: '#6EE7B7',
     prompt:
-      'Wong Kar-wai film still, In the Mood for Love aesthetic, heavy 35mm film grain, moody neon-lit Hong Kong alleyway at night, glowing tea house signs, cigarette smoke haze, emerald green and crimson tones, deep romantic nostalgia. ' +
+      'Wong Kar-wai live-action film still, In the Mood for Love aesthetic, subtle nostalgic 35mm film grain, moody nocturnal emerald-olive and rich crimson color palette with warm amber glow, drifting atmospheric haze, shallow painterly depth of field, deep romantic melancholy. ' +
       NO_TEXT,
-    characterHint: 'an elegant woman in an ornate traditional floral cheongsam qipao amidst moody neon lights and soft smoke'
+    characterHint:
+      'a photorealistic nostalgic Hong Kong cinema character bathed in moody emerald shadows, warm amber highlights, and soft atmospheric haze'
   },
   {
     id: 'shaw_brothers',
@@ -229,9 +271,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#78350F',
     ink: '#FEF3C7',
     prompt:
-      'Classic Shaw Brothers Hong Kong wuxia cinema still, retro 1970s kung fu film look, saturated color palette, authentic martial arts staging, dramatic tavern interior, theatrical lighting, cinematic vintage action aesthetic. ' +
+      'Hong Kong wuxia live-action cinema still, dramatic theatrical chiaroscuro lighting, rich warm lantern-amber glow against deep dark sepia and charcoal shadows, crisp cinematic contrast, subtle atmospheric smoke haze, classic martial arts drama aesthetic. ' +
       NO_TEXT,
-    characterHint: 'a traditional Hong Kong martial arts hero with classic kung fu attire and focused combat gaze'
+    characterHint:
+      'a photorealistic dramatic Hong Kong wuxia cinema character sculpted by warm lantern-toned theatrical lighting and deep shadows'
   },
   {
     id: 'live_cyberpunk',
@@ -241,9 +284,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#0284C7',
     ink: '#E0F2FE',
     prompt:
-      'Live-action cyberpunk film still, photorealistic cinematic realism, towering holographic skyscrapers in rain, neon-lit alley reflections, cybernetic implants, ultra high-definition 8K texture, atmospheric volumetric haze. ' +
+      'Live-action cyberpunk film still, ultra-high-definition photorealistic cinematic realism, dark rainy night atmosphere, vivid electric cyan and neon magenta rim lighting, wet glossy reflections, sharp micro-detailed textures, atmospheric volumetric haze. ' +
       NO_TEXT,
-    characterHint: 'a live-action cyberpunk protagonist with subtle glowing cyberware and high-tech leather jacket'
+    characterHint:
+      'a photorealistic live-action cyberpunk character lit by vivid electric cyan and neon magenta rim highlights with crisp skin and material detail'
   },
 
   // ==========================================
@@ -257,9 +301,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#1F2937',
     ink: '#38BDF8',
     prompt:
-      'AAA next-gen video game cinematic cutscene render, Unreal Engine 5, hyper-detailed carbon fiber sci-fi nanosuit armor, chromatic iridescence, futuristic spaceship corridor, ray-traced reflections, volumetric fog. ' +
+      'AAA next-gen video game 3D CG cinematic cutscene render, Unreal Engine 5 photorealistic stylized realism, crisp ray-traced specular reflections, volumetric atmospheric lighting, sleek cool steel-gray palette with subtle electric cyan accents, ultra-detailed PBR material shaders. ' +
       NO_TEXT,
-    characterHint: 'a futuristic soldier in high-tech iridescent carbon-fiber exoskeleton armor, volumetric sci-fi lighting'
+    characterHint:
+      'a hyper-detailed Unreal Engine 5 AAA 3D game CGI character with realistic skin shaders and crisp volumetric rim lighting'
   },
   {
     id: 'chinese_3d',
@@ -269,9 +314,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#2D3A34',
     ink: '#A7F3D0',
     prompt:
-      'Chinese 3D donghua animation film render, Unreal Engine 5 aesthetic, photorealistic stylized character, traditional ancient water town background, canal with stone bridge, delicate green hanfu silk dress, cinematic natural lighting. ' +
+      'Chinese 3D donghua animation film render, Unreal Engine 5 aesthetic, refined semi-photorealistic stylized 3D rendering, soft misty overcast cinematic natural lighting, harmonious muted jade-green and slate-gray palette, delicate translucent fabric and hair physics, high-budget CG beauty. ' +
       NO_TEXT,
-    characterHint: 'an ancient Chinese donghua heroine with ornate updo hairstyle and elegant pastel green hanfu silk'
+    characterHint:
+      'a refined Chinese 3D donghua CG character with smooth stylized-realistic features, delicate hair strands, and soft cinematic lighting'
   },
   {
     id: 'kyoto_animation',
@@ -281,9 +327,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#FDA4AF',
     ink: '#4C0519',
     prompt:
-      'Kyoto Animation film still, exquisite soft cel animation, fluttering cherry blossom petals, sun-dappled school pathway, delicate expressive eyes, subtle wind motion, warm nostalgic afternoon lighting, masterfully painted background. ' +
+      'Kyoto Animation 2D anime film still, exquisite soft cel shading, delicate fine line art, warm nostalgic afternoon sunlight with gentle dappled glow, soft pastel color harmony, lush masterfully painted atmospheric backgrounds, emotional anime cinema polish. ' +
       NO_TEXT,
-    characterHint: 'a schoolgirl in sailor uniform with soft flowing dark hair and bright expressive eyes under cherry blossom trees'
+    characterHint:
+      'a 2D Kyoto Animation style anime character with clean delicate line art, soft cel shading, and bright expressive eyes'
   },
   {
     id: 'arcane_oil',
@@ -293,9 +340,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#7C2D12',
     ink: '#FED7AA',
     prompt:
-      'Fortiche Arcane animation style, stylized 3D character with hand-painted oil brush stroke textures, dramatic glowing hextech crystals in background, steampunk leather jacket, dynamic gritty line work, vibrant painterly lighting. ' +
+      'Fortiche Arcane animation style, stylized 3D rendering layered with hand-painted oil brush stroke textures, sharp gritty graphic line work, sculptural chiaroscuro painterly lighting, rich moody bronze-rust shadows with vivid luminous color accents, cinematic prestige animation aesthetic. ' +
       NO_TEXT,
-    characterHint: 'a rebellious steampunk character with vibrant colored hair, expressive facial tattoos, and weathered leather jacket'
+    characterHint:
+      'a stylized Arcane-inspired 3D character with visible hand-painted oil brushwork on skin, sharp expressive contours, and dramatic painterly lighting'
   },
   {
     id: 'us_3d_animation',
@@ -305,9 +353,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#1E3A8A',
     ink: '#DBEAFE',
     prompt:
-      'Pixar and Disney style 3D animation movie render, endearing toddler character with big round sparkling brown eyes, chubby cheeks, soft subsurface scattering skin, colorful whimsical enchanted forest with bioluminescent trees. ' +
+      'Pixar and Disney style 3D animated feature film render, appealing stylized proportions, soft subsurface-scattering textures, vibrant luminous storybook color palette, rich volumetric rim lighting, soft cinematic depth of field, warm polished family animation aesthetic. ' +
       NO_TEXT,
-    characterHint: 'an adorable stylized 3D animated toddler with big curious eyes and joyful expressive smile'
+    characterHint:
+      'an appealing Pixar-style stylized 3D animated character with expressive sparkling eyes, soft subsurface-scattering skin, and warm cinematic lighting'
   },
   {
     id: 'hardcore_ink',
@@ -317,9 +366,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#18181B',
     ink: '#E4E4E7',
     prompt:
-      'Traditional Chinese wuxia ink wash painting, dynamic dry brush calligraphy strokes, fierce swordsman in flowing black hanfu holding a katana blade, swirling black smoke and mist, dramatic mountain peak backdrop, high contrast monochrome with splash ink. ' +
+      'Traditional Chinese wuxia ink-wash animation art, fierce dynamic dry-brush calligraphy strokes and expressive splash-ink splatters, stark high-contrast monochrome black sumi ink on textured off-white rice paper, swirling ink mist effects, bold martial brushstroke energy. ' +
       NO_TEXT,
-    characterHint: 'a fierce wuxia swordsman with flowing black ink robes, swirling dry brush calligraphy effects'
+    characterHint:
+      'a dramatic monochrome Chinese ink-wash character rendered with fierce dry-brush calligraphy lines and expressive ink-splatter textures'
   },
   {
     id: 'ink_papercut',
@@ -329,9 +379,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#991B1B',
     ink: '#FEF2F2',
     prompt:
-      'Traditional Chinese papercut and ink painting hybrid art, bold fiery crimson sun, layered shadow papercut mountains, dynamic martial artist in crimson kung fu robes, crisp silhouette edges, rich textured folk art aesthetic. ' +
+      'Stylized Chinese ink-wash and graphic silhouette animation art, bold high-contrast tri-tone palette of stark sumi black, warm cream parchment, and dramatic fiery crimson-red accents, crisp graphic ink contours, layered atmospheric shadow depth, expressive textured brushwork. ' +
       NO_TEXT,
-    characterHint: 'a martial artist in crimson robes performing a dynamic kung fu stance against a giant crimson sun'
+    characterHint:
+      'a stylized Chinese graphic ink-art character with crisp dark contours, layered ink shading, and bold crimson-and-black color harmony'
   },
   {
     id: 'felt_stopmotion',
@@ -341,9 +392,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#78350F',
     ink: '#FEF3C7',
     prompt:
-      'Handmade needle felted wool stop-motion puppet, visible fuzzy yarn and felt fiber texture, charming handcrafted doll face with glass bead eyes, cozy hearth fireplace with warm glowing embers, tactile artisanal lighting. ' +
+      'Handmade needle-felted wool stop-motion animation still, tactile visible fuzzy wool and felt fiber textures, handcrafted miniature set craftsmanship, soft warm artisanal studio lighting, shallow miniature macro depth of field, charming cozy tactile stop-motion aesthetic. ' +
       NO_TEXT,
-    characterHint: 'a cute handcrafted needle-felted wool puppet child with soft wool hair and big glass bead eyes'
+    characterHint:
+      'a handcrafted needle-felted wool stop-motion puppet character with visible fuzzy wool fibers and glossy glass-bead eyes'
   },
   {
     id: 'clay_stopmotion',
@@ -353,9 +405,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#C2410C',
     ink: '#FFEDD5',
     prompt:
-      'Claymation stop-motion animation still, Wallace and Gromit and Aardman aesthetic, handcrafted plasticine character with exaggerated toothy grin, visible fingerprint textures, detailed colorful miniature market stall set, studio spotlighting. ' +
+      'Claymation stop-motion animation still, Aardman aesthetic, handcrafted sculpted plasticine clay textures with subtle visible fingerprint and tool marks, playful chunky stylized forms, rich matte clay colors, crisp miniature studio spotlighting with soft shadow falloff. ' +
       NO_TEXT,
-    characterHint: 'a goofy humorous plasticine clay figure with visible handcrafted fingerprints and wide comical grin'
+    characterHint:
+      'a handcrafted plasticine claymation puppet character with chunky expressive stylized features and visible sculpted clay textures'
   },
   {
     id: 'jp_horror',
@@ -365,9 +418,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#27272A',
     ink: '#F4F4F5',
     prompt:
-      'Chilling Japanese anime horror still, desaturated muted ghostly palette, pale girl with hollow blank eyes and disheveled long hair in an abandoned decaying wooden house, eerie quiet dread, gloomy atmospheric shadows. ' +
+      'Chilling Japanese horror dark anime digital painting, semi-realistic painterly illustration, heavily desaturated pale ghostly gray and muted cold tones, oppressive gloomy shadows, dim eerie low-key lighting, unsettling uncanny psychological dread atmosphere. ' +
       NO_TEXT,
-    characterHint: 'a pale spectral girl with vacant white eyes in a tattered white dress, eerie horror atmosphere'
+    characterHint:
+      'a chilling Japanese horror semi-realistic dark anime character with pale desaturated tones and eerie shadowed features'
   },
   {
     id: 'kr_webtoon',
@@ -377,9 +431,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#312E81',
     ink: '#E0E7FF',
     prompt:
-      'Top-ranking Korean manhwa romance webtoon digital art, semi-realistic handsome male lead, stylish parted soft wavy hair, glowing golden sunset overlooking city skyline from high-rise penthouse, sharp digital shading, romantic atmosphere. ' +
+      'Top-ranking Korean romance manhwa webtoon digital art, polished semi-realistic anime illustration, delicate fine linework with soft luminous airbrushed shading, warm golden-peach romantic backlight glow, dreamy soft bokeh, glamorous contemporary webtoon aesthetic. ' +
       NO_TEXT,
-    characterHint: 'a glamorous semi-realistic Korean webtoon male lead with refined features and soft glowing sunset lighting'
+    characterHint:
+      'a glamorous semi-realistic Korean romance webtoon character with refined delicate features, fine linework, and soft luminous shading'
   },
   {
     id: 'zenless_zone_zero',
@@ -389,9 +444,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#1E1B4B',
     ink: '#A5B4FC',
     prompt:
-      'Zenless Zone Zero game anime visual style, stylish neo-cyberpunk cel-shaded anime heroine, silver long hair, futuristic tech jacket with combat harness, vibrant neon signs and holographic city streets, high-contrast dynamic action framing. ' +
+      'Zenless Zone Zero neo-cyberpunk anime game visual style, crisp sleek cel-shaded 2D anime illustration, sharp clean dark line art, vivid electric violet and neon cyan rim highlights with kinetic light streaks, glossy specular accents, high-contrast stylish urban action framing. ' +
       NO_TEXT,
-    characterHint: 'a cool anime combat operative with silver hair and tactical sci-fi jacket against holographic neon lights'
+    characterHint:
+      'a stylish neo-cyberpunk cel-shaded anime character with sharp crisp line art, vivid cyan-violet rim lighting, and sleek modern game-art shading'
   },
   {
     id: 'ghibli',
@@ -401,9 +457,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#065F46',
     ink: '#D1FAE5',
     prompt:
-      'Studio Ghibli Hayao Miyazaki anime still, lush painterly green meadow under blue summer sky, fluffy gouache clouds, charming girl in a simple white summer dress, gentle breeze blowing hair, warm nostalgic storybook wonder. ' +
+      'Studio Ghibli Hayao Miyazaki hand-painted 2D anime film still, lush gouache and watercolor painted textures, warm nostalgic natural sunlight, gentle organic ink outlines, soft harmonious storybook colors, peaceful timeless hand-crafted anime wonder. ' +
       NO_TEXT,
-    characterHint: 'a charming gentle anime girl with windblown hair in a sunlit grassy field, hand-painted Ghibli warmth'
+    characterHint:
+      'a charming Studio Ghibli hand-painted 2D anime character with gentle organic line art, expressive eyes, and warm nostalgic tones'
   },
   {
     id: 'demon_slayer',
@@ -413,9 +470,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#991B1B',
     ink: '#FEE2E2',
     prompt:
-      'Ufotable anime aesthetic, Demon Slayer style, thick bold black calligraphy contour lines, intense determined swordsman under a blood-red moon, dark misty forest, vibrant glowing flame sparks, dramatic dynamic action lighting. ' +
+      'Ufotable Demon Slayer anime aesthetic, thick bold black brush-calligraphy contour lines, dramatic high-contrast dynamic cel shading, moody deep night shadows pierced by vivid crimson and warm ember rim highlights, swirling atmospheric mist, intense cinematic action anime look. ' +
       NO_TEXT,
-    characterHint: 'a fierce anime demon hunter with spiky hair and dark haori robe, glowing elemental embers'
+    characterHint:
+      'an intense dynamic anime character drawn with thick bold black brush-calligraphy contour lines and high-contrast dramatic cel shading'
   },
   {
     id: 'anim_cyberpunk',
@@ -425,9 +483,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#4C1D95',
     ink: '#EDE9FE',
     prompt:
-      'High-definition cyberpunk anime film still, detailed robotic cybernetic prosthetic arm, rain-soaked asphalt with neon reflections, anime cyborg woman in high-collar tech jacket, glowing teal cybernetic eyes, futuristic Tokyo night. ' +
+      'High-definition cyberpunk anime film still, crisp detailed 2D anime cel shading, moody dark rain-slicked night atmosphere, vivid glowing cyan and neon magenta-violet accent reflections, sleek high-contrast glossy lighting, futuristic anime cinema polish. ' +
       NO_TEXT,
-    characterHint: 'an anime cyborg heroine with an intricate chrome cybernetic arm standing on a rainy neon-lit street'
+    characterHint:
+      'a crisp high-definition cyberpunk anime character with clean sharp cel shading and vivid cyan-magenta night rim lighting'
   },
   {
     id: 'bloodborne',
@@ -437,9 +496,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#18181B',
     ink: '#A1A1AA',
     prompt:
-      'Dark Victorian gothic dark fantasy concept art, Bloodborne aesthetic, hunter in a weathered black leather tricorn hat and long duster coat, cobblestone streets of a cursed cathedral city, chilling cold mist and pale moonlight. ' +
+      'Dark Victorian gothic fantasy concept art, Bloodborne visual aesthetic, heavily desaturated charcoal-slate and cold ash palette, dense chilling atmospheric mist, pale overcast moonlight with deep brooding shadows, gritty weathered painterly textures, oppressive gothic horror atmosphere. ' +
       NO_TEXT,
-    characterHint: 'a grim gothic hunter wearing a tricorn hat and heavy weathered duster coat amidst cold mist and gothic spires'
+    characterHint:
+      'a grim dark-fantasy gothic character rendered in gritty painterly concept-art realism with cold pale moonlight and deep shadows'
   },
   {
     id: 'junji_ito',
@@ -449,9 +509,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#111827',
     ink: '#F3F4F6',
     prompt:
-      'Junji Ito classic horror manga aesthetic, intense detailed pen and ink cross-hatching, sharp claustrophobic dark corridor, gaunt shadowed figure with intense piercing stare, ominous heavy ink shadows, psychological body horror atmosphere. ' +
+      'Junji Ito inspired horror manga illustration, sharp intense ink linework with dense shadow hatching, stark dramatic chiaroscuro contrast, heavily muted sickly desaturated tones dominated by deep ink blacks, uncanny distorted shadows, claustrophobic psychological horror aesthetic. ' +
       NO_TEXT,
-    characterHint: 'a haunting gaunt figure with sunken eyes and dense eerie ink hatching in a dark oppressive corridor'
+    characterHint:
+      'an eerie Japanese horror manga character rendered with sharp intense ink linework, dense dark shadow hatching, and stark unsettling contrast'
   },
   {
     id: 'retro_anime_90s',
@@ -461,9 +522,10 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#831843',
     ink: '#FCE7F3',
     prompt:
-      'Authentic 1990s retro anime film cel still, Shinichiro Watanabe and Kenji Kamiyama aesthetic, rooftop sunset overlooking 90s Tokyo skyline with glowing neon kanji, sharp hand-drawn cel line work, film grain, nostalgic evening glow. ' +
+      'Authentic 1990s retro anime film cel still, Shinichiro Watanabe and Kenji Kamiyama era aesthetic, sharp hand-drawn cel ink line work, classic flat cel shading with rich deep shadows, warm nostalgic dusk-amber and cool slate palette, subtle 35mm analog film grain and soft vintage halation. ' +
       NO_TEXT,
-    characterHint: 'a cool 90s anime heroine with dark bob hair standing on a rooftop at dusk overlooking city lights'
+    characterHint:
+      'a classic 1990s hand-drawn cel anime character with sharp ink linework, vintage cel shading, and subtle analog film grain'
   },
 
   // ==========================================
@@ -477,12 +539,34 @@ export const VISUAL_STYLES: VisualStyle[] = [
     swatch: '#4F46E5',
     ink: '#FFFFFF',
     prompt: NO_TEXT,
-    characterHint: 'sesuai deskripsi karakter kustom'
+    characterHint: 'rendered strictly in the user-specified custom visual style'
   }
 ]
 
 export function getStyle(id: string): VisualStyle {
   return VISUAL_STYLES.find((s) => s.id === id) ?? LEGACY_STYLES.find((s) => s.id === id) ?? VISUAL_STYLES[0]
+}
+
+const RESTRICTED_PALETTE_STYLE_IDS = new Set(['kurosawa', 'hardcore_ink', 'ink_papercut', 'junji_ito'])
+
+/** True for monochrome or strict tri-tone styles whose palette overrides literal color descriptions. */
+export function isRestrictedPaletteStyle(id: string): boolean {
+  return RESTRICTED_PALETTE_STYLE_IDS.has(id)
+}
+
+/**
+ * Resolves the effective art style prompt for a project. For `custom_style`, pulls the creator's
+ * `seriesGuidelines` so Lorebook sheets and shot prompts all render in the chosen custom aesthetic.
+ */
+export function resolveStylePrompt(project: { styleId: string; seriesGuidelines?: string }): {
+  style: VisualStyle
+  prompt: string
+  isRestrictedPalette: boolean
+} {
+  const style = getStyle(project.styleId)
+  const custom = style.id === 'custom_style' ? project.seriesGuidelines?.trim() : ''
+  const prompt = custom ? `${custom.replace(/\.$/, '')}. ${NO_TEXT}` : style.prompt
+  return { style, prompt, isRestrictedPalette: isRestrictedPaletteStyle(style.id) }
 }
 
 /** True for a style from the old catalog: shown on its project, never offered in the picker. */

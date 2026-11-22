@@ -253,8 +253,11 @@ export type StoryBeatPhase = 'hook' | 'confrontation' | 'twist' | 'aftermath'
 export interface ShotDetail {
   cameraMotion?: string
   cameraReason?: string
+  cameraPov?: string
   lighting?: string
   blocking?: string
+  propPlacement?: string
+  sceneAnchorMode?: 'auto' | 'off'
   nonSpeakingReaction?: string
   sfxAmbience?: string
   speechDelivery?: string
@@ -333,6 +336,7 @@ export interface CharacterVisualProfile {
   body?: string
   bodyType?: string
   defaultOutfit?: string
+  accessories?: string
   distinguishingFeatures?: string
   distinctiveFeatures?: string
 }
@@ -358,6 +362,8 @@ export interface LocationProfile {
   timeOfDayLighting?: string
   atmosphere?: string
   architecturalStyle?: string
+  spatialLayout?: string
+  colorPalette?: string
   fixedDetails?: string
   keyFeatures?: string
 }
@@ -365,10 +371,18 @@ export interface LocationProfile {
 export interface PropProfile {
   shape?: string
   category?: string
+  sizeScale?: string
   material?: string
   appearance?: string
+  distinctiveDetails?: string
   status?: string
   significance?: string
+}
+
+export interface EnrichLorebookResult {
+  updatedCharacters: number
+  updatedLocations: number
+  updatedProps: number
 }
 
 export interface CharacterDerivative {
@@ -642,6 +656,9 @@ export interface Job {
   episodeId: string | null
   clipId: string | null
   characterId: string | null
+  derivativeId?: string | null
+  locationId?: string | null
+  propId?: string | null
   kind: JobKind
   provider: string
   status: JobStatus
@@ -898,6 +915,13 @@ export interface BatchEstimateItem {
   estimatedCredits: number | null
 }
 
+export interface PrerequisiteSheetEstimate {
+  id: string
+  name: string
+  kind: 'character' | 'derivative' | 'location' | 'prop'
+  estimatedCredits: number | null
+}
+
 export interface BatchEstimateResult {
   canRun: boolean
   totalItems: number
@@ -907,6 +931,17 @@ export interface BatchEstimateResult {
   blockedCount: number
   missingCount: number
   staleCount: number
+  /** Missing Lorebook sheets that can be generated automatically in Wave 1 before clip images. */
+  prerequisiteSheets?: PrerequisiteSheetEstimate[]
+  prerequisiteCredits?: number | null
+  /** For video batches: clips skipped because they do not have a storyboard image yet. */
+  skippedMissingImageCount?: number
+}
+
+export interface AutoTrimEpisodeResult {
+  trimmedCount: number
+  savedMs: number
+  mode: 'apply' | 'reset'
 }
 
 export type SheetGenerationStatus = 'current' | 'stale' | 'missing' | 'blocked'

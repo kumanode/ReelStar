@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
+import { Music, RotateCcw, Scissors, Sparkles } from 'lucide-react'
 import { replaceCaptionWords } from '@shared/captions'
 import { overlayEnd } from '@shared/overlays'
 import { musicSpan } from '@shared/timeline'
 import { frameDuration, frameRateFromStorage } from '@shared/frame'
-import { confirmDialog, cx } from '../../components/ui'
-import { clipNumber, errorText } from '../../lib/format'
+import { Badge, Button, confirmDialog, cx } from '../../components/ui'
+import { clipNumber, errorText, secLabel } from '../../lib/format'
 import { useApp } from '../../store/app'
 import { useProject } from '../../store/project'
 import {
@@ -20,17 +21,20 @@ import {
 } from './editor/engine'
 import { INSPECTOR_TABS, Inspector, type InspectorTab } from './editor/Inspector'
 import { Player } from './editor/Player'
+import { SmartSfxModal } from './editor/SmartSfxModal'
 import { Timeline, overlayLanes, type TimelinePick, type TimelineSelection } from './editor/Timeline'
 
 const MIN_TIMELINE_H = 180
 const MAX_TIMELINE_RATIO = 0.65
 
 export function EditorStep() {
-  const { project, assets, selectedClipId, select, clips, updateClip, updateEditor, removeClip, flush, load } = useProject()
+  const { project, episode, assets, selectedClipId, select, clips, updateClip, updateEditor, removeClip, flush, load } = useProject()
   const { toast } = useApp()
   const { items, total, chunks } = useTimeline()
   const [tab, setTab] = useState<InspectorTab>('klip')
   const [draggingTimeline, setDraggingTimeline] = useState(false)
+  const [smartSfxOpen, setSmartSfxOpen] = useState(false)
+  const [trimming, setTrimming] = useState(false)
   /** The clip whose transition into the next clip the Transisi panel shows. */
   const [transitionId, setTransitionId] = useState<string | null>(null)
   const [selectedSfxId, setSelectedSfxId] = useState<string | null>(null)
@@ -273,8 +277,95 @@ export function EditorStep() {
     }
   }
 
+  const sfxCount = project.editor.sfx?.length ?? 0
+  const hasTrimmedClips = clips.some((c) => {
+    const vid = c.videoAssetId ? assets[c.videoAssetId] : null
+    return !!vid && (c.mediaInMs > 0 || (vid.durationMs != null && c.durationMs < vid.durationMs - 150))
+  })
+
+  const handleAutoTrim = async (mode: 'apply' | 'reset') => {
+    if (!episode) return
+    setTrimming(true)
+    try {
+      await flush()
+      const res = await window.api.clips.autoTrimEpisode(project.id, episode.id, mode)
+      if (res.trimmedCount === 0) {
+        toast(
+          'info',
+          mode === 'apply'
+            ? 'Tidak ada klip dialog video ber-Whisper yang perlu dipangkas heningnya.'
+            : 'Semua klip sudah pada durasi penuh.'
+        )
+      } else if (mode === 'apply') {
+        toast('success', `Auto-Trim selesai: ${res.trimmedCount} klip dirapatkan (-${(res.savedMs / 1000).toFixed(1).replace('.', ',')} dtk).`)
+      } else {
+        toast('info', `${res.trimmedCount} klip dikembalikan ke durasi video penuh.`)
+      }
+    } catch (e) {
+      toast('error', errorText(e))
+    } finally {
+      setTrimming(false)
+    }
+  }
+
   return (
-    <div className={`grid h-full grid-cols-[minmax(0,1fr)]${draggingTimeline ? ' select-none' : ''}`} style={{ gridTemplateRows: `minmax(0,1fr) auto ${timelineHeight}px` }}>
+    <div className={`grid h-full grid-cols-[minmax(0,1fr)]${draggingTimeline ? ' select-none' : ''}`} style={{ gridTemplateRows: `auto minmax(0,1fr) auto ${timelineHeight}px` }}>
+      {/* Drama Finishing Bar (1-click access to Auto-Trim, Smart AI SFX, and ElevenLabs Music) */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-line bg-surface px-4 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-display text-[11px] font-bold uppercase tracking-wider text-muted">
+            Finishing Drama
+          </span>
+          <Button
+            variant={hasTrimmedClips ? 'secondary' : 'primary'}
+            size="sm"
+            icon={<Scissors className="size-3.5" />}
+            loading={trimming}
+            onClick={() => void handleAutoTrim('apply')}
+            title="Pangkas jeda hening awal/akhir klip dialog video secara non-destruktif berbasis timestamp Whisper"
+          >
+            Auto-Trim Hening
+          </Button>
+          {hasTrimmedClips && (
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<RotateCcw className="size-3.5" />}
+              disabled={trimming}
+              onClick={() => void handleAutoTrim('reset')}
+              title="Kembalikan klip ke panjang video penuh"
+            >
+              Reset Trim
+            </Button>
+          )}
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Sparkles className="size-3.5 text-accent" />}
+            onClick={() => setSmartSfxOpen(true)}
+            title="Buat dan pasang efek suara dramatis otomatis lewat ElevenLabs SFX"
+          >
+            Smart AI SFX {sfxCount > 0 ? `(${sfxCount})` : ''}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Music className="size-3.5" />}
+            onClick={() => setTab('musik')}
+            title="Buka panel Musik Latar & generator ElevenLabs Music"
+          >
+            {music ? 'Musik Aktif ✓' : 'Musik Drama'}
+          </Button>
+        </div>
+
+        <div className="flex items-center gap-2 text-xs">
+          {music && project.editor.duckMusic && <Badge tone="ok">Ducking aktif</Badge>}
+          <span className="rounded-lg border border-line bg-sand px-2 py-0.5 font-mono text-[11px] font-semibold text-ink tabular-nums">
+            Total: {secLabel(Math.round(total * 1000))}
+          </span>
+        </div>
+      </div>
+
       <div className="grid min-h-0 grid-cols-[72px_minmax(0,1fr)_340px] grid-rows-[minmax(0,1fr)]">
         {/* Tabs share the rail's height (36–48 px each) so all of them fit at 1180×720 without a scrollbar;
             scrolling stays only as a fallback when the timeline is dragged very tall. */}
@@ -373,6 +464,28 @@ export function EditorStep() {
         canDelete={!!selection}
         onSplit={() => void onSplit()}
         onDelete={() => void onDelete()}
+      />
+
+      <SmartSfxModal
+        open={smartSfxOpen}
+        onClose={() => setSmartSfxOpen(false)}
+        projectId={project.id}
+        items={items}
+        onBatchAdd={(results) => {
+          if (!results.length) return
+          const existing = project.editor.sfx ?? []
+          const added = results.map((r) => ({
+            id: crypto.randomUUID(),
+            assetId: r.asset.id,
+            name: r.asset.prompt || 'SFX AI',
+            startMs: Math.max(0, Math.round(r.startMs)),
+            durationMs: Math.max(300, r.asset.durationMs ?? 2000),
+            volumeDb: r.volumeDb
+          }))
+          updateEditor({ sfx: [...existing, ...added] })
+          setTab('sfx')
+          toast('success', `${added.length} SFX AI ditambahkan ke timeline.`)
+        }}
       />
     </div>
   )

@@ -1,4 +1,4 @@
-import { compileClipPrompt, compileClipVideoPrompt } from './prompts'
+import { compileClipPrompt, compileClipVideoPrompt, type ReferenceSheetItem } from './prompts'
 import type { AspectRatio, Character, CharacterDerivative, Clip, DialogAudio, Location, Prop, LockWord } from './types'
 
 /**
@@ -24,6 +24,7 @@ export interface ClipImageBasisParams {
     styleId: string
     aspectRatio: AspectRatio
     imageModel?: string | null
+    seriesLock?: LockWord[]
   }
   clip: Clip
   characters: Character[]
@@ -31,6 +32,7 @@ export interface ClipImageBasisParams {
   locations: Location[]
   props: Prop[]
   refSheetAssetIds: string[]
+  refItems?: ReferenceSheetItem[]
   lockWords?: LockWord[]
   imageModel?: string | null
 }
@@ -40,7 +42,8 @@ export interface ClipImageBasisParams {
  * compiled prompt, ordered reference sheet asset IDs, model, and aspect ratio.
  */
 export function computeClipImageBasisHash(params: ClipImageBasisParams): string {
-  const { project, clip, characters, derivatives, locations, props, refSheetAssetIds, lockWords } = params
+  const { project, clip, characters, derivatives, locations, props, refSheetAssetIds, refItems } = params
+  const lockWords = params.lockWords ?? project.seriesLock ?? []
   const activeImageModel = params.imageModel || project.imageModel || 'default'
   const compiledPrompt = compileClipPrompt({
     project: { id: project.id, styleId: project.styleId, aspectRatio: project.aspectRatio },
@@ -49,6 +52,7 @@ export function computeClipImageBasisHash(params: ClipImageBasisParams): string 
     derivatives,
     locations,
     props,
+    refItems,
     lockWords
   })
 
@@ -69,6 +73,7 @@ export interface ClipVideoBasisParams {
     aspectRatio: AspectRatio
     videoModel?: string | null
     dialogAudio?: DialogAudio
+    seriesLock?: LockWord[]
   }
   clip: Clip
   characters: Character[]
@@ -85,9 +90,10 @@ export interface ClipVideoBasisParams {
  * compiled video prompt, initial image asset id, clip duration, model, and speech dialogue.
  */
 export function computeClipVideoBasisHash(params: ClipVideoBasisParams): string {
-  const { project, clip, characters, seconds, prevAssetId, lockWords } = params
+  const { project, clip, characters, seconds, prevAssetId } = params
+  const lockWords = params.lockWords ?? project.seriesLock ?? []
   const activeVideoModel = params.videoModel || project.videoModel || 'default'
-  const compiledVideoPrompt = compileClipVideoPrompt(project, clip, characters, lockWords || [])
+  const compiledVideoPrompt = compileClipVideoPrompt(project, clip, characters, lockWords)
   const durationSec = seconds
 
   return fnv1a(

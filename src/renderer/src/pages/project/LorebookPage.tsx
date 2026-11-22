@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import {
   Users,
   MapPin,
@@ -19,7 +19,8 @@ import {
   CheckCircle2,
   Clock,
   Flame,
-  AlertTriangle
+  AlertTriangle,
+  Wand2
 } from 'lucide-react'
 import type {
   Character,
@@ -43,7 +44,8 @@ import {
   getPropSheetStatus
 } from '@shared/validation'
 import { geminiVoiceGender } from '@shared/models'
-import { Badge, Button, Field, IconButton, Menu, Modal, Segmented, Spinner, confirmDialog, cx, inputCls } from '../../components/ui'
+import { Badge, Button, Field, IconButton, Menu, Modal, Segmented, confirmDialog, cx, inputCls } from '../../components/ui'
+import { GeneratingOverlay } from '../../components/ClipVisual'
 import { AutoTextarea } from '../../components/AutoTextarea'
 import { Select } from '../../components/Select'
 import { errorText } from '../../lib/format'
@@ -53,8 +55,11 @@ import { isRunning, jobFor, useProject } from '../../store/project'
 import { MergeAssetModal } from './MergeAssetModal'
 import { BatchEstimateSheetModal } from './BatchEstimateSheetModal'
 import { CandidateReviewModal } from './CandidateReviewModal'
+import { SeriesGuidelinesModal } from './SeriesGuidelinesModal'
 
-type LorebookTab = 'character' | 'location' | 'prop' | 'lock' | 'continuity'
+type LorebookTab = 'cast' | 'world' | 'rules'
+type WorldFilter = 'all' | 'location' | 'prop'
+type RulesSubTab = 'lock' | 'continuity' | 'guidelines'
 
 export function LorebookPage() {
   const {
@@ -90,7 +95,8 @@ export function LorebookPage() {
     pendingLorebookExtract,
     consumeLorebookExtract,
     flush,
-    refreshLorebook
+    refreshLorebook,
+    upsertJob
   } = useProject()
   const { toast } = useApp()
 
@@ -103,13 +109,27 @@ export function LorebookPage() {
       .catch(() => setActiveImageModel(undefined))
   }, [])
 
-  const [activeTab, setActiveTab] = useState<LorebookTab>('character')
+  // Pull latest Lorebook sheets/entities when entering Lorebook so sheets finished in background always appear.
+  useEffect(() => {
+    if (!project?.id) return
+    void flush()
+      .then(() => refreshLorebook())
+      .catch(() => {})
+  }, [project?.id])
+
+  const [activeTab, setActiveTab] = useState<LorebookTab>('cast')
+  const [worldFilter, setWorldFilter] = useState<WorldFilter>('all')
+  const [rulesSubTab, setRulesSubTab] = useState<RulesSubTab>('lock')
+  const [guidelinesModalOpen, setGuidelinesModalOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [newLockLabel, setNewLockLabel] = useState('')
   const [newLockText, setNewLockText] = useState('')
   const [batchModalOpen, setBatchModalOpen] = useState(false)
   const [extracting, setExtracting] = useState(false)
+  const [enrichingTarget, setEnrichingTarget] = useState<string | null>(null)
+  const extractingRef = useRef(false)
+  const extractSeqRef = useRef(0)
   const [reviewResult, setReviewResult] = useState<LorebookExtractionResult | null>(null)
   const [reviewModalOpen, setReviewModalOpen] = useState(false)
 
@@ -182,20 +202,65 @@ export function LorebookPage() {
     }
   }
 
+  const handleEnrichLorebook = async (target?: { kind: 'character' | 'location' | 'prop'; id: string }) => {
+    if (!project || enrichingTarget) return
+    const key = target ? target.id : 'all'
+    if (!target) {
+      const total = characters.length + locations.length + props.length
+      if (total === 0) {
+        toast('info', 'Belum ada tokoh, lokasi, atau prop untuk diperkaya.')
+        return
+      }
+      const ok = await confirmDialog({
+        title: 'Perkaya Detail Semua Lorebook dengan AI?',
+        body: `AI akan melengkapi detail visual siap-kamera (motif batik/pakaian, ciri wajah, aksesoris, tata letak 4 dinding lokasi, serta skala & material prop) untuk ${characters.length} tokoh, ${locations.length} lokasi, dan ${props.length} prop tanpa mengubah konsep yang sudah kamu tulis.`,
+        confirm: 'Perkaya Semua Detail',
+        danger: false
+      })
+      if (!ok) return
+    }
+    setEnrichingTarget(key)
+    try {
+      await flush()
+      const res = await window.api.lorebook.enrich(project.id, target)
+      const freshBundle = await window.api.projects.get(project.id)
+      useProject.getState().load(freshBundle)
+      const totalUpdated = res.updatedCharacters + res.updatedLocations + res.updatedProps
+      if (totalUpdated > 0) {
+        toast(
+          'success',
+          target
+            ? 'Detail visual diperkaya oleh AI. Buat ulang lembarnya bila ingin gambar referensi ikut diperbarui.'
+            : `Berhasil memperkaya ${res.updatedCharacters} tokoh, ${res.updatedLocations} lokasi, dan ${res.updatedProps} prop!`
+        )
+      } else {
+        toast('info', 'Tidak ada item yang diperbarui.')
+      }
+    } catch (err) {
+      toast('error', `Gagal memperkaya detail Lorebook: ${errorText(err)}`)
+    } finally {
+      setEnrichingTarget(null)
+    }
+  }
+
   const handleExtractLorebook = async () => {
-    if (!project) return
+    if (!project || extractingRef.current) return
     const hasStory =
       !!project.sourceText?.trim() ||
       !!project.synopsis?.trim() ||
-      episodes.some((e) => e.summary.trim() || e.hook?.trim() || e.sourceText?.trim() || e.scriptDraft?.shots?.length)
+      episodes.some((e) => e.summary.trim() || e.hook?.trim() || e.sourceText?.trim() || e.scriptDraft?.shots?.length) ||
+      clips.some((c) => c.story?.trim() || c.narration?.trim() || c.visualPrompt?.trim())
     if (!hasStory) {
       toast('info', 'Teks cerita atau ringkasan episode masih kosong. Isi dulu di Episode Hub sebelum ekstraksi.')
       return
     }
+    const seq = ++extractSeqRef.current
+    extractingRef.current = true
     setExtracting(true)
     try {
       await flush()
       const result = await window.api.lorebook.extract(project.id)
+      if (seq !== extractSeqRef.current) return
       const count = result.characters.length + result.derivatives.length + result.locations.length + result.props.length
       if (count === 0) {
         toast('info', 'Tidak ada entitas baru yang terdeteksi dari cerita.')
@@ -204,15 +269,27 @@ export function LorebookPage() {
       setReviewResult(result)
       setReviewModalOpen(true)
     } catch (err) {
-      toast('error', `Gagal mengekstrak Lorebook: ${errorText(err)}`)
+      if (seq !== extractSeqRef.current) return
+      const msg = errorText(err)
+      if (/Ekstraksi digantikan/i.test(msg)) return
+      if (/Ekstraksi dibatalkan|Dibatalkan/i.test(msg)) {
+        toast('info', 'Ekstraksi Lorebook dibatalkan.')
+        return
+      }
+      toast('error', `Gagal mengekstrak Lorebook: ${msg}`)
     } finally {
-      setExtracting(false)
+      if (seq === extractSeqRef.current) {
+        extractingRef.current = false
+        setExtracting(false)
+      }
     }
   }
 
-  // Triggered when the creator clicks "Lanjut ke Lorebook" from Episode Hub so AI immediately extracts entities.
+  // Triggered when the creator enters Lorebook with an auto-extract intent from Episode Hub.
+  // Check live store state + ref synchronously so React StrictMode's double effect never launches two overlapping runs.
   useEffect(() => {
-    if (!pendingLorebookExtract || !project || extracting) return
+    if (!pendingLorebookExtract || !project) return
+    if (!useProject.getState().pendingLorebookExtract || extractingRef.current) return
     consumeLorebookExtract()
     void handleExtractLorebook()
   }, [pendingLorebookExtract, project?.id])
@@ -287,9 +364,8 @@ export function LorebookPage() {
   const selectedProp = props.find((p) => p.id === selectedId)
 
   const hasSelection =
-    (activeTab === 'character' && !!selectedCharacter) ||
-    (activeTab === 'location' && !!selectedLocation) ||
-    (activeTab === 'prop' && !!selectedProp)
+    (activeTab === 'cast' && !!selectedCharacter) ||
+    (activeTab === 'world' && (!!selectedLocation || !!selectedProp))
 
   // Filtered lists by search query
   const filteredCharacters = useMemo(() => {
@@ -469,7 +545,8 @@ export function LorebookPage() {
   const handleGenerateCharacterSheet = async (charId: string) => {
     try {
       await flush()
-      await window.api.generate.characterSheet(charId)
+      const job = await window.api.generate.characterSheet(charId)
+      upsertJob(job)
       toast('info', 'Pembuatan lembar karakter dimulai')
     } catch (err) {
       toast('error', `Gagal membuat lembar: ${errorText(err)}`)
@@ -491,7 +568,8 @@ export function LorebookPage() {
   const handleGenerateLocationSheet = async (locId: string) => {
     try {
       await flush()
-      await window.api.lorebook.generateLocationSheet(locId)
+      const job = await window.api.lorebook.generateLocationSheet(locId)
+      upsertJob(job)
       toast('info', 'Pembuatan lembar lokasi dimulai')
     } catch (err) {
       toast('error', `Gagal membuat lembar: ${errorText(err)}`)
@@ -513,7 +591,8 @@ export function LorebookPage() {
   const handleGeneratePropSheet = async (propId: string) => {
     try {
       await flush()
-      await window.api.lorebook.generatePropSheet(propId)
+      const job = await window.api.lorebook.generatePropSheet(propId)
+      upsertJob(job)
       toast('info', 'Pembuatan lembar prop dimulai')
     } catch (err) {
       toast('error', `Gagal membuat lembar: ${errorText(err)}`)
@@ -547,7 +626,8 @@ export function LorebookPage() {
   const handleGenerateDerivativeSheet = async (derivId: string) => {
     try {
       await flush()
-      await window.api.lorebook.generateDerivativeSheet(derivId)
+      const job = await window.api.lorebook.generateDerivativeSheet(derivId)
+      upsertJob(job)
       toast('info', 'Pembuatan lembar varian dimulai')
     } catch (err) {
       toast('error', `Gagal membuat lembar varian: ${errorText(err)}`)
@@ -598,11 +678,30 @@ export function LorebookPage() {
               setSelectedId(null)
             }}
             options={[
-              { id: 'character', label: <span className="flex items-center gap-1.5"><Users className="size-3.5" /> Karakter</span> },
-              { id: 'location', label: <span className="flex items-center gap-1.5"><MapPin className="size-3.5" /> Lokasi</span> },
-              { id: 'prop', label: <span className="flex items-center gap-1.5"><Package className="size-3.5" /> Prop</span> },
-              { id: 'lock', label: <span className="flex items-center gap-1.5"><Lock className="size-3.5" /> Kunci Serial</span> },
-              { id: 'continuity', label: <span className="flex items-center gap-1.5"><GitBranch className="size-3.5" /> Kontinuitas</span> }
+              {
+                id: 'cast',
+                label: (
+                  <span className="flex items-center gap-1.5">
+                    <Users className="size-3.5" /> Pemeran ({characters.length})
+                  </span>
+                )
+              },
+              {
+                id: 'world',
+                label: (
+                  <span className="flex items-center gap-1.5">
+                    <MapPin className="size-3.5" /> Dunia ({locations.length + props.length})
+                  </span>
+                )
+              },
+              {
+                id: 'rules',
+                label: (
+                  <span className="flex items-center gap-1.5">
+                    <Lock className="size-3.5" /> Aturan Serial
+                  </span>
+                )
+              }
             ]}
             size="sm"
           />
@@ -612,14 +711,20 @@ export function LorebookPage() {
             <input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={activeTab === 'lock' ? 'Cari kunci kontinuitas...' : activeTab === 'continuity' ? 'Cari benang cerita...' : `Cari ${activeTab === 'character' ? 'karakter' : activeTab === 'location' ? 'lokasi' : 'prop'} atau alias...`}
+              placeholder={
+                activeTab === 'rules'
+                  ? 'Cari kunci atau benang cerita...'
+                  : activeTab === 'cast'
+                    ? 'Cari pemeran atau alias...'
+                    : 'Cari lokasi, prop, atau alias...'
+              }
               className="h-8 w-56 rounded-lg border border-line-2 bg-paper pl-8 pr-2.5 text-xs text-ink outline-none transition-colors focus:border-ink"
             />
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {activeTab !== 'lock' && activeTab !== 'continuity' && (
+          {activeTab !== 'rules' && (
             <>
               <Button
                 variant="secondary"
@@ -642,6 +747,20 @@ export function LorebookPage() {
                 </Button>
               )}
 
+              {(characters.length > 0 || locations.length > 0 || props.length > 0) && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={enrichingTarget === 'all'}
+                  disabled={Boolean(enrichingTarget && enrichingTarget !== 'all')}
+                  icon={<Wand2 className="size-3.5 text-accent" />}
+                  onClick={() => void handleEnrichLorebook()}
+                  title="Lengkapi detail visual tokoh (wajah, motif baju/batik, aksesoris), tata ruang 4 sisi lokasi, dan skala/material prop dengan AI"
+                >
+                  {enrichingTarget === 'all' ? 'Memperkaya...' : 'Perkaya Detail AI'}
+                </Button>
+              )}
+
               <Button
                 variant="secondary"
                 size="sm"
@@ -653,7 +772,7 @@ export function LorebookPage() {
             </>
           )}
 
-          {activeTab === 'continuity' && (
+          {activeTab === 'rules' && rulesSubTab === 'continuity' && (
             <Button
               variant="primary"
               size="sm"
@@ -669,33 +788,33 @@ export function LorebookPage() {
             size="sm"
             icon={<ArrowRight className="size-3.5" />}
             onClick={() => {
-              // Open the first episode still waiting for its script, so the creator lands where the next step is.
               const next = episodes.find((e) => e.status === 'draft' || e.status === 'planned') ?? episodes[0]
               if (next) {
                 void switchEpisode(next.id)
                 setActiveView('episode')
-                setProjectActiveTab('plan')
+                setProjectActiveTab('production')
               } else {
                 setActiveView('hub')
               }
             }}
           >
-            Lanjut ke Naskah
+            Lanjut ke Produksi
           </Button>
 
-          {activeTab !== 'lock' && activeTab !== 'continuity' && (
-            <Button
-              variant="primary"
-              size="sm"
-              icon={<Plus className="size-3.5" />}
-              onClick={() => {
-                if (activeTab === 'character') handleAddCharacter()
-                else if (activeTab === 'location') handleAddLocation()
-                else handleAddProp()
-              }}
-            >
-              {activeTab === 'character' ? 'Tambah Karakter' : activeTab === 'location' ? 'Tambah Lokasi' : 'Tambah Prop'}
+          {activeTab === 'cast' && (
+            <Button variant="primary" size="sm" icon={<Plus className="size-3.5" />} onClick={handleAddCharacter}>
+              Tambah Pemeran
             </Button>
+          )}
+          {activeTab === 'world' && (
+            <>
+              <Button variant="primary" size="sm" icon={<Plus className="size-3.5" />} onClick={handleAddLocation}>
+                Lokasi
+              </Button>
+              <Button variant="secondary" size="sm" icon={<Plus className="size-3.5" />} onClick={handleAddProp}>
+                Prop
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -704,8 +823,8 @@ export function LorebookPage() {
       <div className="flex min-h-0 flex-1">
         {/* Left: Card Grid */}
         <div className="scroll-thin flex-1 overflow-y-auto p-6">
-          {/* Characters Tab */}
-          {activeTab === 'character' && (
+          {/* Tab 1: Pemeran (Characters) */}
+          {activeTab === 'cast' && (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {filteredCharacters.map((char) => {
                 const sheet = char.sheetAssetId ? assets[char.sheetAssetId] : null
@@ -804,9 +923,42 @@ export function LorebookPage() {
             </div>
           )}
 
-          {/* Locations Tab */}
-          {activeTab === 'location' && (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {/* Tab 2: Dunia (Lokasi + Prop with filter chip) */}
+          {activeTab === 'world' && (
+            <div className="mb-4 flex items-center gap-1.5">
+              {(
+                [
+                  { id: 'all', label: `Semua (${filteredLocations.length + filteredProps.length})` },
+                  { id: 'location', label: `Lokasi (${filteredLocations.length})` },
+                  { id: 'prop', label: `Prop (${filteredProps.length})` }
+                ] as { id: WorldFilter; label: string }[]
+              ).map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setWorldFilter(f.id)}
+                  className={cx(
+                    'rounded-full border px-3 py-1 text-xs font-semibold transition-colors',
+                    worldFilter === f.id
+                      ? 'border-ink bg-ink text-paper'
+                      : 'border-line bg-surface text-ink-2 hover:text-ink'
+                  )}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Locations Grid */}
+          {activeTab === 'world' && (worldFilter === 'all' || worldFilter === 'location') && filteredLocations.length > 0 && (
+            <div className="mb-6">
+              {worldFilter === 'all' && filteredProps.length > 0 && (
+                <h4 className="mb-2.5 flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted uppercase">
+                  <MapPin className="size-3.5" /> Lokasi ({filteredLocations.length})
+                </h4>
+              )}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {filteredLocations.map((loc) => {
                 const sheet = loc.sheetAssetId ? assets[loc.sheetAssetId] : null
                 const isSelected = selectedId === loc.id
@@ -886,12 +1038,19 @@ export function LorebookPage() {
                   </div>
                 )
               })}
+              </div>
             </div>
           )}
 
-          {/* Props Tab */}
-          {activeTab === 'prop' && (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {/* Props Grid */}
+          {activeTab === 'world' && (worldFilter === 'all' || worldFilter === 'prop') && filteredProps.length > 0 && (
+            <div>
+              {worldFilter === 'all' && filteredLocations.length > 0 && (
+                <h4 className="mb-2.5 flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted uppercase">
+                  <Package className="size-3.5" /> Prop ({filteredProps.length})
+                </h4>
+              )}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {filteredProps.map((pr) => {
                 const sheet = pr.sheetAssetId ? assets[pr.sheetAssetId] : null
                 const isSelected = selectedId === pr.id
@@ -971,11 +1130,81 @@ export function LorebookPage() {
                   </div>
                 )
               })}
+              </div>
             </div>
           )}
 
-          {/* Series Lock Words Tab */}
-          {activeTab === 'lock' && (
+          {activeTab === 'world' &&
+            ((worldFilter === 'all' && filteredLocations.length === 0 && filteredProps.length === 0) ||
+              (worldFilter === 'location' && filteredLocations.length === 0) ||
+              (worldFilter === 'prop' && filteredProps.length === 0)) && (
+              <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-line-2 bg-surface/60 px-6 py-12 text-center">
+                <MapPin className="size-8 text-muted/60" />
+                <p className="mt-2 font-display text-sm font-bold text-ink">
+                  {worldFilter === 'location'
+                    ? 'Belum ada lokasi'
+                    : worldFilter === 'prop'
+                      ? 'Belum ada prop'
+                      : 'Belum ada lokasi atau prop'}
+                </p>
+                <p className="mt-1 max-w-sm text-xs text-muted">
+                  Tambahkan secara manual lewat tombol di kanan atas, atau klik &quot;Ekstrak dari Cerita&quot; untuk mendeteksi otomatis.
+                </p>
+              </div>
+            )}
+          {activeTab === 'rules' && (
+            <div className="mb-4 flex flex-wrap items-center gap-1.5">
+              {(
+                [
+                  { id: 'lock', label: 'Kunci Serial (Lock Words)' },
+                  { id: 'continuity', label: `Kontinuitas (${continuityItems.length})` },
+                  { id: 'guidelines', label: 'Arahan & Template Prompt' }
+                ] as { id: RulesSubTab; label: string }[]
+              ).map((sub) => (
+                <button
+                  key={sub.id}
+                  type="button"
+                  onClick={() => setRulesSubTab(sub.id)}
+                  className={cx(
+                    'rounded-full border px-3 py-1 text-xs font-semibold transition-colors',
+                    rulesSubTab === sub.id
+                      ? 'border-ink bg-ink text-paper'
+                      : 'border-line bg-surface text-ink-2 hover:text-ink'
+                  )}
+                >
+                  {sub.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Guidelines & Prompt Templates sub-section inside Aturan Serial */}
+          {activeTab === 'rules' && rulesSubTab === 'guidelines' && project && (
+            <div className="flex max-w-4xl flex-col gap-4 rounded-2xl border border-line bg-surface p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-display text-base font-bold text-ink">Arahan Gaya &amp; Template Prompt Serial</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-muted">
+                    Aturan nada cerita, gaya bahasa, dan pantangan adegan yang disematkan otomatis ke prompt AI di seluruh episode.
+                  </p>
+                </div>
+                <Button variant="secondary" size="sm" onClick={() => setGuidelinesModalOpen(true)}>
+                  Kelola Template Prompt AI
+                </Button>
+              </div>
+              <AutoTextarea
+                value={project.seriesGuidelines ?? ''}
+                onChange={(e) => updateProject({ seriesGuidelines: e.target.value })}
+                placeholder="Contoh: Serial drama vertikal tempo cepat. Tokoh utama selalu tenang dan dingin. Hindari dialog terlalu panjang..."
+                minRows={6}
+                maxHeight={260}
+                className="w-full rounded-xl border border-line bg-paper p-3 text-xs leading-relaxed text-ink outline-none focus:border-ink"
+              />
+            </div>
+          )}
+
+          {/* Series Lock Words Sub-Tab */}
+          {activeTab === 'rules' && rulesSubTab === 'lock' && (
             <div className="flex max-w-4xl flex-col gap-6">
               <div className="rounded-2xl border border-line bg-surface p-5">
                 <div className="flex items-start justify-between gap-4">
@@ -1090,8 +1319,8 @@ export function LorebookPage() {
             </div>
           )}
 
-          {/* Continuity Items Tab */}
-          {activeTab === 'continuity' && (
+          {/* Continuity Items Sub-Tab */}
+          {activeTab === 'rules' && rulesSubTab === 'continuity' && (
             <div className="flex max-w-4xl flex-col gap-6">
               <div className="rounded-2xl border border-line bg-surface p-5">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -1306,7 +1535,7 @@ export function LorebookPage() {
         {hasSelection && (
           <div className="scroll-thin w-[420px] shrink-0 border-l border-line bg-surface p-5 overflow-y-auto">
             {/* Detail Panel for Character */}
-          {activeTab === 'character' && selectedCharacter && (
+          {activeTab === 'cast' && selectedCharacter && (
             <div className="flex flex-col gap-5">
               <div className="flex items-center justify-between border-b border-line pb-3">
                 <h3 className="font-display text-base font-bold text-ink">Detail Karakter</h3>
@@ -1331,12 +1560,15 @@ export function LorebookPage() {
                       <span>Belum ada lembar 3 tampak</span>
                     </div>
                   )}
-                  {isRunning(jobFor(jobs, 'sheet', { characterId: selectedCharacter.id })) && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-paper/80 backdrop-blur-[2px]">
-                      <Spinner className="size-6 text-accent" />
-                      <span className="text-xs font-semibold text-ink">Memproses lembar karakter…</span>
-                    </div>
-                  )}
+                  {(() => {
+                    const charJob = jobFor(jobs, 'sheet', { characterId: selectedCharacter.id })
+                    return isRunning(charJob) && charJob ? (
+                      <GeneratingOverlay
+                        job={charJob}
+                        hasBackdrop={Boolean(selectedCharacter.sheetAssetId && assets[selectedCharacter.sheetAssetId])}
+                      />
+                    ) : null
+                  })()}
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -1466,11 +1698,24 @@ export function LorebookPage() {
 
               {/* Character Bible (Visual & Narrative Profiles) */}
               <div className="flex flex-col gap-3 rounded-xl border border-line bg-paper/60 p-3.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-display text-xs font-bold text-ink">Character Bible (Profil Mendalam)</span>
-                  <Badge tone="info" className="text-[10px]">
-                    Konsistensi Shot & Prompt
-                  </Badge>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-display text-xs font-bold text-ink">Character Bible (Profil Mendalam)</span>
+                    <Badge tone="info" className="text-[10px]">
+                      Konsistensi Shot &amp; Prompt
+                    </Badge>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    loading={enrichingTarget === selectedCharacter.id}
+                    disabled={Boolean(enrichingTarget && enrichingTarget !== selectedCharacter.id)}
+                    icon={<Wand2 className="size-3 text-accent" />}
+                    onClick={() => void handleEnrichLorebook({ kind: 'character', id: selectedCharacter.id })}
+                    title="Lengkapi detail wajah, motif pakaian, dan aksesoris tokoh ini dengan AI"
+                  >
+                    Perkaya AI
+                  </Button>
                 </div>
 
                 {/* Visual Traits */}
@@ -1562,6 +1807,20 @@ export function LorebookPage() {
                     />
                   </Field>
 
+                  <Field label="Aksesoris Tetap" className="text-[11px]">
+                    <input
+                      value={selectedCharacter.profile?.visual?.accessories ?? ''}
+                      onChange={(e) => {
+                        const v = { ...(selectedCharacter.profile?.visual ?? {}), accessories: e.target.value }
+                        updateCharacter(selectedCharacter.id, {
+                          profile: { ...(selectedCharacter.profile ?? {}), visual: v }
+                        })
+                      }}
+                      placeholder="Contoh: Kacamata bingkai tipis hitam, jam tangan kulit cokelat"
+                      className={cx(inputCls, 'h-8 text-xs')}
+                    />
+                  </Field>
+
                   <Field label="Pakaian Bawaan / Khas" className="text-[11px]">
                     <input
                       value={selectedCharacter.profile?.visual?.defaultOutfit ?? ''}
@@ -1571,7 +1830,7 @@ export function LorebookPage() {
                           profile: { ...(selectedCharacter.profile ?? {}), visual: v }
                         })
                       }}
-                      placeholder="Contoh: Jas abu-abu gelap potongan modern"
+                      placeholder="Contoh: Kemeja batik parang cokelat soga lengan panjang, celana bahan hitam, tanpa jas"
                       className={cx(inputCls, 'h-8 text-xs')}
                     />
                   </Field>
@@ -1733,40 +1992,55 @@ export function LorebookPage() {
                           />
 
                           <div className="flex items-center gap-2 pt-1">
-                            {variantSheet ? (
-                              <img
-                                src={variantSheet.url}
-                                alt={variant.name}
-                                className="size-10 rounded-lg border border-line bg-surface object-contain"
-                              />
-                            ) : (
-                              <div className="flex size-10 items-center justify-center rounded-lg border border-dashed border-line-2 bg-surface text-muted">
-                                <Shirt className="size-4" />
-                              </div>
-                            )}
+                            {(() => {
+                              const derivJob = jobFor(jobs, 'sheet', { derivativeId: variant.id })
+                              const derivRunning = isRunning(derivJob)
+                              return (
+                                <>
+                                  <div className="relative size-10 shrink-0 overflow-hidden rounded-lg border border-line bg-surface">
+                                    {variantSheet ? (
+                                      <img
+                                        key={variantSheet.id}
+                                        src={variantSheet.url}
+                                        alt={variant.name}
+                                        className="rs-media-reveal size-full object-contain"
+                                      />
+                                    ) : (
+                                      <div className="flex size-full items-center justify-center text-muted">
+                                        <Shirt className="size-4" />
+                                      </div>
+                                    )}
+                                    {derivRunning && derivJob && (
+                                      <GeneratingOverlay job={derivJob} hasBackdrop={Boolean(variantSheet)} compact />
+                                    )}
+                                  </div>
 
-                            <div className="flex flex-1 items-center gap-1.5">
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                disabled={!selectedCharacter.sheetAssetId}
-                                title={
-                                  !selectedCharacter.sheetAssetId
-                                    ? 'Buat lembar karakter dasar terlebih dahulu'
-                                    : 'Buat lembar varian dari lembar dasar'
-                                }
-                                onClick={() => void handleGenerateDerivativeSheet(variant.id)}
-                              >
-                                {variantSheet ? 'Buat ulang' : 'Buat lembar'}
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => void handlePickDerivativeSheet(variant.id)}
-                              >
-                                Unggah
-                              </Button>
-                            </div>
+                                  <div className="flex flex-1 items-center gap-1.5">
+                                    <Button
+                                      variant="secondary"
+                                      size="sm"
+                                      loading={derivRunning}
+                                      disabled={!selectedCharacter.sheetAssetId}
+                                      title={
+                                        !selectedCharacter.sheetAssetId
+                                          ? 'Buat lembar karakter dasar terlebih dahulu'
+                                          : 'Buat lembar varian dari lembar dasar'
+                                      }
+                                      onClick={() => void handleGenerateDerivativeSheet(variant.id)}
+                                    >
+                                      {variantSheet ? 'Buat ulang' : 'Buat lembar'}
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => void handlePickDerivativeSheet(variant.id)}
+                                    >
+                                      Unggah
+                                    </Button>
+                                  </div>
+                                </>
+                              )
+                            })()}
                           </div>
                         </div>
                       )
@@ -1811,7 +2085,7 @@ export function LorebookPage() {
           )}
 
           {/* Detail Panel for Location */}
-          {activeTab === 'location' && selectedLocation && (
+          {activeTab === 'world' && selectedLocation && (
             <div className="flex flex-col gap-5">
               <div className="flex items-center justify-between border-b border-line pb-3">
                 <h3 className="font-display text-base font-bold text-ink">Detail Lokasi</h3>
@@ -1820,43 +2094,55 @@ export function LorebookPage() {
                 </IconButton>
               </div>
 
-              <div className="flex flex-col gap-2">
-                <span className="text-xs font-semibold text-muted">Lembar Referensi Lingkungan</span>
-                <div className="relative aspect-[16/9] w-full overflow-hidden rounded-xl border border-line bg-paper">
-                  {selectedLocation.sheetAssetId && assets[selectedLocation.sheetAssetId] ? (
-                    <img
-                      src={assets[selectedLocation.sheetAssetId].url}
-                      alt={selectedLocation.name}
-                      className="size-full object-cover"
-                    />
-                  ) : (
-                    <div className="flex size-full flex-col items-center justify-center gap-2 text-xs text-muted">
-                      <MapPin className="size-8 text-muted/60" />
-                      <span>Belum ada lembar pemandangan</span>
+              {(() => {
+                const locJob = jobFor(jobs, 'image', { locationId: selectedLocation.id })
+                const locRunning = isRunning(locJob)
+                const locSheet = selectedLocation.sheetAssetId ? assets[selectedLocation.sheetAssetId] : null
+                return (
+                  <div className="flex flex-col gap-2">
+                    <span className="text-xs font-semibold text-muted">Lembar Referensi Lingkungan</span>
+                    <div className="relative aspect-[16/9] w-full overflow-hidden rounded-xl border border-line bg-paper">
+                      {locSheet ? (
+                        <img
+                          key={locSheet.id}
+                          src={locSheet.url}
+                          alt={selectedLocation.name}
+                          className="rs-media-reveal size-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex size-full flex-col items-center justify-center gap-2 text-xs text-muted">
+                          <MapPin className="size-8 text-muted/60" />
+                          <span>Belum ada lembar pemandangan</span>
+                        </div>
+                      )}
+                      {locRunning && locJob && (
+                        <GeneratingOverlay job={{ ...locJob, kind: 'sheet' }} hasBackdrop={Boolean(locSheet)} />
+                      )}
                     </div>
-                  )}
-                </div>
 
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="flex-1"
-                    icon={<Sparkles className="size-3.5 text-accent" />}
-                    onClick={() => void handleGenerateLocationSheet(selectedLocation.id)}
-                  >
-                    {selectedLocation.sheetAssetId ? 'Buat ulang' : 'Buat lembar AI'}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    icon={<Upload className="size-3.5" />}
-                    onClick={() => void handlePickLocationSheet(selectedLocation.id)}
-                  >
-                    Unggah
-                  </Button>
-                </div>
-              </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="flex-1"
+                        loading={locRunning}
+                        icon={<Sparkles className="size-3.5 text-accent" />}
+                        onClick={() => void handleGenerateLocationSheet(selectedLocation.id)}
+                      >
+                        {selectedLocation.sheetAssetId ? 'Buat ulang' : 'Buat lembar AI'}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        icon={<Upload className="size-3.5" />}
+                        onClick={() => void handlePickLocationSheet(selectedLocation.id)}
+                      >
+                        Unggah
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })()}
 
               <Field label="Nama Lokasi">
                 <input
@@ -1919,7 +2205,20 @@ export function LorebookPage() {
 
               {/* Location Profile */}
               <div className="flex flex-col gap-3 rounded-xl border border-line bg-paper/60 p-3.5">
-                <span className="font-display text-xs font-bold text-ink">Profil Lingkungan Lokasi</span>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-display text-xs font-bold text-ink">Profil Lingkungan Lokasi</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    loading={enrichingTarget === selectedLocation.id}
+                    disabled={Boolean(enrichingTarget && enrichingTarget !== selectedLocation.id)}
+                    icon={<Wand2 className="size-3 text-accent" />}
+                    onClick={() => void handleEnrichLorebook({ kind: 'location', id: selectedLocation.id })}
+                    title="Lengkapi tata ruang 4 dinding, palet warna, dan arah cahaya lokasi ini dengan AI"
+                  >
+                    Perkaya AI
+                  </Button>
+                </div>
                 <div className="flex flex-col gap-1.5">
                   <span className="text-[11px] font-semibold text-muted">Tipe Ruang</span>
                   <Segmented<'interior' | 'exterior' | 'mixed'>
@@ -1966,6 +2265,32 @@ export function LorebookPage() {
                       })
                     }}
                     placeholder="Contoh: Modern minimalis mewah, lantai marmer"
+                    className={cx(inputCls, 'h-8 text-xs')}
+                  />
+                </Field>
+
+                <Field label="Tata Letak 4 Sisi / Geografi Ruang (Multi-POV)" className="text-[11px]">
+                  <input
+                    value={selectedLocation.profile?.spatialLayout ?? ''}
+                    onChange={(e) => {
+                      updateLocation(selectedLocation.id, {
+                        profile: { ...(selectedLocation.profile ?? {}), spatialLayout: e.target.value }
+                      })
+                    }}
+                    placeholder="Contoh: Jendela tinggi dinding kiri, meja kayu panjang di tengah, pintu kaca di dinding belakang"
+                    className={cx(inputCls, 'h-8 text-xs')}
+                  />
+                </Field>
+
+                <Field label="Palet Warna & Material Dominan" className="text-[11px]">
+                  <input
+                    value={selectedLocation.profile?.colorPalette ?? ''}
+                    onChange={(e) => {
+                      updateLocation(selectedLocation.id, {
+                        profile: { ...(selectedLocation.profile ?? {}), colorPalette: e.target.value }
+                      })
+                    }}
+                    placeholder="Contoh: Kayu walnut gelap, dinding abu-abu hangat, aksen kuningan & kaca bening"
                     className={cx(inputCls, 'h-8 text-xs')}
                   />
                 </Field>
@@ -2021,7 +2346,7 @@ export function LorebookPage() {
           )}
 
           {/* Detail Panel for Prop */}
-          {activeTab === 'prop' && selectedProp && (
+          {activeTab === 'world' && selectedProp && (
             <div className="flex flex-col gap-5">
               <div className="flex items-center justify-between border-b border-line pb-3">
                 <h3 className="font-display text-base font-bold text-ink">Detail Prop</h3>
@@ -2030,43 +2355,55 @@ export function LorebookPage() {
                 </IconButton>
               </div>
 
-              <div className="flex flex-col gap-2">
-                <span className="text-xs font-semibold text-muted">Lembar Referensi Prop</span>
-                <div className="relative aspect-square w-full overflow-hidden rounded-xl border border-line bg-paper">
-                  {selectedProp.sheetAssetId && assets[selectedProp.sheetAssetId] ? (
-                    <img
-                      src={assets[selectedProp.sheetAssetId].url}
-                      alt={selectedProp.name}
-                      className="size-full object-contain"
-                    />
-                  ) : (
-                    <div className="flex size-full flex-col items-center justify-center gap-2 text-xs text-muted">
-                      <Package className="size-8 text-muted/60" />
-                      <span>Belum ada lembar prop</span>
+              {(() => {
+                const propJob = jobFor(jobs, 'image', { propId: selectedProp.id })
+                const propRunning = isRunning(propJob)
+                const propSheet = selectedProp.sheetAssetId ? assets[selectedProp.sheetAssetId] : null
+                return (
+                  <div className="flex flex-col gap-2">
+                    <span className="text-xs font-semibold text-muted">Lembar Referensi Prop</span>
+                    <div className="relative aspect-square w-full overflow-hidden rounded-xl border border-line bg-paper">
+                      {propSheet ? (
+                        <img
+                          key={propSheet.id}
+                          src={propSheet.url}
+                          alt={selectedProp.name}
+                          className="rs-media-reveal size-full object-contain"
+                        />
+                      ) : (
+                        <div className="flex size-full flex-col items-center justify-center gap-2 text-xs text-muted">
+                          <Package className="size-8 text-muted/60" />
+                          <span>Belum ada lembar prop</span>
+                        </div>
+                      )}
+                      {propRunning && propJob && (
+                        <GeneratingOverlay job={{ ...propJob, kind: 'sheet' }} hasBackdrop={Boolean(propSheet)} />
+                      )}
                     </div>
-                  )}
-                </div>
 
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="flex-1"
-                    icon={<Sparkles className="size-3.5 text-accent" />}
-                    onClick={() => void handleGeneratePropSheet(selectedProp.id)}
-                  >
-                    {selectedProp.sheetAssetId ? 'Buat ulang' : 'Buat lembar AI'}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    icon={<Upload className="size-3.5" />}
-                    onClick={() => void handlePickPropSheet(selectedProp.id)}
-                  >
-                    Unggah
-                  </Button>
-                </div>
-              </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="flex-1"
+                        loading={propRunning}
+                        icon={<Sparkles className="size-3.5 text-accent" />}
+                        onClick={() => void handleGeneratePropSheet(selectedProp.id)}
+                      >
+                        {selectedProp.sheetAssetId ? 'Buat ulang' : 'Buat lembar AI'}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        icon={<Upload className="size-3.5" />}
+                        onClick={() => void handlePickPropSheet(selectedProp.id)}
+                      >
+                        Unggah
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })()}
 
               <Field label="Nama Prop">
                 <input
@@ -2129,21 +2466,75 @@ export function LorebookPage() {
 
               {/* Prop Profile */}
               <div className="flex flex-col gap-3 rounded-xl border border-line bg-paper/60 p-3.5">
-                <span className="font-display text-xs font-bold text-ink">Profil Prop & Benda</span>
-                <Field label="Kategori Prop" className="text-[11px]">
-                  <input
-                    value={selectedProp.profile?.category ?? ''}
-                    onChange={(e) => {
-                      updateProp(selectedProp.id, {
-                        profile: { ...(selectedProp.profile ?? {}), category: e.target.value }
-                      })
-                    }}
-                    placeholder="Senjata, Dokumen, Perhiasan, Kendaraan, Gadget..."
-                    className={cx(inputCls, 'h-8 text-xs')}
-                  />
-                </Field>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-display text-xs font-bold text-ink">Profil Prop &amp; Benda</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    loading={enrichingTarget === selectedProp.id}
+                    disabled={Boolean(enrichingTarget && enrichingTarget !== selectedProp.id)}
+                    icon={<Wand2 className="size-3 text-accent" />}
+                    onClick={() => void handleEnrichLorebook({ kind: 'prop', id: selectedProp.id })}
+                    title="Lengkapi skala, bentuk, material, dan detail unik prop ini dengan AI"
+                  >
+                    Perkaya AI
+                  </Button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="Kategori Prop" className="text-[11px]">
+                    <input
+                      value={selectedProp.profile?.category ?? ''}
+                      onChange={(e) => {
+                        updateProp(selectedProp.id, {
+                          profile: { ...(selectedProp.profile ?? {}), category: e.target.value }
+                        })
+                      }}
+                      placeholder="Dokumen, Elektronik, Perhiasan..."
+                      className={cx(inputCls, 'h-8 text-xs')}
+                    />
+                  </Field>
+                  <Field label="Ukuran / Skala Nyata" className="text-[11px]">
+                    <input
+                      value={selectedProp.profile?.sizeScale ?? ''}
+                      onChange={(e) => {
+                        updateProp(selectedProp.id, {
+                          profile: { ...(selectedProp.profile ?? {}), sizeScale: e.target.value }
+                        })
+                      }}
+                      placeholder="Contoh: Ukuran A4, 14 inci, seukuran telapak"
+                      className={cx(inputCls, 'h-8 text-xs')}
+                    />
+                  </Field>
+                </div>
 
-                <Field label="Tampilan Fisik Detail" className="text-[11px]">
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="Bentuk & Proporsi" className="text-[11px]">
+                    <input
+                      value={selectedProp.profile?.shape ?? ''}
+                      onChange={(e) => {
+                        updateProp(selectedProp.id, {
+                          profile: { ...(selectedProp.profile ?? {}), shape: e.target.value }
+                        })
+                      }}
+                      placeholder="Contoh: Persegi panjang tipis berlipat"
+                      className={cx(inputCls, 'h-8 text-xs')}
+                    />
+                  </Field>
+                  <Field label="Material & Finishing" className="text-[11px]">
+                    <input
+                      value={selectedProp.profile?.material ?? ''}
+                      onChange={(e) => {
+                        updateProp(selectedProp.id, {
+                          profile: { ...(selectedProp.profile ?? {}), material: e.target.value }
+                        })
+                      }}
+                      placeholder="Contoh: Kulit matte, aluminium perak, kertas"
+                      className={cx(inputCls, 'h-8 text-xs')}
+                    />
+                  </Field>
+                </div>
+
+                <Field label="Tampilan Fisik & Warna Detail" className="text-[11px]">
                   <input
                     value={selectedProp.profile?.appearance ?? ''}
                     onChange={(e) => {
@@ -2151,7 +2542,20 @@ export function LorebookPage() {
                         profile: { ...(selectedProp.profile ?? {}), appearance: e.target.value }
                       })
                     }}
-                    placeholder="Bentuk, material, warna dominan, keausan..."
+                    placeholder="Warna dominan, tekstur permukaan, kondisi terbuka/tertutup..."
+                    className={cx(inputCls, 'h-8 text-xs')}
+                  />
+                </Field>
+
+                <Field label="Detail & Tanda Unik" className="text-[11px]">
+                  <input
+                    value={selectedProp.profile?.distinctiveDetails ?? ''}
+                    onChange={(e) => {
+                      updateProp(selectedProp.id, {
+                        profile: { ...(selectedProp.profile ?? {}), distinctiveDetails: e.target.value }
+                      })
+                    }}
+                    placeholder="Contoh: Klip logam perak, kertas laporan mencuat, goresan halus"
                     className={cx(inputCls, 'h-8 text-xs')}
                   />
                 </Field>
@@ -2316,6 +2720,8 @@ export function LorebookPage() {
           </div>
         </div>
       </Modal>
+
+      <SeriesGuidelinesModal open={guidelinesModalOpen} onClose={() => setGuidelinesModalOpen(false)} />
     </div>
   )
 }

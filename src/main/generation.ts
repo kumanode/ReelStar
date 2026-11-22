@@ -3,9 +3,20 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, join } from 'node:path'
 import { estimateWordTimings, WHISPER_TIMING } from '@shared/captions'
 import { spokenWords, stripVoiceTags } from '@shared/speech'
+import { computeSpeechTrimWindow } from '@shared/timeline'
 import { getImageModel, getVideoModel, imageBody, maxRefs, promptLimit, resolutionOptions, videoBody, type HfModel } from '@shared/higgsfield'
-import { getStyle, NO_TEXT } from '@shared/styles'
-import { collectReferenceSheets, compileClipPrompt, compileClipVideoPrompt } from '@shared/prompts'
+import { getStyle, NO_TEXT, resolveStylePrompt } from '@shared/styles'
+import {
+  collectReferenceSheets,
+  compileClipPrompt,
+  compileClipVideoPrompt,
+  findPlannedAnchorClipId,
+  findSceneAnchorForClip,
+  formatCharacterTraits,
+  formatLocationDetails,
+  formatPropDetails,
+  type ReferenceSheetItem
+} from '@shared/prompts'
 import { resolveActive, withActiveTts } from '@shared/providers'
 import {
   computeClipTtsBasisHash,
@@ -45,6 +56,7 @@ import type {
   Job,
   Location,
   LockWord,
+  PrerequisiteSheetEstimate,
   Project,
   Prop,
   ThumbnailRequest,
@@ -136,70 +148,106 @@ function imageProgress(ctx: TaskCtx, what: string) {
 // ---------- prompts ----------
 
 function characterLine(c: Character): string {
-  return `${c.name}: ${c.description}`
+  const traits = formatCharacterTraits(c, true)
+  return traits ? `${c.name}: ${traits}` : `${c.name}: ${c.description}`
+}
+
+function applyTemplate(template: string | undefined, vars: Record<string, string>): string | null {
+  const raw = template?.trim()
+  if (!raw) return null
+  return raw.replace(/\{(\w+)\}/g, (_, key: string) => vars[key] ?? '')
 }
 
 function sheetPrompt(project: Project, c: Character): string {
-  const style = getStyle(project.styleId)
-  const visualParts: string[] = []
-  if (c.profile?.visual) {
-    const v = c.profile.visual
-    if (v.age) visualParts.push(`Age: ${v.age}`)
-    if (v.gender) visualParts.push(`Gender: ${v.gender}`)
-    if (v.bodyType) visualParts.push(`Body: ${v.bodyType}`)
-    if (v.facialFeatures) visualParts.push(`Face: ${v.facialFeatures}`)
-    if (v.hair) visualParts.push(`Hair: ${v.hair}`)
-    if (v.distinctiveFeatures) visualParts.push(`Distinguishing features: ${v.distinctiveFeatures}`)
-    if (v.defaultOutfit) visualParts.push(`Standard attire: ${v.defaultOutfit}`)
+  const { style, prompt: stylePrompt, isRestrictedPalette } = resolveStylePrompt(project)
+  const fullTraits = formatCharacterTraits(c, true) || c.description || c.name
+  const paletteNote = isRestrictedPalette ? ' Render strictly within the monochrome or restricted palette of the art style above.' : ''
+  const custom = applyTemplate(project.promptTemplates?.character_sheet, {
+    name: c.name,
+    description: fullTraits
+  })
+  if (custom) {
+    return [stylePrompt, custom, `The character is ${style.characterHint}.${paletteNote} No text, no labels, no watermarks.`].join('\n\n')
   }
-  const details = visualParts.length ? ` Visual traits: ${visualParts.join(', ')}.` : ''
+  const renderCue =
+    style.category === 'animation'
+      ? 'even clean lighting matching the exact target art style above so face design, garment cut, textile motif/pattern, footwear, and accessories are unmistakable'
+      : 'even soft studio lighting so true face colors, garment cut, textile motif/pattern, footwear, and accessories are unmistakable'
   return [
-    style.prompt,
-    `Character reference sheet for "${c.name}": ${c.description}.${details} The character is ${style.characterHint}.`,
-    'Show the SAME character three times side by side: front view, three-quarter view and side view, full body, neutral standing pose, evenly spaced, on a plain light neutral background (this overrides any background instruction above). Consistent proportions, costume and colors in all three views.'
+    stylePrompt,
+    `Master character reference sheet for "${c.name}": ${fullTraits}. The character is ${style.characterHint}.${paletteNote}`,
+    'Layout: a clean horizontal character model sheet showing a razor-sharp close-up head-and-shoulders face portrait on the far left (capturing exact eye shape, features, hairline, eyewear/jewelry, and collar/fabric pattern clearly for close-ups), followed side-by-side by THREE full-body turnaround views of the EXACT SAME character: front view, three-quarter view, and side profile view in a neutral standing pose, evenly spaced.',
+    `Plain flat light-gray neutral backdrop (overrides any background cue in the style above), ${renderCue}. Identical face, hairstyle, proportions, and default outfit across every view. No text, no annotations, no arrows, no watermarks.`
   ].join('\n\n')
 }
 
 function derivativeSheetPrompt(project: Project, c: Character, d: CharacterDerivative): string {
-  const style = getStyle(project.styleId)
-  const keyphrase = d.costumeKeyphrase ? ` Key costume elements: ${d.costumeKeyphrase}.` : ''
+  const { style, prompt: stylePrompt, isRestrictedPalette } = resolveStylePrompt(project)
+  const identityOnly = formatCharacterTraits(c, false) || c.description || c.name
+  const costumeDesc = [d.promptChange, d.costumeKeyphrase ? `Key locked costume elements: ${d.costumeKeyphrase}` : '']
+    .filter(Boolean)
+    .join('. ')
+  const paletteNote = isRestrictedPalette ? ' Render strictly within the monochrome or restricted palette of the art style above.' : ''
+  const custom = applyTemplate(project.promptTemplates?.derivative_sheet, {
+    name: c.name,
+    variantName: d.name,
+    description: identityOnly,
+    costumeChange: costumeDesc
+  })
+  if (custom) {
+    return [
+      stylePrompt,
+      'Reference Image 1 is the base character sheet for this exact character. Strictly preserve the exact same face, eyes, facial structure, hairstyle, age, and body proportions from Reference Image 1—change ONLY the clothing/styling.',
+      custom,
+      `The character is ${style.characterHint}.${paletteNote} No text, no labels, no watermarks.`
+    ].join('\n\n')
+  }
   return [
-    style.prompt,
-    `Character reference sheet variant for "${c.name}" (${d.name}). Base appearance: ${c.description}. Costume change: ${d.promptChange}.${keyphrase} The character is ${style.characterHint}.`,
-    'Show the SAME character three times side by side: front view, three-quarter view and side view, full body, neutral standing pose, evenly spaced, on a plain light neutral background. Consistent proportions, face, hair, and costume in all three views matching the costume modification.'
+    stylePrompt,
+    `Reference Image 1 is the master character sheet for "${c.name}". STRICT IDENTITY LOCK: preserve the EXACT SAME face, eyes, facial structure, hairstyle, age, and body build from Reference Image 1 (${identityOnly}). Change ONLY the outfit and styling.${paletteNote}`,
+    `Costume variant "${d.name}": ${costumeDesc || 'modified attire'}. The character is ${style.characterHint}.`,
+    'Layout: match Reference Image 1 cleanly—show a crisp close-up head-and-shoulders portrait alongside front, three-quarter, and side full-body standing views of this SAME character wearing the new costume, evenly spaced on a plain flat light-gray neutral backdrop. Identical face and new outfit details across all views. No text, no labels, no watermarks.'
   ].join('\n\n')
 }
 
 function locationSheetPrompt(project: Project, l: Location): string {
-  const style = getStyle(project.styleId)
-  const details: string[] = []
-  if (l.profile) {
-    if (l.profile.interiorExterior) details.push(`Type: ${l.profile.interiorExterior}`)
-    if (l.profile.timeOfDayLighting) details.push(`Lighting: ${l.profile.timeOfDayLighting}`)
-    if (l.profile.architecturalStyle) details.push(`Style: ${l.profile.architecturalStyle}`)
-    if (l.profile.keyFeatures) details.push(`Key features: ${l.profile.keyFeatures}`)
+  const { prompt: stylePrompt, isRestrictedPalette } = resolveStylePrompt(project)
+  const fullDetails = formatLocationDetails(l)
+  const paletteNote = isRestrictedPalette ? ' Render strictly within the monochrome or restricted palette of the art style above.' : ''
+  const custom = applyTemplate(project.promptTemplates?.location_sheet, {
+    name: l.name,
+    description: fullDetails
+  })
+  if (custom) {
+    return [stylePrompt, custom, `Strictly NO people, NO characters, empty environment reference, no text or watermarks.${paletteNote}`].join('\n\n')
   }
-  const extra = details.length ? ` (${details.join(', ')})` : ''
   return [
-    style.prompt,
-    `Location environment reference for "${l.name}": ${l.description || l.name}.${extra}`,
-    'Clean architectural or landscape establishing shot, cinematic composition, NO people, NO characters, empty scenery, high detail, clear lighting.'
+    stylePrompt,
+    `Master location environment reference for "${l.name}": ${fullDetails}.${paletteNote}`,
+    'Single unbroken wide architectural or landscape corner establishing frame positioned to reveal at least two to three walls (or clear spatial boundaries), ground/floor, ceiling/sky, windows/doors, primary furniture/landmarks, surface textures, palette, and exact light direction together for 3D multi-POV scene continuity. Rendered strictly in the target art style above. Strictly NO people, NO silhouettes, NO characters, no split-screen grid lines, empty scenery, crisp detail, no text or watermarks.'
   ].join('\n\n')
 }
 
 function propSheetPrompt(project: Project, p: Prop): string {
-  const style = getStyle(project.styleId)
-  const details: string[] = []
-  if (p.profile) {
-    if (p.profile.category) details.push(`Category: ${p.profile.category}`)
-    if (p.profile.appearance) details.push(`Appearance: ${p.profile.appearance}`)
-    if (p.profile.significance) details.push(`Significance: ${p.profile.significance}`)
+  const { style, prompt: stylePrompt, isRestrictedPalette } = resolveStylePrompt(project)
+  const fullDetails = formatPropDetails(p)
+  const significance = p.profile?.significance ? ` Story context: ${p.profile.significance}.` : ''
+  const paletteNote = isRestrictedPalette ? ' Render strictly within the monochrome or restricted palette of the art style above.' : ''
+  const custom = applyTemplate(project.promptTemplates?.prop_sheet, {
+    name: p.name,
+    description: `${fullDetails}${significance}`
+  })
+  if (custom) {
+    return [stylePrompt, custom, `Isolated object reference, NO people, NO hands, no text or watermarks.${paletteNote}`].join('\n\n')
   }
-  const extra = details.length ? ` (${details.join(', ')})` : ''
+  const renderCue =
+    style.category === 'animation'
+      ? 'rendered strictly in the exact target art style above with clean even lighting'
+      : 'with even soft studio lighting'
   return [
-    style.prompt,
-    `Prop reference sheet for "${p.name}": ${p.description || p.name}.${extra}`,
-    'Isolated studio shot of the single object, clean light neutral background, high detail, centered, NO people, NO hands holding it.'
+    stylePrompt,
+    `Master prop reference sheet for "${p.name}": ${fullDetails}.${significance}${paletteNote}`,
+    `Clean horizontal reference sheet showing TWO views of this EXACT SAME single hero object side-by-side: a crisp three-quarter hero view on the left and a top-down or detail close-up view on the right, clearly showing exact proportions, surface texture, material finish, clasps/markings, and palette on a plain flat light-gray neutral backdrop ${renderCue}. Strictly NO people, NO hands holding it, no text, no labels, no watermarks.`
   ].join('\n\n')
 }
 
@@ -211,6 +259,28 @@ async function waitForSheets(characterIds: string[], signal: AbortSignal): Promi
     const pending = characterIds.some((id) => activeJobFor({ characterId: id }, 'sheet'))
     if (!pending) return
     await sleep(2000, signal)
+  }
+}
+
+/**
+ * When a shot belongs to the same contiguous location block as an earlier anchor shot whose image is
+ * currently generating (e.g. during a batch), wait without holding a queue slot so this POV shot
+ * inherits the freshly rendered Scene Continuity Anchor image for consistent background & prop placement.
+ */
+async function waitForSceneAnchorImage(clip: Clip, signal: AbortSignal, onWait?: () => void): Promise<void> {
+  if (!clip.locationId || clip.shotDetail?.sceneAnchorMode === 'off') return
+  const episodeClips = clipsOf(clip.projectId, clip.episodeId)
+  const anchorId = findPlannedAnchorClipId(clip, episodeClips)
+  if (!anchorId || anchorId === clip.id) return
+  const started = Date.now()
+  let notified = false
+  while (Date.now() - started < 15 * 60 * 1000) {
+    if (!activeJobFor({ clipId: anchorId }, 'image')) return
+    if (!notified) {
+      notified = true
+      onWait?.()
+    }
+    await sleep(1500, signal)
   }
 }
 
@@ -239,21 +309,23 @@ async function waitForPreviousClipVideo(clip: Clip, signal: AbortSignal, onWait?
 
 async function resolveReferenceUrls(
   model: HfModel,
-  items: { sheetAssetId: string; name: string }[],
+  items: ReferenceSheetItem[],
   signal: AbortSignal
-): Promise<{ urls: string[]; names: string[] }> {
+): Promise<{ urls: string[]; names: string[]; items: ReferenceSheetItem[] }> {
   const limit = maxRefs(model)
-  if (limit === 0 || !items.length) return { urls: [], names: [] }
+  if (limit === 0 || !items.length) return { urls: [], names: [], items: [] }
   const urls: string[] = []
   const names: string[] = []
+  const loaded: ReferenceSheetItem[] = []
   for (const it of items) {
     if (urls.length >= limit) break
     const sheet = getAsset(it.sheetAssetId)
     if (!sheet) continue
     urls.push(await publicUrlFor(sheet, signal))
     names.push(it.name)
+    loaded.push(it)
   }
-  return { urls, names }
+  return { urls, names, items: loaded }
 }
 
 // ---------- finishing a Higgsfield request (also used to resume after a restart) ----------
@@ -268,15 +340,23 @@ interface HfPayload {
   propId?: string
   basisHash?: string
   credits?: number
+  autoTrimSilence?: boolean
 }
 
 /**
  * Takes the spoken line out of a freshly generated dialogue video and makes it the clip's voice (§6.C), with
- * caption words timed by Whisper. The clip takes the video's length so the line is never cut at the old clip end.
+ * caption words timed by Whisper. The clip takes the video's length so the line is never cut at the old clip end,
+ * or trims leading/trailing silence non-destructively when `autoTrimSilence` is enabled and Whisper succeeded.
  * When the video has no usable sound the reason is stored on the video asset, so the storyboard can say so instead
  * of leaving a silent clip (narration skips dialogue clips, so nothing else would voice it).
  */
-export async function extractVideoDialogueAudio(projectId: string, clipId: string, video: Asset, signal?: AbortSignal): Promise<Asset | null> {
+export async function extractVideoDialogueAudio(
+  projectId: string,
+  clipId: string,
+  video: Asset,
+  signal?: AbortSignal,
+  autoTrimSilence = true
+): Promise<Asset | null> {
   const project = getProject(projectId)
   const clip = getClip(clipId)
   if (!isVideoDialogue(project, clip)) return null
@@ -342,13 +422,24 @@ export async function extractVideoDialogueAudio(projectId: string, clipId: strin
   })
   emit.asset(asset)
 
-  const patch: Partial<Clip> = {
-    audioAssetId: asset.id,
-    durationMs: Math.max(1000, video.durationMs ?? durationMs ?? clip.durationMs),
-    voiceInMs: 0,
-    voiceOutMs: null,
-    voiceStartMs: 0
-  }
+  const totalMs = Math.max(1000, video.durationMs ?? durationMs ?? clip.durationMs)
+  const trim = autoTrimSilence && timedBy === WHISPER_TIMING ? computeSpeechTrimWindow(words, totalMs) : null
+  const patch: Partial<Clip> = trim
+    ? {
+        audioAssetId: asset.id,
+        mediaInMs: trim.mediaInMs,
+        durationMs: trim.durationMs,
+        voiceInMs: trim.voiceInMs,
+        voiceOutMs: trim.voiceOutMs,
+        voiceStartMs: trim.voiceStartMs
+      }
+    : {
+        audioAssetId: asset.id,
+        durationMs: totalMs,
+        voiceInMs: 0,
+        voiceOutMs: null,
+        voiceStartMs: 0
+      }
   patchClip(clip.id, patch)
   emit.clip({ clipId: clip.id, patch })
   touchProject(project.id)
@@ -434,7 +525,7 @@ async function finishHiggsfield(ctx: TaskCtx, job: Job, requestId: string, paylo
     const patch = { videoAssetId: asset.id, motionType: 'video' as const, mediaInMs: 0 }
     patchClip(job.clipId, patch)
     emit.clip({ clipId: job.clipId, patch })
-    await extractVideoDialogueAudio(job.projectId, job.clipId, asset, ctx.signal)
+    await extractVideoDialogueAudio(job.projectId, job.clipId, asset, ctx.signal, payload.autoTrimSilence ?? true)
   }
   touchProject(job.projectId)
   return asset.id
@@ -541,32 +632,120 @@ export function generateClipImage(clipId: string): Job {
     throw new Error(`Syarat generate gambar tidak terpenuhi:\n- ${prereqs.blockers.join('\n- ')}`)
   }
 
+  const waitForAnchor = async (ctx: TaskCtx): Promise<void> => {
+    await waitForSceneAnchorImage(clip, ctx.signal, () =>
+      ctx.progress(0.02, 'Menunggu shot jangkar selesai agar latar & prop konsisten…')
+    )
+  }
+
   if (isFlow2Api()) {
     const job = insertJob({ projectId: clip.projectId, clipId, kind: 'image', provider: 'flow2api' })
     emit.job(job)
-    return runJob(job, 'flow2api', async (ctx) => {
+    return runJob(
+      job,
+      'flow2api',
+      async (ctx) => {
+        const fresh = getClip(clipId)
+        const project = getProject(fresh.projectId)
+        const pctx = prereqContext(project.id, fresh.episodeId)
+        const allChars = pctx.characters
+        const allDerivs = pctx.derivatives
+        const allLocs = pctx.locations
+        const allProps = pctx.props
+        const limit = referenceLimit(project, pctx)
+        const sceneAnchor = findSceneAnchorForClip(fresh, pctx.clips)
+
+        const refItems = collectReferenceSheets(fresh, allChars, allDerivs, allLocs, allProps, limit, sceneAnchor)
+
+        // Keep loadedRefs strictly aligned with refBuffers so Image 1..N indices in the prompt never shift.
+        const refBuffers: Buffer[] = []
+        const loadedRefs: ReferenceSheetItem[] = []
+        for (const it of refItems) {
+          const sheet = getAsset(it.sheetAssetId)
+          if (sheet && refBuffers.length < limit) {
+            const abs = assetAbsPath(project.id, sheet.localPath)
+            if (existsSync(abs)) {
+              refBuffers.push(readFileSync(abs))
+              loadedRefs.push(it)
+            }
+          }
+        }
+
+        const baseModel = resolveActive(getSettings(), 'image').model
+        const modelId = resolveFlow2ApiModelId(baseModel, project.aspectRatio)
+        const prompt = compileClipPrompt({
+          project,
+          clip: fresh,
+          characters: allChars.filter((c) => fresh.characterIds.includes(c.id)),
+          derivatives: allDerivs,
+          locations: allLocs,
+          props: allProps,
+          refItems: loadedRefs,
+          refNames: loadedRefs.map((r) => r.name),
+          lockWords: pctx.lockWords,
+          limit: 6000
+        })
+        const { basisHash } = clipImageBasis(fresh, project, pctx)
+
+        ctx.progress(0.04, 'Menyiapkan prompt Flow2API')
+        const { mediaUrl } = await f2a.generateImage({
+          prompt,
+          model: modelId,
+          referenceImages: refBuffers,
+          signal: ctx.signal,
+          onProgress: (p, msg) => ctx.progress(p, msg)
+        })
+
+        ctx.progress(0.93, 'Mengunduh hasil')
+        const downloadStartedAt = Date.now()
+        const { bytes, contentType } = await downloadTo(mediaUrl, ctx.signal)
+        if (ctx.signal.aborted) throw new Error('Dibatalkan')
+        console.info('[flow2api] download completed', { elapsedMs: Date.now() - downloadStartedAt, bytes: bytes.length })
+        const rel = saveFile(project.id, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
+        const abs = assetAbsPath(project.id, rel)
+        const size = await probeSize(abs)
+        if (ctx.signal.aborted) throw new Error('Dibatalkan')
+        const asset = insertAsset({
+          projectId: project.id,
+          clipId: fresh.id,
+          kind: 'image',
+          provider: 'flow2api',
+          model: modelId,
+          prompt,
+          remoteUrl: mediaUrl,
+          localPath: rel,
+          width: size?.width ?? null,
+          height: size?.height ?? null,
+          meta: { basisHash }
+        })
+        emit.asset(asset)
+        patchClip(clipId, { imageAssetId: asset.id })
+        emit.clip({ clipId, patch: { imageAssetId: asset.id } })
+        const first = firstClipOf(project.id)
+        if (!project.coverAssetId || first?.id === clipId) touchProject(project.id, { coverAssetId: asset.id })
+        touchProject(project.id)
+        return asset.id
+      },
+      waitForAnchor
+    )
+  }
+
+  const job = insertJob({ projectId: clip.projectId, clipId, kind: 'image', provider: 'higgsfield' })
+  return startHiggsfield(
+    job,
+    async (ctx) => {
       const fresh = getClip(clipId)
       const project = getProject(fresh.projectId)
+      const model = getImageModel(activeImageModelId())
       const pctx = prereqContext(project.id, fresh.episodeId)
       const allChars = pctx.characters
       const allDerivs = pctx.derivatives
       const allLocs = pctx.locations
       const allProps = pctx.props
-      const limit = referenceLimit(project, pctx)
+      const sceneAnchor = findSceneAnchorForClip(fresh, pctx.clips)
 
-      const refItems = collectReferenceSheets(fresh, allChars, allDerivs, allLocs, allProps, limit)
-
-      const refBuffers: Buffer[] = []
-      for (const it of refItems) {
-        const sheet = getAsset(it.sheetAssetId)
-        if (sheet && refBuffers.length < limit) {
-          const abs = assetAbsPath(project.id, sheet.localPath)
-          if (existsSync(abs)) refBuffers.push(readFileSync(abs))
-        }
-      }
-
-      const baseModel = resolveActive(getSettings(), 'image').model
-      const modelId = resolveFlow2ApiModelId(baseModel, project.aspectRatio)
+      const refItems = collectReferenceSheets(fresh, allChars, allDerivs, allLocs, allProps, referenceLimit(project, pctx), sceneAnchor)
+      const refs = await resolveReferenceUrls(model, refItems, ctx.signal)
       const prompt = compileClipPrompt({
         project,
         clip: fresh,
@@ -574,84 +753,20 @@ export function generateClipImage(clipId: string): Job {
         derivatives: allDerivs,
         locations: allLocs,
         props: allProps,
-        refNames: refItems.map((r) => r.name),
+        refItems: refs.items,
+        refNames: refs.names,
         lockWords: pctx.lockWords,
-        limit: 4000
+        limit: promptLimit(model)
       })
       const { basisHash } = clipImageBasis(fresh, project, pctx)
-
-      ctx.progress(0.04, 'Menyiapkan prompt Flow2API')
-      const { mediaUrl } = await f2a.generateImage({
-        prompt,
-        model: modelId,
-        referenceImages: refBuffers,
-        signal: ctx.signal,
-        onProgress: (p, msg) => ctx.progress(p, msg)
-      })
-
-      ctx.progress(0.93, 'Mengunduh hasil')
-      const downloadStartedAt = Date.now()
-      const { bytes, contentType } = await downloadTo(mediaUrl, ctx.signal)
-      if (ctx.signal.aborted) throw new Error('Dibatalkan')
-      console.info('[flow2api] download completed', { elapsedMs: Date.now() - downloadStartedAt, bytes: bytes.length })
-      const rel = saveFile(project.id, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
-      const abs = assetAbsPath(project.id, rel)
-      const size = await probeSize(abs)
-      if (ctx.signal.aborted) throw new Error('Dibatalkan')
-      const asset = insertAsset({
-        projectId: project.id,
-        clipId: fresh.id,
-        kind: 'image',
-        provider: 'flow2api',
-        model: modelId,
-        prompt,
-        remoteUrl: mediaUrl,
-        localPath: rel,
-        width: size?.width ?? null,
-        height: size?.height ?? null,
-        meta: { basisHash }
-      })
-      emit.asset(asset)
-      patchClip(clipId, { imageAssetId: asset.id })
-      emit.clip({ clipId, patch: { imageAssetId: asset.id } })
-      const first = firstClipOf(project.id)
-      if (!project.coverAssetId || first?.id === clipId) touchProject(project.id, { coverAssetId: asset.id })
-      touchProject(project.id)
-      return asset.id
-    })
-  }
-
-  const job = insertJob({ projectId: clip.projectId, clipId, kind: 'image', provider: 'higgsfield' })
-  return startHiggsfield(job, async (ctx) => {
-    const fresh = getClip(clipId)
-    const project = getProject(fresh.projectId)
-    const model = getImageModel(activeImageModelId())
-    const pctx = prereqContext(project.id, fresh.episodeId)
-    const allChars = pctx.characters
-    const allDerivs = pctx.derivatives
-    const allLocs = pctx.locations
-    const allProps = pctx.props
-
-    const refItems = collectReferenceSheets(fresh, allChars, allDerivs, allLocs, allProps, referenceLimit(project, pctx))
-    const refs = await resolveReferenceUrls(model, refItems, ctx.signal)
-    const prompt = compileClipPrompt({
-      project,
-      clip: fresh,
-      characters: allChars.filter((c) => fresh.characterIds.includes(c.id)),
-      derivatives: allDerivs,
-      locations: allLocs,
-      props: allProps,
-      refNames: refs.names,
-      lockWords: pctx.lockWords,
-      limit: promptLimit(model)
-    })
-    const { basisHash } = clipImageBasis(fresh, project, pctx)
-    return {
-      endpoint: model.id,
-      body: imageBody(model, prompt, project.aspectRatio, refs.urls, getSettings().imageGenerationMode === 'draft' ? resolutionOptions(model)[0] : undefined),
-      payload: { target: 'clip-image', model: model.id, prompt, basisHash }
-    }
-  })
+      return {
+        endpoint: model.id,
+        body: imageBody(model, prompt, project.aspectRatio, refs.urls, getSettings().imageGenerationMode === 'draft' ? resolutionOptions(model)[0] : undefined),
+        payload: { target: 'clip-image', model: model.id, prompt, basisHash }
+      }
+    },
+    waitForAnchor
+  )
 }
 
 /** The characters in the most scenes: thumbnails show the lead, not the whole cast. */
@@ -731,7 +846,7 @@ export function generateThumbnail(projectId: string, req: ThumbnailRequest): Job
     const model = getImageModel(activeImageModelId())
     const refs = await resolveReferenceUrls(
       model,
-      chars.map((c) => ({ sheetAssetId: c.sheetAssetId || '', name: c.name })),
+      chars.map((c) => ({ kind: 'character' as const, id: c.id, sheetAssetId: c.sheetAssetId || '', name: c.name })),
       ctx.signal
     )
     const variedPrompt = thumbnailPrompt(project, req, chars, refs.names)
@@ -1055,7 +1170,7 @@ async function resolveInitialImageForClip(
   return { buffer: buf, asset: image }
 }
 
-export function generateClipVideo(clipId: string): Job {
+export function generateClipVideo(clipId: string, autoTrimSilence = true): Job {
   const existing = activeJobFor({ clipId }, 'video')
   if (existing) return existing
   const clip = getClip(clipId)
@@ -1084,7 +1199,7 @@ export function generateClipVideo(clipId: string): Job {
       const prompt = compileClipVideoPrompt(project, fresh, allChars, pctx.lockWords || [], 2000)
       const basisHash = computeClipVideoBasisHash({ project: { ...project, videoModel: baseModel }, clip: fresh, characters: allChars, seconds: durationSec, prevAssetId: initial.prevAssetId, lockWords: pctx.lockWords, videoModel: baseModel })
 
-      ctx.progress(0.04, 'Menyiapkan video Flow2API (Veo)')
+      ctx.progress(0.04, baseModel.toLowerCase().includes('omni') ? 'Menyiapkan video Flow2API (Omni)' : 'Menyiapkan video Flow2API (Veo)')
       const { mediaUrl } = await f2a.generateVideo({
         prompt,
         model: modelId,
@@ -1124,7 +1239,7 @@ export function generateClipVideo(clipId: string): Job {
       patchClip(clipId, patch)
       emit.clip({ clipId, patch })
       touchProject(project.id)
-      await extractVideoDialogueAudio(project.id, clipId, asset, ctx.signal)
+      await extractVideoDialogueAudio(project.id, clipId, asset, ctx.signal, autoTrimSilence)
       return asset.id
     })
   }
@@ -1160,7 +1275,7 @@ export function generateClipVideo(clipId: string): Job {
         null,
         isVideoDialog
       ),
-      payload: { target: 'clip-video', model: model.id, prompt, basisHash }
+      payload: { target: 'clip-video', model: model.id, prompt, basisHash, autoTrimSilence }
     }
   })
 }
@@ -1225,21 +1340,227 @@ export function generateClipTts(clipId: string): Job {
   })
 }
 
+interface NeededSheet {
+  id: string
+  name: string
+  kind: 'character' | 'derivative' | 'location' | 'prop'
+  characterId?: string
+}
+
 /**
- * Makes the missing (and, when asked, stale) images of an episode (§6.J). All or nothing: if a clip that would
- * be made is blocked, nothing starts.
+ * Finds registered Lorebook entities referenced by `clips` that are missing their reference sheet (when the
+ * active image model takes references). Base characters of needed derivatives are included first so Wave 1
+ * can generate the base sheet before Wave 2 edits it into the costume variant.
  */
-export function generateMissingImages(projectId: string, episodeId?: string, includeStale = false): Job[] {
+function collectMissingSheetsForClips(
+  project: Project,
+  clips: Clip[],
+  ctx: GenerationPrerequisitesContext
+): NeededSheet[] {
+  if (referenceLimit(project, ctx) <= 0) return []
+  const assetIds = new Set(Array.isArray(ctx.assets) ? ctx.assets.map((a) => a.id) : Object.keys(ctx.assets))
+  const hasSheet = (id: string | null | undefined): boolean => !!id && assetIds.has(id)
+  const charMap = new Map(ctx.characters.map((c) => [c.id, c]))
+  const derivMap = new Map(ctx.derivatives.map((d) => [d.id, d]))
+  const locMap = new Map(ctx.locations.map((l) => [l.id, l]))
+  const propMap = new Map(ctx.props.map((p) => [p.id, p]))
+
+  const seen = new Set<string>()
+  const out: NeededSheet[] = []
+  const add = (item: NeededSheet): void => {
+    const key = `${item.kind}:${item.id}`
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push(item)
+  }
+
+  for (const clip of clips) {
+    for (const cid of clip.characterIds || []) {
+      const ch = charMap.get(cid)
+      if (!ch) continue
+      const derivId = clip.costumeIds?.[cid]
+      if (derivId) {
+        const deriv = derivMap.get(derivId)
+        if (deriv && !hasSheet(deriv.sheetAssetId)) {
+          if (!hasSheet(ch.sheetAssetId)) add({ id: ch.id, name: ch.name, kind: 'character' })
+          add({ id: deriv.id, name: `${ch.name} - ${deriv.name}`, kind: 'derivative', characterId: ch.id })
+        }
+      } else if (!hasSheet(ch.sheetAssetId)) {
+        add({ id: ch.id, name: ch.name, kind: 'character' })
+      }
+    }
+    if (clip.locationId) {
+      const loc = locMap.get(clip.locationId)
+      if (loc && !hasSheet(loc.sheetAssetId)) add({ id: loc.id, name: loc.name, kind: 'location' })
+    }
+    for (const pid of clip.propIds || []) {
+      const pr = propMap.get(pid)
+      if (pr && !hasSheet(pr.sheetAssetId)) add({ id: pr.id, name: pr.name, kind: 'prop' })
+    }
+  }
+  return out
+}
+
+/** Simulates that `sheets` already exist so prerequisite checks only surface unfixable blockers. */
+function withSimulatedSheets(ctx: GenerationPrerequisitesContext, sheets: NeededSheet[]): GenerationPrerequisitesContext {
+  if (!sheets.length) return ctx
+  const fakeAssets: Asset[] = Array.isArray(ctx.assets) ? [...ctx.assets] : Object.values(ctx.assets)
+  const charIds = new Set(sheets.filter((s) => s.kind === 'character').map((s) => s.id))
+  const derivIds = new Set(sheets.filter((s) => s.kind === 'derivative').map((s) => s.id))
+  const locIds = new Set(sheets.filter((s) => s.kind === 'location').map((s) => s.id))
+  const propIds = new Set(sheets.filter((s) => s.kind === 'prop').map((s) => s.id))
+  const makePlaceholder = (id: string): Asset => ({
+    id,
+    projectId: '',
+    clipId: null,
+    characterId: null,
+    derivativeId: null,
+    locationId: null,
+    propId: null,
+    episodeId: null,
+    kind: 'image',
+    provider: null,
+    model: null,
+    prompt: null,
+    remoteId: null,
+    remoteUrl: null,
+    localPath: '',
+    url: '',
+    durationMs: null,
+    width: null,
+    height: null,
+    meta: {},
+    createdAt: 0
+  })
+
+  for (const s of sheets) fakeAssets.push(makePlaceholder(`__pending_sheet_${s.kind}_${s.id}`))
+
+  return {
+    ...ctx,
+    assets: fakeAssets,
+    characters: ctx.characters.map((c) => (charIds.has(c.id) ? { ...c, sheetAssetId: `__pending_sheet_character_${c.id}` } : c)),
+    derivatives: ctx.derivatives.map((d) => (derivIds.has(d.id) ? { ...d, sheetAssetId: `__pending_sheet_derivative_${d.id}` } : d)),
+    locations: ctx.locations.map((l) => (locIds.has(l.id) ? { ...l, sheetAssetId: `__pending_sheet_location_${l.id}` } : l)),
+    props: ctx.props.map((p) => (propIds.has(p.id) ? { ...p, sheetAssetId: `__pending_sheet_prop_${p.id}` } : p))
+  }
+}
+
+async function waitJobsSettled(jobIds: string[]): Promise<{ anyCanceled: boolean; failedIds: Set<string> }> {
+  const settled = (id: string) => !['queued', 'running'].includes(getJob(id)?.status ?? '')
+  while (!jobIds.every(settled)) {
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  const anyCanceled = jobIds.some((id) => getJob(id)?.status === 'canceled')
+  const failedIds = new Set(jobIds.filter((id) => getJob(id)?.status === 'failed'))
+  return { anyCanceled, failedIds }
+}
+
+/**
+ * Makes the missing (and, when asked, stale) images of an episode (§6.J), optionally narrowed to `clipIds`.
+ * When `autoGenerateSheets` is true, missing Lorebook sheets needed by those clips are generated first
+ * (Wave 1: characters/locations/props → Wave 2: costume variants → Wave 3: clip images) so creators never
+ * have to ping-pong back to Lorebook.
+ */
+export function generateMissingImages(
+  projectId: string,
+  episodeId?: string,
+  includeStale = false,
+  clipIds?: string[],
+  autoGenerateSheets = false
+): Job[] {
   const project = getProject(projectId)
   const ctx = prereqContext(projectId, episodeId)
-  const items = clipsOf(projectId, episodeId).map((clip, i) => ({ clip, index: i + 1, title: clip.title || `Shot ${i + 1}`, status: getClipImageStatus(clip, project, ctx) }))
-  const { targets, blocking } = planBatch(items, includeStale)
+  const idFilter = clipIds?.length ? new Set(clipIds) : null
+  const allEpisodeClips = clipsOf(projectId, episodeId)
+  const scoped = allEpisodeClips
+    .map((clip, i) => ({ clip, index: i + 1, title: clip.title || `Shot ${i + 1}` }))
+    .filter((it) => !idFilter || idFilter.has(it.clip.id))
+
+  // When explicit clipIds are chosen, treat them as explicit targets (including regenerating current ones).
+  const candidateClips = idFilter
+    ? scoped.map((it) => it.clip)
+    : scoped.filter((it) => !it.clip.imageAssetId || includeStale).map((it) => it.clip)
+
+  const neededSheets = autoGenerateSheets ? collectMissingSheetsForClips(project, candidateClips, ctx) : []
+  const evalCtx = neededSheets.length ? withSimulatedSheets(ctx, neededSheets) : ctx
+
+  const items = scoped.map((it) => ({
+    ...it,
+    status: getClipImageStatus(it.clip, project, evalCtx)
+  }))
+
+  let targets: typeof items
+  let blocking: typeof items
+  if (idFilter) {
+    blocking = items.filter((it) => it.status.status === 'blocked')
+    targets = items.filter((it) => it.status.status !== 'blocked')
+  } else {
+    const planned = planBatch(items, includeStale)
+    targets = planned.targets
+    blocking = planned.blocking
+  }
   if (blocking.length) throw new Error(blockedMessage('gambar', blocking))
-  return targets.map((t) => generateClipImage(t.clip.id))
+  if (!targets.length) return []
+
+  const finalSheets = autoGenerateSheets ? collectMissingSheetsForClips(project, targets.map((t) => t.clip), ctx) : []
+  if (!finalSheets.length) {
+    return targets.map((t) => generateClipImage(t.clip.id))
+  }
+
+  // Wave 1: base characters, locations, props
+  const wave1Jobs = new Map<string, Job>()
+  for (const s of finalSheets) {
+    if (s.kind === 'character') wave1Jobs.set(s.id, generateCharacterSheet(s.id))
+    else if (s.kind === 'location') wave1Jobs.set(s.id, generateLocationSheet(s.id))
+    else if (s.kind === 'prop') wave1Jobs.set(s.id, generatePropSheet(s.id))
+  }
+  const wave2Targets = finalSheets.filter((s) => s.kind === 'derivative')
+  const targetClipIds = targets.map((t) => t.clip.id)
+
+  void (async () => {
+    const wave1Ids = [...wave1Jobs.values()].map((j) => j.id)
+    const w1 = wave1Ids.length ? await waitJobsSettled(wave1Ids) : { anyCanceled: false, failedIds: new Set<string>() }
+    if (w1.anyCanceled) return
+
+    const wave2Jobs: Job[] = []
+    for (const d of wave2Targets) {
+      const deriv = getDerivative(d.id)
+      if (!deriv) continue
+      try {
+        const char = getCharacter(deriv.characterId)
+        const parentJob = wave1Jobs.get(char.id)
+        const blocker = derivativeWaveBlocker(
+          parentJob ? (getJob(parentJob.id)?.status ?? null) : null,
+          !!char.sheetAssetId,
+          w1.anyCanceled
+        )
+        if (!blocker) wave2Jobs.push(generateDerivativeSheet(d.id))
+        else if (blocker.skip === 'failed') recordSkippedSheet(projectId, deriv.characterId, d.id, blocker.reason)
+      } catch (err) {
+        recordSkippedSheet(projectId, deriv.characterId, d.id, err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    if (wave2Jobs.length) {
+      const w2 = await waitJobsSettled(wave2Jobs.map((j) => j.id))
+      if (w2.anyCanceled) return
+    }
+
+    // Wave 3: generate clip images for clips whose prerequisites are now satisfied.
+    for (const cid of targetClipIds) {
+      try {
+        generateClipImage(cid)
+      } catch (err) {
+        console.warn('[smart-batch-image] skipped clip after sheet wave:', cid, (err as Error).message)
+      }
+    }
+  })()
+
+  return [...wave1Jobs.values()]
 }
 
 /** Generates AI video for the clips the creator picked; checks all video prerequisites (including continueFromPrevious). */
-export function generateClipsVideo(clipIds: string[]): Job[] {
+export function generateClipsVideo(clipIds: string[], autoTrimSilence = true): Job[] {
   if (!clipIds.length) return []
   for (const id of clipIds) {
     const clip = getClip(id)
@@ -1248,19 +1569,42 @@ export function generateClipsVideo(clipIds: string[]): Job[] {
       throw new Error(`Klip "${clip.title || id}" tidak memenuhi syarat video:\n- ${prereqs.blockers.join('\n- ')}`)
     }
   }
-  return clipIds.map((id) => generateClipVideo(id))
+  return clipIds.map((id) => generateClipVideo(id, autoTrimSilence))
 }
 
 /**
- * Turns the clips that have an image into videos (§6.J), with the same all-or-nothing rule as images.
+ * Turns the clips that have an image into videos (§6.J). Clips without a storyboard image are skipped so
+ * image and video generation remain strictly separate.
  */
-export function generateMissingVideos(projectId: string, episodeId?: string, includeStale = false): Job[] {
+export function generateMissingVideos(
+  projectId: string,
+  episodeId?: string,
+  includeStale = false,
+  clipIds?: string[],
+  autoTrimSilence = true
+): Job[] {
   const project = getProject(projectId)
   const ctx = prereqContext(projectId, episodeId)
-  const items = clipsOf(projectId, episodeId).map((clip, i) => ({ clip, index: i + 1, title: clip.title || `Shot ${i + 1}`, status: getClipVideoStatus(clip, project, ctx) }))
-  const { targets, blocking } = planBatch(items, includeStale)
+  const idFilter = clipIds?.length ? new Set(clipIds) : null
+  const allScoped = clipsOf(projectId, episodeId)
+    .map((clip, i) => ({ clip, index: i + 1, title: clip.title || `Shot ${i + 1}`, status: getClipVideoStatus(clip, project, ctx) }))
+    .filter((it) => !idFilter || idFilter.has(it.clip.id))
+
+  // Keep image and video strictly separated: clips without a storyboard image are skipped, not auto-imaged.
+  const withImage = allScoped.filter((it) => !!it.clip.imageAssetId || !!it.clip.continueFromPrevious)
+
+  let targets: typeof withImage
+  let blocking: typeof withImage
+  if (idFilter) {
+    blocking = withImage.filter((it) => it.status.status === 'blocked')
+    targets = withImage.filter((it) => it.status.status !== 'blocked')
+  } else {
+    const planned = planBatch(withImage, includeStale)
+    targets = planned.targets
+    blocking = planned.blocking
+  }
   if (blocking.length) throw new Error(blockedMessage('video', blocking))
-  return targets.map((t) => generateClipVideo(t.clip.id))
+  return targets.map((t) => generateClipVideo(t.clip.id, autoTrimSilence))
 }
 
 export function generateMissingTts(projectId: string, episodeId?: string): Job[] {
@@ -1271,14 +1615,16 @@ export function generateMissingTts(projectId: string, episodeId?: string): Job[]
 }
 
 /**
- * What a batch would make and cost (§6.J). Video credits follow each clip's fitted length. Flow2API does not
- * spend Higgsfield credits, so its cost is null rather than a made-up number.
+ * What a batch would make and cost (§6.J). Supports optional `clipIds` selection and smart prerequisite sheets
+ * (`autoGenerateSheets`) for image batches. Video batches never auto-generate missing images.
  */
 export async function batchEstimate(
   projectId: string,
   episodeId: string | undefined,
   kind: 'image' | 'video',
-  includeStale = false
+  includeStale = false,
+  clipIds?: string[],
+  autoGenerateSheets = false
 ): Promise<BatchEstimateResult> {
   const project = getProject(projectId)
   const ctx = prereqContext(projectId, episodeId)
@@ -1294,13 +1640,72 @@ export async function batchEstimate(
         ? getFlow2ApiModel(activeVideo.model, 'video').name
         : getVideoModel(activeVideo.model).name
 
-  const items = clipsOf(projectId, episodeId).map((clip, i) => ({
-    clip,
-    index: i + 1,
-    title: clip.title || `Shot ${i + 1}`,
-    status: kind === 'image' ? getClipImageStatus(clip, project, ctx) : getClipVideoStatus(clip, project, ctx)
+  const idFilter = clipIds?.length ? new Set(clipIds) : null
+  const allScoped = clipsOf(projectId, episodeId)
+    .map((clip, i) => ({ clip, index: i + 1, title: clip.title || `Shot ${i + 1}` }))
+    .filter((it) => !idFilter || idFilter.has(it.clip.id))
+
+  let skippedMissingImageCount = 0
+  let prerequisiteSheets: PrerequisiteSheetEstimate[] = []
+  let prerequisiteCredits: number | null = null
+  let evalCtx = ctx
+  let scopedForEval = allScoped
+
+  if (kind === 'video') {
+    const missingImg = allScoped.filter((it) => !it.clip.imageAssetId && !it.clip.continueFromPrevious)
+    skippedMissingImageCount = missingImg.length
+    scopedForEval = allScoped.filter((it) => !!it.clip.imageAssetId || !!it.clip.continueFromPrevious)
+  } else if (autoGenerateSheets) {
+    const candidateClips = idFilter
+      ? allScoped.map((it) => it.clip)
+      : allScoped.filter((it) => !it.clip.imageAssetId || includeStale).map((it) => it.clip)
+    const needed = collectMissingSheetsForClips(project, candidateClips, ctx)
+    if (needed.length) {
+      evalCtx = withSimulatedSheets(ctx, needed)
+      let pricePerSheet: number | null = null
+      if (!ctx.isFlow2Api) {
+        const est = await estimateCredits('image', activeImage.model, '16:9', 0, null).catch(() => null)
+        pricePerSheet = est?.credits ?? null
+      }
+      prerequisiteSheets = needed.map((s) => ({
+        id: s.id,
+        name: s.name,
+        kind: s.kind,
+        estimatedCredits: pricePerSheet
+      }))
+      prerequisiteCredits = pricePerSheet != null ? Math.round(needed.length * pricePerSheet * 10) / 10 : null
+    }
+  }
+
+  const items = scopedForEval.map((it) => ({
+    ...it,
+    status: kind === 'image' ? getClipImageStatus(it.clip, project, evalCtx) : getClipVideoStatus(it.clip, project, evalCtx)
   }))
-  const { targets, blocking } = planBatch(items, includeStale)
+
+  let targets: typeof items
+  let blocking: typeof items
+  if (idFilter) {
+    blocking = items.filter((it) => it.status.status === 'blocked')
+    targets = items.filter((it) => it.status.status !== 'blocked')
+  } else {
+    const planned = planBatch(items, includeStale)
+    targets = planned.targets
+    blocking = planned.blocking
+  }
+
+  // Filter prerequisiteSheets down to only those actually needed by the final `targets`.
+  if (kind === 'image' && autoGenerateSheets && prerequisiteSheets.length) {
+    const actualNeeded = collectMissingSheetsForClips(project, targets.map((t) => t.clip), ctx)
+    const neededKeys = new Set(actualNeeded.map((s) => `${s.kind}:${s.id}`))
+    prerequisiteSheets = prerequisiteSheets.filter((s) => neededKeys.has(`${s.kind}:${s.id}`))
+    if (!prerequisiteSheets.length) {
+      prerequisiteCredits = null
+    } else if (prerequisiteSheets.every((s) => s.estimatedCredits != null)) {
+      prerequisiteCredits = Math.round(prerequisiteSheets.reduce((a, s) => a + (s.estimatedCredits ?? 0), 0) * 10) / 10
+    } else {
+      prerequisiteCredits = null
+    }
+  }
 
   // One estimate per distinct video length: the price depends on it, and lookups are cached anyway.
   const priceBySeconds = new Map<number, number | null>()
@@ -1330,7 +1735,12 @@ export async function batchEstimate(
   }
 
   const prices = out.filter((o) => o.status !== 'blocked').map((o) => o.estimatedCredits)
-  const totalCredits = prices.length && prices.every((p) => p != null) ? Math.round(prices.reduce<number>((a, p) => a + (p ?? 0), 0) * 10) / 10 : null
+  const itemsCredits = prices.length && prices.every((p) => p != null) ? Math.round(prices.reduce<number>((a, p) => a + (p ?? 0), 0) * 10) / 10 : null
+  const totalCredits =
+    itemsCredits != null && (!prerequisiteSheets.length || prerequisiteCredits != null)
+      ? Math.round((itemsCredits + (prerequisiteCredits ?? 0)) * 10) / 10
+      : null
+
   return {
     canRun: blocking.length === 0 && targets.length > 0,
     totalItems: targets.length,
@@ -1338,7 +1748,9 @@ export async function batchEstimate(
     items: out,
     blockedCount: blocking.length,
     missingCount: items.filter((i) => i.status.status === 'missing').length,
-    staleCount: items.filter((i) => i.status.status === 'stale').length
+    staleCount: items.filter((i) => i.status.status === 'stale').length,
+    ...(prerequisiteSheets.length ? { prerequisiteSheets, prerequisiteCredits } : {}),
+    ...(skippedMissingImageCount > 0 ? { skippedMissingImageCount } : {})
   }
 }
 

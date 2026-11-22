@@ -5,6 +5,7 @@ import type {
   AppSettings,
   Asset,
   AssetUsageSummary,
+  AutoTrimEpisodeResult,
   BatchEstimateResult,
   BatchEstimateSheetResult,
   BuiltinSfx,
@@ -17,6 +18,7 @@ import type {
   ContinuityStatus,
   ContinuityTier,
   CreditEstimate,
+  EnrichLorebookResult,
   Episode,
   EpisodeScriptDraft,
   StoryProgressEvent,
@@ -107,6 +109,11 @@ export interface StudioApi {
       createdLocations: Location[]
       createdProps: Prop[]
     }>
+    /** Enriches sparse/generic Lorebook visual profiles with concrete camera-ready details via LLM. */
+    enrich(
+      projectId: string,
+      target?: { kind: 'character' | 'location' | 'prop'; id: string }
+    ): Promise<EnrichLorebookResult>
   }
   story: {
     /** Adapts serial source text into structured episodes with hook, cliffhanger, and story beats. */
@@ -120,7 +127,12 @@ export interface StudioApi {
     /** Confirms the episode script draft, registers new assets, and creates actual clips in an atomic transaction. */
     confirmEpisodeScript(projectId: string, episodeId: string, draft: EpisodeScriptDraft): Promise<ProjectBundle>
     /** Generates labelled visualPrompt and videoPrompt for clips in an episode. */
-    writePrompts(projectId: string, episodeId: string, clipIds?: string[]): Promise<ProjectBundle>
+    writePrompts(
+      projectId: string,
+      episodeId: string,
+      clipIds?: string[],
+      options?: { force?: boolean; useAi?: boolean; requireAi?: boolean }
+    ): Promise<ProjectBundle>
     /** Script → one image plan per scene; "missing" skips scenes whose plan still matches their story. */
     visuals(projectId: string, mode: 'missing' | 'all'): Promise<ProjectBundle>
     /** A background-music prompt that fits the finished script, for use in Suno or another music AI. */
@@ -161,10 +173,22 @@ export interface StudioApi {
     clipVideo(clipId: string): Promise<Job>
     clipTts(clipId: string): Promise<Job>
     characterSheet(characterId: string): Promise<Job>
-    missingImages(projectId: string, episodeId?: string, includeStale?: boolean): Promise<Job[]>
+    missingImages(
+      projectId: string,
+      episodeId?: string,
+      includeStale?: boolean,
+      clipIds?: string[],
+      autoGenerateSheets?: boolean
+    ): Promise<Job[]>
     /** An AI video for every clip that has an image but no video yet. */
-    missingVideos(projectId: string, episodeId?: string, includeStale?: boolean): Promise<Job[]>
-    clipsVideo(clipIds: string[]): Promise<Job[]>
+    missingVideos(
+      projectId: string,
+      episodeId?: string,
+      includeStale?: boolean,
+      clipIds?: string[],
+      autoTrimSilence?: boolean
+    ): Promise<Job[]>
+    clipsVideo(clipIds: string[], autoTrimSilence?: boolean): Promise<Job[]>
     missingTts(projectId: string, episodeId?: string): Promise<Job[]>
     /** Voices scenes in one continuous take and cuts it per scene: those without a voice, or all of them. */
     narration(projectId: string, mode: 'missing' | 'all', episodeId?: string): Promise<Job>
@@ -174,7 +198,14 @@ export interface StudioApi {
     cancelProject(projectId: string, kind?: string): Promise<void>
     /** Credits for one image, or one video of about `seconds`, with this model. Null without a working key. */
     estimate(kind: 'image' | 'video', modelId: string, aspect: AspectRatio, seconds?: number, resolution?: string | null): Promise<CreditEstimate | null>
-    batchEstimate(projectId: string, episodeId: string | undefined, kind: 'image' | 'video', includeStale?: boolean): Promise<BatchEstimateResult>
+    batchEstimate(
+      projectId: string,
+      episodeId: string | undefined,
+      kind: 'image' | 'video',
+      includeStale?: boolean,
+      clipIds?: string[],
+      autoGenerateSheets?: boolean
+    ): Promise<BatchEstimateResult>
     batchEstimateSheets(projectId: string, includeStale?: boolean): Promise<BatchEstimateSheetResult>
     missingSheets(projectId: string, includeStale?: boolean): Promise<Job[]>
   }
@@ -183,6 +214,8 @@ export interface StudioApi {
     split(clipId: string, atMs: number): Promise<ProjectBundle>
     /** Takes the voice off a clip. */
     detachVoice(clipId: string): Promise<void>
+    /** Non-destructively trims or resets leading/trailing silence on Whisper-timed video dialogue clips. */
+    autoTrimEpisode(projectId: string, episodeId: string, mode?: 'apply' | 'reset'): Promise<AutoTrimEpisodeResult>
   }
   assets: {
     setActive(clipId: string, assetId: string): Promise<void>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ArrowRight, Copy, FolderOpen, Minus, MoreHorizontal, Plus, RefreshCw, Search, SlidersHorizontal, Trash2, Upload } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Copy, FolderOpen, Minus, MoreHorizontal, Plus, RefreshCw, Search, SlidersHorizontal, Sparkles, Trash2, Upload } from 'lucide-react'
 import { LANGUAGES } from '@shared/models'
 import { resolveActive } from '@shared/providers'
 import { getStyle } from '@shared/styles'
@@ -21,6 +21,7 @@ import { Badge, Button, Chip, Field, IconButton, Menu, Modal, Progress, Segmente
 import { errorText, relativeTime } from '../lib/format'
 import { TTS_NAMES, ttsReadiness, usableTts } from '../lib/keys'
 import { useApp } from '../store/app'
+import { useProject } from '../store/project'
 
 const STATUS: Record<ProjectStatus, { label: string; tone: 'draft' | 'info' | 'warn' | 'ok' }> = {
   draft: { label: 'Draf', tone: 'draft' },
@@ -416,29 +417,29 @@ function NewSerialModal({
   initialStyleId?: string
 }) {
   const [title, setTitle] = useState('')
-  const [synopsis, setSynopsis] = useState(initialSynopsis)
+  const [storyText, setStoryText] = useState(initialSynopsis)
   const [durationSec, setDurationSec] = useState(initialDurationSec)
   const [targetEpisodeCount, setTargetEpisodeCount] = useState<number>(DEFAULT_TARGET_EPISODE_COUNT)
   const [isAutoEpisodes, setIsAutoEpisodes] = useState(false)
   const [sourceKind, setSourceKind] = useState<SourceKind>('novel')
-  const [sourceText, setSourceText] = useState('')
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(initialAspectRatio)
   const [styleId, setStyleId] = useState(initialStyleId)
   const [dialogAudio, setDialogAudio] = useState<DialogAudio>('video')
+  const [autoPlan, setAutoPlan] = useState(true)
   const [creating, setCreating] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useApp()
 
   useEffect(() => {
     if (open) {
-      setSynopsis(initialSynopsis)
+      setStoryText(initialSynopsis)
       setDurationSec(initialDurationSec)
       setTargetEpisodeCount(DEFAULT_TARGET_EPISODE_COUNT)
       setIsAutoEpisodes(false)
       setSourceKind('novel')
-      setSourceText('')
       setAspectRatio(initialAspectRatio)
       setStyleId(initialStyleId)
+      setAutoPlan(true)
       setTitle('')
     }
   }, [open, initialSynopsis, initialDurationSec, initialAspectRatio, initialStyleId])
@@ -454,7 +455,7 @@ function NewSerialModal({
     const reader = new FileReader()
     reader.onload = (event) => {
       const text = String(event.target?.result ?? '')
-      setSourceText(text)
+      setStoryText(text)
       toast('info', `File "${file.name}" dimuat (${text.length.toLocaleString()} karakter)`)
     }
     reader.readAsText(file)
@@ -467,18 +468,27 @@ function NewSerialModal({
     }
     setCreating(true)
     try {
+      const cleanStory = storyText.trim()
       const bundle = await window.api.projects.create({
-        title: title.trim() || synopsis.slice(0, 30).trim() || 'Serial Baru',
-        synopsis: synopsis.trim(),
+        title: title.trim() || cleanStory.slice(0, 30).trim() || 'Serial Baru',
+        synopsis: cleanStory.slice(0, 400),
         durationSec,
         targetEpisodeCount: isAutoEpisodes ? null : targetEpisodeCount,
         sourceKind,
-        sourceText: sourceText.trim(),
+        sourceText: cleanStory,
         aspectRatio,
         styleId,
         dialogAudio
       })
-      toast('success', `Serial "${bundle.project.title}" berhasil dibuat`)
+      if (autoPlan && cleanStory) {
+        useProject.getState().requestAutoPlan(bundle.project.id)
+      }
+      toast(
+        'success',
+        autoPlan && cleanStory
+          ? `Serial "${bundle.project.title}" dibuat — langsung memecah episode…`
+          : `Serial "${bundle.project.title}" berhasil dibuat`
+      )
       onCreated(bundle.project.id)
     } catch (err) {
       toast('error', `Gagal membuat serial: ${errorText(err)}`)
@@ -492,11 +502,11 @@ function NewSerialModal({
       open={open}
       onClose={onClose}
       title="Buat Serial Baru"
-      subtitle="Atur judul, naskah sumber, target episode, rasio aspek, gaya visual, dan sumber dialog untuk serial kamu."
+      subtitle="Isi judul & sinopsis/cerita sekali saja — otomatis tersinkron ke Episode Hub dan bisa langsung dipecah jadi episode."
       width={720}
     >
       <div className="flex flex-col gap-4 text-sm text-ink">
-        <Field label="Judul Serial" hint="Opsional, akan otomatis dinamai dari sinopsis jika dikosongkan.">
+        <Field label="Judul Serial" hint="Opsional, otomatis dinamai dari cerita jika dikosongkan.">
           <input
             autoFocus
             value={title}
@@ -506,60 +516,59 @@ function NewSerialModal({
           />
         </Field>
 
-        <Field label="Premis atau sinopsis serial" hint="AI memakai premis ini untuk merencanakan episode dan adegan serial kamu.">
-          <textarea
-            rows={2}
-            value={synopsis}
-            onChange={(e) => setSynopsis(e.target.value)}
-            placeholder="Contoh: Rani, office girl yang selalu dihina manajernya, ternyata pewaris tunggal perusahaan tempat dia bekerja…"
-            className={cx(inputCls, 'resize-none py-2.5 leading-relaxed')}
-          />
-        </Field>
-
-        {/* Source Text & Kind (Optional) */}
+        {/* Unified Story / Synopsis Input (Synced directly with Episode Hub's Sumber Cerita) */}
         <div className="flex flex-col gap-2 rounded-xl border border-line bg-paper/60 p-3.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-ink-2">Bahan Sumber Cerita (Opsional)</span>
-            <Segmented<SourceKind>
-              value={sourceKind}
-              onChange={setSourceKind}
-              options={[
-                { id: 'novel', label: 'Novel / Cerita' },
-                { id: 'screenplay', label: 'Naskah Jadi' }
-              ]}
-              size="sm"
-            />
-          </div>
-          <div className="flex items-center justify-between text-xs text-muted">
-            <span>
-              {sourceKind === 'novel'
-                ? 'Novel/cerpen diadaptasi menjadi shot visual & dialog.'
-                : 'Naskah jadi mempertahankan adegan dan dialog kata per kata.'}
-            </span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              icon={<Upload className="size-3.5" />}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              Unggah berkas
-            </Button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".txt,.md"
-              className="hidden"
-              onChange={handleFileUpload}
-            />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-semibold text-ink">Sinopsis atau Teks Cerita</span>
+            <div className="flex items-center gap-2">
+              <Segmented<SourceKind>
+                value={sourceKind}
+                onChange={setSourceKind}
+                options={[
+                  { id: 'novel', label: 'Sinopsis / Novel' },
+                  { id: 'screenplay', label: 'Naskah Jadi' }
+                ]}
+                size="sm"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                icon={<Upload className="size-3.5" />}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Unggah .txt/.md
+              </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".txt,.md"
+                className="hidden"
+                onChange={handleFileUpload}
+              />
+            </div>
           </div>
           <textarea
-            rows={3}
-            value={sourceText}
-            onChange={(e) => setSourceText(e.target.value)}
-            placeholder="Tempel teks cerita di sini, atau unggah file .txt/.md (bisa juga diisi nanti di Episode Hub)..."
-            className={cx(inputCls, 'resize-none py-2 text-xs leading-relaxed')}
+            rows={4}
+            value={storyText}
+            onChange={(e) => setStoryText(e.target.value)}
+            placeholder={
+              sourceKind === 'screenplay'
+                ? 'Tempel naskah jadi di sini (dialog dan adegan dipertahankan kata per kata)...'
+                : 'Tulis sinopsis, premis, atau tempel cerita novel di sini — otomatis tampil di Sumber Cerita Episode Hub...'
+            }
+            className={cx(inputCls, 'resize-none py-2.5 text-sm leading-relaxed')}
           />
+          <label className="flex cursor-pointer items-center gap-2 pt-0.5 text-xs text-ink-2">
+            <input
+              type="checkbox"
+              checked={autoPlan}
+              onChange={(e) => setAutoPlan(e.target.checked)}
+              className="size-4 rounded accent-accent"
+            />
+            <Sparkles className="size-3.5 text-accent" />
+            <span className="font-medium text-ink">Langsung pecah jadi episode otomatis setelah serial dibuat</span>
+          </label>
         </div>
 
         {/* Target episode & duration */}
@@ -650,7 +659,7 @@ function NewSerialModal({
             label="Suara Dialog"
             hint={
               dialogAudio === 'video'
-                ? 'Veo AI video'
+                ? 'Video AI (Veo / Omni)'
                 : 'TTS narator'
             }
           >

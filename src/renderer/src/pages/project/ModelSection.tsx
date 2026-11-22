@@ -138,7 +138,7 @@ export function ModelSection({
               models={f2aVideoModels}
               renderIcon={(m) => <ModelLogo family={m.family} />}
               detail="description"
-              tagFilters={['Rekomendasi', 'Cepat', 'Gambar ke Video', 'Teks ke Video']}
+              tagFilters={['Rekomendasi', 'Terbaru', 'Cepat', 'Multi-Ref', 'Gambar ke Video', 'Teks ke Video']}
               align="right"
               menuClassName="w-[430px]"
               onChange={async (id) => {

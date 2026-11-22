@@ -58,7 +58,7 @@ src/
     hash.ts       hash basis hasil generate
     styles.ts, legacyStyles.ts  katalog gaya visual; gaya lama tetap terbaca untuk proyek lama
   renderer/src/    tampilan React + Tailwind v4 + Zustand
-    pages/project/  Episode Hub, Lorebook, Rencana & Tinjau, Storyboard, Editor, Header, Sidebar
+    pages/project/  Episode Hub, Lorebook (3 tab), Produksi terpadu (ProductionStep, ShotCard, NewAssetsBanner, AnimaticPreviewModal), Editor & Finishing Drama, Header, Sidebar
     pages/settings/ Model Aktif, Penyedia & Kunci, Penyedia Custom, Umum, Whisper
     pages/project/editor/  pratinjau (Player), Timeline, Inspector (panel kanan), engine pemutaran
 resources/         font caption, SFX bawaan, whisper-cli.exe + DLL, file lisensi

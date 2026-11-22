@@ -30,13 +30,21 @@ export function StudioSidebar() {
     toggleSidebar,
     episodes,
     episode,
+    characters,
+    locations,
+    props,
     switchEpisode,
     createEpisode
   } = useProject()
 
+  const missingSheetsCount =
+    characters.filter((c) => !c.sheetAssetId).length +
+    locations.filter((l) => !l.sheetAssetId).length +
+    props.filter((p) => !p.sheetAssetId).length
+
   const handleOpenEpisode = async (epId: string) => {
     await switchEpisode(epId)
-    setActiveTab('plan')
+    setActiveTab('production')
     setActiveView('episode')
   }
 
@@ -47,7 +55,7 @@ export function StudioSidebar() {
       episodeNum: nextNum
     })
     await switchEpisode(newEp.id)
-    setActiveTab('plan')
+    setActiveTab('production')
     setActiveView('episode')
   }
 
@@ -90,7 +98,7 @@ export function StudioSidebar() {
         <button
           type="button"
           onClick={() => setActiveView('lorebook')}
-          title="Lorebook"
+          title="Dunia & Pemeran (Lorebook)"
           className={cx(
             'flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs font-semibold transition-colors',
             activeView === 'lorebook' ? 'bg-sun-soft text-ink' : 'text-ink-2 hover:bg-sand hover:text-ink',
@@ -98,7 +106,12 @@ export function StudioSidebar() {
           )}
         >
           <BookOpen className="size-4 shrink-0" />
-          {!sidebarCollapsed && <span>Lorebook</span>}
+          {!sidebarCollapsed && <span className="flex-1 truncate text-left">Dunia &amp; Pemeran</span>}
+          {!sidebarCollapsed && missingSheetsCount > 0 && (
+            <span className="rounded-full bg-sun-soft px-1.5 py-0.5 font-mono text-[10px] font-bold text-sun-ink">
+              {missingSheetsCount}
+            </span>
+          )}
         </button>
       </div>
 

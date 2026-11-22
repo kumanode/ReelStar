@@ -2,8 +2,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import { CAMERA_PRESETS, MOTION_STRENGTHS, TRANSITIONS } from '@shared/motion'
 import { formatChapters } from '@shared/chapters'
 import { LANGUAGES } from '@shared/models'
+import { formatCharacterTraits, formatLocationDetails, formatPropDetails } from '@shared/prompts'
 import { isNarratorName, needsVisual, visualSourceOf } from '@shared/script'
-import { getStyle } from '@shared/styles'
+import { getStyle, resolveStylePrompt } from '@shared/styles'
 import { MIN_EPISODE_DURATION_SEC, MAX_EPISODE_DURATION_SEC, cleanShotDetail, defaultDialogueType } from '@shared/validation'
 import type {
   CameraPresetId,
@@ -13,6 +14,7 @@ import type {
   CandidateProp,
   Clip,
   DraftShot,
+  EnrichLorebookResult,
   Episode,
   EpisodeScriptDraft,
   LorebookExtractionResult,
@@ -48,7 +50,12 @@ import {
   propsOf,
   saveScriptVersion,
   setPlanProgress,
+  syncProjectSeriesLocks,
+  touchProject,
+  updateCharacter,
   updateEpisode,
+  updateLocation,
+  updateProp,
   type SceneVisual,
   fillEmptyFields
 } from './repo'
@@ -257,9 +264,11 @@ export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
         'All titles, summaries, hooks, beats, teasers, and excerpts must be in gripping, natural Indonesian.'
       ].join(' ')
 
+  const customPlanner = project.promptTemplates?.episode_planner?.trim()
+  const systemBase = customPlanner ? `${customPlanner}\n\n${system}` : system
   const effectiveSystem = project.seriesGuidelines
-    ? `${system}\n\nCreator Guidelines for this series:\n${project.seriesGuidelines}`
-    : system
+    ? `${systemBase}\n\nCreator Guidelines for this series:\n${project.seriesGuidelines}`
+    : systemBase
 
   for (const [wi, w] of windows.entries()) {
     const part = sourceText.slice(w.start, w.end)
@@ -381,13 +390,20 @@ const SCRIPT_DRAFT_SCHEMA = {
           },
           speaker: {
             type: 'string',
-            description: 'Name of the on-screen character who speaks the line, who must also be listed in characters. Empty string for narration (voice-over) and for silent shots.'
+            description: 'REQUIRED for all spoken dialogue/vo/os shots (70–85% of shots): exact Lorebook name of the character who speaks, who must also be listed in characters for on-screen dialogue. Empty string ONLY for pure narrator voice-over or the few silent reaction/insert shots (max 15–25%).'
           },
-          text: { type: 'string', description: 'Dialogue line spoken in the shot, or narration text. Empty if silent.' },
+          text: {
+            type: 'string',
+            description: 'REQUIRED spoken Indonesian dialogue line or internal monologue (V.O.) for 70–85% of shots (punchy, dramatic, 4–14 words). Leave empty "" ONLY for rare silent reaction or prop-insert shots (at most 15–25% of the episode).'
+          },
           emotion: { type: 'string', description: 'Emotional delivery and facial expression, e.g. "marah, mencemooh".' },
           framing: { type: 'string', description: 'Shot framing: close-up, medium shot, extreme close-up, two-shot, over-the-shoulder, wide.' },
           durationSec: { type: 'integer', description: 'Shot duration in seconds (typically 3 to 7).' },
           beat: { type: 'string', enum: ['hook', 'confrontation', 'twist', 'aftermath'], description: 'Story rhythm beat phase in vertical drama formula: hook, confrontation, twist, aftermath.' },
+          continue_from_previous: {
+            type: 'boolean',
+            description: 'Set true ONLY when this shot immediately continues the unbroken physical motion of the preceding shot in the exact same location and angle.'
+          },
           shot_detail: {
             type: 'object',
             additionalProperties: false,
@@ -440,11 +456,21 @@ interface RawDraftShot {
   location?: string
   props?: string[]
   speaker?: string
+  speakerName?: string
+  character_speaking?: string
   text?: string
+  dialogue?: string
+  line?: string
+  spoken_text?: string
+  spokenLine?: string
+  narration?: string
+  voiceover?: string
+  script?: string
   emotion?: string
   framing?: string
   durationSec?: number
   beat?: string
+  continue_from_previous?: boolean
   shot_detail?: {
     camera_motion?: string
     camera_reason?: string
@@ -481,17 +507,28 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
 
   const castSummary = chars.length
     ? chars.map((c) => {
-        const cDerivs = derivs.filter((d) => d.characterId === c.id).map((d) => d.name)
-        return `- ${c.name} (aliases: ${c.aliases.join(', ') || 'none'}, variants: ${cDerivs.join(', ') || 'default'}): ${c.description}`
+        const cDerivs = derivs
+          .filter((d) => d.characterId === c.id)
+          .map((d) => (d.costumeKeyphrase ? `${d.name} [${d.costumeKeyphrase}]` : d.name))
+        const visual = formatCharacterTraits(c, true)
+        const n = c.profile?.narrative
+        const narrativeBits = [
+          n?.role ? `role: ${n.role}` : '',
+          n?.desire ? `desire: ${n.desire}` : '',
+          n?.secret ? `secret: ${n.secret}` : '',
+          n?.speechPattern ? `speech: ${n.speechPattern}` : '',
+          c.voiceStyle ? `voice: ${c.voiceStyle}` : ''
+        ].filter(Boolean).join('; ')
+        return `- ${c.name} (aliases: ${c.aliases.join(', ') || 'none'}; variants: ${cDerivs.join(', ') || 'default'}): ${visual}${narrativeBits ? ` | Narrative: ${narrativeBits}` : ''}`
       }).join('\n')
     : '(Belum ada karakter terdaftar di Lorebook)'
 
   const locSummary = locs.length
-    ? locs.map((l) => `- ${l.name} (aliases: ${l.aliases.join(', ') || 'none'}): ${l.description}`).join('\n')
+    ? locs.map((l) => `- ${l.name} (aliases: ${l.aliases.join(', ') || 'none'}): ${formatLocationDetails(l)}`).join('\n')
     : '(Belum ada lokasi terdaftar di Lorebook)'
 
   const propSummary = prs.length
-    ? prs.map((p) => `- ${p.name}: ${p.description}`).join('\n')
+    ? prs.map((p) => `- ${formatPropDetails(p)}${p.profile?.significance ? ` — ${p.profile.significance}` : ''}`).join('\n')
     : '(Belum ada prop terdaftar di Lorebook)'
 
   const openContinuity = listContinuityItems(projectId).filter((ci) => ci.status === 'open')
@@ -506,18 +543,20 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
     : '(Tidak ada benang cerita terbuka)'
 
   const system = [
-    'You are a master vertical short drama scriptwriter and director.',
-    'You are planning the shot-by-shot script for an episode in an intense vertical short drama series (9:16 format).',
-    'Follow these critical short drama directing rules:',
-    '1. SHOT-REVERSE-SHOT: Around 80% of conversation shots must be close-up or reaction shots of the speaker or listener with intense facial expressions.',
-    '2. ONE SHOT = AT MOST ONE SPEECH: Exactly one character speaks per shot. If a character speaks dialogue, they MUST be visible in that shot.',
-    '3. HOOK AND CLIFFHANGER: The first shot must vividly display the opening Hook. The last shot must land on the heart-stopping Cliffhanger.',
-    '4. CONTINUITY: If a previous episode ended on a cliffhanger, this episode must immediately resolve or escalate it in the opening beats.',
-    '5. DEFAULT COSTUMES: Each character wears a consistent costume variant for the episode unless an explicit wardrobe change occurs in the story.',
-    '6. LOREBOOK & ASSET DETECTION: Match characters, locations, and props to registered entities whenever possible.',
-    '7. SHOT DETAILS & PACING: For every shot, provide rich shot_detail (camera_motion, camera_reason, lighting, blocking, non_speaking_reaction, sfx_ambience, speech_delivery, dialogue_type). Speech must be concise (< 3 words/second).',
-    'If the story introduces a new recurring character, costume variant, location, or prop not in the Lorebook, propose it in "newAssets" with kind, name, description, action, target, and reason.',
-    'Write dialogue, action, emotions, and titles in natural, dramatic Indonesian.',
+    project.promptTemplates?.script_draft?.trim() ||
+      'You are an award-winning vertical short drama director, cinematographer, and scriptwriter (9:16 prestige mobile drama).',
+    'You are planning a gripping, visually cinematic shot-by-shot script for an episode in an intense vertical short drama series.',
+    'Follow these critical short drama directing & visual storytelling rules:',
+    '1. MANDATORY SPOKEN DIALOGUE (CRITICAL): Vertical short drama is driven by sharp, emotionally charged Indonesian dialogue! At least 70% to 85% of the shots MUST have a non-empty "text" (spoken dialogue line or sharp internal monologue V.O.) AND a valid "speaker" (exact Lorebook character name) with dialogue_type="dialogue" (on-screen lip-sync) or "vo" (inner thought). Even if the source input is a short synopsis without written quotes, YOU MUST invent crisp, natural, high-drama Indonesian lines that fit each character\'s personality and conflict. Reserve silent shots (text: "") strictly for 15% to 25% of shots (emotional reactions or dramatic prop inserts)—NEVER return an episode where most shots have empty text!',
+    '2. CINEMATIC VARIETY (NO TALKING-HEAD MONOTONY): Never repeat the same close-up framing 3+ times in a row. Weave establishing wide/medium shots (whenever entering a new location), over-the-shoulder (OTS) confrontation shots, dynamic two-shots with foreground/background depth, tight emotional close-ups, silent listener reaction shots, power-angle shots (low-angle for dominance, high-angle for vulnerability, Dutch angle for shock), and extreme close-up INSERT shots (trembling hands, eyes widening, hero props, phone screen, dropped objects).',
+    '3. SHOW, DON\'T TELL: Every shot\'s visualAction and blocking must show concrete physical behavior, posture, gaze direction, spatial separation (left/right/foreground/background), and direct prop interaction—not generic "berdiri berbicara".',
+    '4. FOUR-BEAT EMOTIONAL ESCALATION: Pace the episode through hook (instant visual/emotional jolt in shots 1-2) → confrontation (rising power struggle) → twist (sharp visual reveal or reversal) → aftermath (heart-stopping cliffhanger freeze moment). Escalate lighting contrast and camera energy across the beats.',
+    '5. ONE SHOT = ONE SPEAKER: At most one character speaks per shot. When dialogue_type is "dialogue", the speaker MUST be listed in characters so lip-sync video models can animate them speaking.',
+    '6. CONTINUITY & CLIFFHANGER PAYOFF: If the previous episode ended on a cliffhanger, resolve or escalate it immediately in the opening shots. Keep costumes, locations, time-of-day lighting, and prop states strictly consistent within the same scene. Set continue_from_previous=true ONLY when a shot directly continues an unbroken physical action from the immediately preceding shot.',
+    '7. LOREBOOK FIDELITY: Match characters, costume variants, locations, and props to REGISTERED LOREBOOK ASSETS by their exact names/aliases whenever possible. Honor each character\'s narrative role, secret, and speech pattern so dialogue feels sharp and authentic.',
+    '8. RICH SHOT DETAILS & SPEECH PACING: Populate shot_detail on EVERY shot with vivid camera_motion, camera_reason, lighting (consistent with location & beat), concrete spatial blocking, non_speaking_reaction (whenever 2+ characters are visible), sfx_ambience, speech_delivery, and dialogue_type. Keep spoken lines punchy (4–14 words, < 2.6 words/second so they never overflow).',
+    'If the story introduces a genuinely new recurring character, costume variant, location, or prop not in the Lorebook, propose it in "newAssets" with concrete visual details.',
+    'Write dialogue ("text"), visualAction, emotions, and titles in gripping, natural Indonesian.',
     project.seriesGuidelines ? `Creator guidelines for this series:\n${project.seriesGuidelines}` : ''
   ].filter(Boolean).join('\n')
 
@@ -537,67 +576,118 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
     `${continuitySummary}`
   ].join('\n\n')
 
-  const res = await generateJson<RawScriptDraftResponse>({
+  const normalizeDraftShots = (rawShots: RawDraftShot[]): DraftShot[] =>
+    rawShots.map((s, i) => {
+      const costumeMap: Record<string, string> = {}
+      if (Array.isArray(s.costumes)) {
+        for (const item of s.costumes) {
+          if (item.character && item.variant) {
+            costumeMap[str(item.character)] = str(item.variant)
+          }
+        }
+      } else if (s.costumes && typeof s.costumes === 'object') {
+        for (const [k, v] of Object.entries(s.costumes)) {
+          if (typeof v === 'string') costumeMap[str(k)] = str(v)
+        }
+      }
+
+      // Accept common LLM fallback field names so dialogue is never silently dropped.
+      const text =
+        str(s.text) ||
+        str(s.dialogue) ||
+        str(s.line) ||
+        str(s.spoken_text) ||
+        str(s.spokenLine) ||
+        str(s.narration) ||
+        str(s.voiceover) ||
+        str(s.script)
+      const rawSpeaker = str(s.speaker) || str(s.speakerName) || str(s.character_speaking)
+      const characters = Array.isArray(s.characters) ? s.characters.map(str).filter(Boolean) : []
+      let speaker = rawSpeaker && !isNarratorName(rawSpeaker) ? rawSpeaker : null
+      const rawDialogueType = s.shot_detail?.dialogue_type
+      // If dialogue text exists for an on-screen dialogue shot but speaker was omitted, assign first visible character.
+      if (text && !speaker && rawDialogueType === 'dialogue' && characters.length > 0) {
+        speaker = characters[0]
+      }
+      const shotDetail = cleanShotDetail(s.shot_detail, speaker, text)
+      const isVisibleDialogue = (shotDetail?.dialogueType ?? defaultDialogueType(speaker, text)) === 'dialogue'
+      if (speaker && isVisibleDialogue && !characters.some((c) => c.toLowerCase() === speaker!.toLowerCase())) {
+        characters.unshift(speaker)
+      }
+
+      const wordCount = text.trim().split(/\s+/).filter(Boolean).length
+      const minDurForSpeech = wordCount > 0 ? Math.ceil(wordCount / 2.8) : 2
+      const requestedDur = Number(s.durationSec) || 5
+      const durationSec = Math.max(minDurForSpeech, Math.min(requestedDur, 12))
+
+      const rawBeat = str(s.beat)
+      const beat = rawBeat && ['hook', 'confrontation', 'twist', 'aftermath'].includes(rawBeat) ? (rawBeat as StoryBeatPhase) : undefined
+
+      return {
+        title: str(s.title) || `Shot ${i + 1}`,
+        sourceExcerpt: str(s.sourceExcerpt),
+        visualAction: str(s.visualAction),
+        characters,
+        costumes: costumeMap,
+        location: str(s.location) || null,
+        props: Array.isArray(s.props) ? s.props.map(str).filter(Boolean) : [],
+        speaker,
+        text,
+        emotion: str(s.emotion),
+        framing: str(s.framing) || 'medium shot',
+        durationSec,
+        ...(beat ? { beat } : {}),
+        ...(i > 0 && s.continue_from_previous ? { continueFromPrevious: true } : {}),
+        shotDetail
+      }
+    })
+
+  let res = await generateJson<RawScriptDraftResponse>({
     system,
     prompt,
     schema: SCRIPT_DRAFT_SCHEMA,
     name: `episode_script_${episodeId}`
   })
 
-  const rawShots = res.shots ?? []
+  let rawShots = res.shots ?? []
   if (!rawShots.length) {
     throw new Error('AI belum menghasilkan shot untuk episode ini. Coba lagi.')
   }
 
-  const cleanShots: DraftShot[] = rawShots.map((s, i) => {
-    const costumeMap: Record<string, string> = {}
-    if (Array.isArray(s.costumes)) {
-      for (const item of s.costumes) {
-        if (item.character && item.variant) {
-          costumeMap[str(item.character)] = str(item.variant)
+  let cleanShots = normalizeDraftShots(rawShots)
+  const minVoicedShots = cleanShots.length >= 4 ? Math.ceil(cleanShots.length * 0.4) : 1
+  const voicedCount = cleanShots.filter((s) => s.text.trim().length > 0).length
+
+  // Guard against silent-episode drafts: retry once with an explicit dialogue correction if AI left dialog blank.
+  if (voicedCount < minVoicedShots) {
+    emit.storyProgress({
+      projectId,
+      message: `Melengkapi dialog & suara tokoh untuk ${ep.title}…`
+    })
+    const retryPrompt = [
+      prompt,
+      `\nIMPORTANT CORRECTION: Your previous draft returned only ${voicedCount} spoken shots out of ${cleanShots.length} (most shots had empty "text" and "speaker"). ` +
+        `This is a vertical drama episode—at least 70–85% of the shots MUST include sharp, natural Indonesian spoken dialogue in the "text" field and the speaking character's exact Lorebook name in the "speaker" field (with shot_detail.dialogue_type = "dialogue" or "vo"). Rewrite the shots now with full dramatic dialogue.`
+    ].join('\n\n')
+    try {
+      const retryRes = await generateJson<RawScriptDraftResponse>({
+        system,
+        prompt: retryPrompt,
+        schema: SCRIPT_DRAFT_SCHEMA,
+        name: `episode_script_retry_${episodeId}`
+      })
+      if (retryRes.shots?.length) {
+        const retryClean = normalizeDraftShots(retryRes.shots)
+        if (retryClean.filter((s) => s.text.trim().length > 0).length > voicedCount) {
+          res = retryRes
+          rawShots = retryRes.shots
+          cleanShots = retryClean
         }
       }
-    } else if (s.costumes && typeof s.costumes === 'object') {
-      for (const [k, v] of Object.entries(s.costumes)) {
-        if (typeof v === 'string') costumeMap[str(k)] = str(v)
-      }
+    } catch {
+      // Keep original draft if retry fails transiently.
     }
-
-    const text = str(s.text)
-    const rawSpeaker = str(s.speaker)
-    const speaker = rawSpeaker && !isNarratorName(rawSpeaker) ? rawSpeaker : null
-    const characters = Array.isArray(s.characters) ? s.characters.map(str).filter(Boolean) : []
-    const shotDetail = cleanShotDetail(s.shot_detail, speaker, text)
-    const isVisibleDialogue = (shotDetail?.dialogueType ?? defaultDialogueType(speaker, text)) === 'dialogue'
-    if (speaker && isVisibleDialogue && !characters.some((c) => c.toLowerCase() === speaker.toLowerCase())) {
-      characters.unshift(speaker)
-    }
-
-    const wordCount = text.trim().split(/\s+/).filter(Boolean).length
-    const minDurForSpeech = wordCount > 0 ? Math.ceil(wordCount / 2.8) : 2
-    const requestedDur = Number(s.durationSec) || 5
-    const durationSec = Math.max(minDurForSpeech, Math.min(requestedDur, 12))
-
-    const rawBeat = str(s.beat)
-    const beat = rawBeat && ['hook', 'confrontation', 'twist', 'aftermath'].includes(rawBeat) ? (rawBeat as StoryBeatPhase) : undefined
-
-    return {
-      title: str(s.title) || `Shot ${i + 1}`,
-      sourceExcerpt: str(s.sourceExcerpt),
-      visualAction: str(s.visualAction),
-      characters,
-      costumes: costumeMap,
-      location: str(s.location) || null,
-      props: Array.isArray(s.props) ? s.props.map(str).filter(Boolean) : [],
-      speaker,
-      text,
-      emotion: str(s.emotion),
-      framing: str(s.framing) || 'medium shot',
-      durationSec,
-      ...(beat ? { beat } : {}),
-      shotDetail
-    }
-  })
+  }
 
   const cleanProposals: NewAssetProposal[] = (res.newAssets ?? []).map((p) => ({
     kind: p.kind,
@@ -701,54 +791,456 @@ export async function planAllMissingEpisodeScripts(
   }
 }
 
-export async function writePrompts(projectId: string, episodeId: string, clipIds?: string[]): Promise<ProjectBundle> {
+export interface WritePromptsOptions {
+  /** Rewrites every clip even if it already has a prompt (used by "Optimasi Ulang Semua Prompt"). */
+  force?: boolean
+  /** Use the LLM Visual Director to craft cinematic English image/video prompts (default: true, falls back cleanly when offline). */
+  useAi?: boolean
+  /** Surface LLM failures as errors instead of falling back to the local template. */
+  requireAi?: boolean
+}
+
+const SHOT_PROMPTS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    shots: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          shot_number: { type: 'integer', description: '1-based shot index matching the input shot number.' },
+          action: {
+            type: 'string',
+            description:
+              'Vivid cinematic English freeze-frame description of this exact moment: concrete pose, gaze direction, facial micro-expression, physical interaction with props, foreground/midground/background composition. Name every visible Lorebook character verbatim.'
+          },
+          lighting: {
+            type: 'string',
+            description:
+              'Motivated English cinematography lighting (key direction, rim/practical lights, shadow contrast, color temperature) consistent with the location and visual style.'
+          },
+          blocking: {
+            type: 'string',
+            description:
+              'Clear English 180-degree spatial staging in frame (e.g. "Dina on screen-left facing right, Bima opposite on screen-right facing left, Pak Gunawan at center-midground") keeping consistent left/right geography across consecutive shots in the same room.'
+          },
+          camera_pov: {
+            type: 'string',
+            description:
+              'Specific English 3D camera POV / angle placement (e.g. "over-the-shoulder (OTS) from behind Dina\'s right shoulder looking across the table at Bima", "reverse-angle OTS from behind Bima\'s left shoulder toward Dina", "eye-level medium close-up facing Pak Gunawan", "low-angle dramatic shot", "insert close-up looking down at the table").'
+          },
+          prop_placement: {
+            type: 'string',
+            description:
+              'Fixed physical position of every visible prop and key furniture landmark in this shot so props never teleport across POV cuts (e.g. "maroon project folder open on the dark wood table directly in front of Dina; silver laptop angled slightly left of the folder; tall windows stay on the left wall"). Empty string if no props.'
+          },
+          framing: {
+            type: 'string',
+            description:
+              'English camera framing, shot size, and perspective matching the visual style (e.g. "low-angle medium close-up, tight dramatic framing" or "over-the-shoulder close-up").'
+          },
+          avoid: {
+            type: 'string',
+            description:
+              'Comma-separated English pitfalls to prevent for THIS shot (e.g. "swapped faces, wrong costume/outfit, teleported props, shifted background furniture, distorted hands, split screen, turnaround grid, on-screen text, watermark").'
+          },
+          video_motion: {
+            type: 'string',
+            description:
+              'Concrete 1-2 sentence English AI-video motion direction for Veo 3.1 / Kling: exact subject gestures, facial micro-expressions, prop movement, subtle background motion, and ONE smooth continuous camera move. No scene cuts, no music or soundtrack.'
+          },
+          camera_motion: {
+            type: 'string',
+            description: 'Short English camera movement label (e.g. "slow tense dolly in", "subtle handheld micro-shake", "static locked frame").'
+          },
+          camera_preset: { type: 'string', enum: CAMERA_IDS },
+          motion_strength: { type: 'string', enum: STRENGTH_IDS },
+          transition: { type: 'string', enum: TRANSITION_IDS }
+        },
+        required: [
+          'shot_number',
+          'action',
+          'lighting',
+          'blocking',
+          'camera_pov',
+          'prop_placement',
+          'framing',
+          'avoid',
+          'video_motion',
+          'camera_motion',
+          'camera_preset',
+          'motion_strength',
+          'transition'
+        ]
+      }
+    }
+  },
+  required: ['shots']
+}
+
+interface RawShotPromptItem {
+  shot_number?: number
+  action?: string
+  lighting?: string
+  blocking?: string
+  camera_pov?: string
+  prop_placement?: string
+  framing?: string
+  avoid?: string
+  video_motion?: string
+  camera_motion?: string
+  camera_preset?: string
+  motion_strength?: string
+  transition?: string
+}
+
+interface RawShotPromptsResponse {
+  shots?: RawShotPromptItem[]
+}
+
+function buildWardrobeLine(
+  clip: Clip,
+  chars: ReturnType<typeof charactersOf>,
+  derivs: ReturnType<typeof derivativesOf>
+): string {
+  const wardrobeParts: string[] = []
+  const charIds = clip.characterIds || []
+  const costumeIds = clip.costumeIds || {}
+  for (const cid of charIds) {
+    const ch = chars.find((c) => c.id === cid)
+    if (!ch) continue
+    const did = costumeIds[cid]
+    const deriv = did ? derivs.find((d) => d.id === did) : null
+    if (deriv) {
+      const kp = deriv.costumeKeyphrase ? `, key elements: ${deriv.costumeKeyphrase}` : ''
+      wardrobeParts.push(`${ch.name} - custom: ${deriv.name} (${deriv.promptChange || 'modified outfit'}${kp})`)
+    } else {
+      const defOutfit = ch.profile?.visual?.defaultOutfit?.trim()
+      wardrobeParts.push(
+        defOutfit
+          ? `${ch.name} - default outfit (${defOutfit}) matching character sheet`
+          : `${ch.name} - default appearance as on character sheet`
+      )
+    }
+  }
+  return wardrobeParts.length ? `Wardrobe: ${wardrobeParts.join('; ')}` : ''
+}
+
+function inferCameraPresetFromMotion(motionText: string | undefined, framing: string | undefined): {
+  cameraPreset: CameraPresetId
+  motionStrength: MotionStrength
+} {
+  const m = `${motionText || ''} ${framing || ''}`.toLowerCase()
+  if (/shake|handheld|impact|slap|shock|trembl|jolt/.test(m)) return { cameraPreset: 'shake', motionStrength: 'kuat' }
+  if (/pan\s*left|track\s*left|slide\s*left/.test(m)) return { cameraPreset: 'panleft', motionStrength: 'sedang' }
+  if (/pan\s*right|track\s*right|slide\s*right/.test(m)) return { cameraPreset: 'panright', motionStrength: 'sedang' }
+  if (/pull\s*back|dolly\s*out|zoom\s*out|reveal|wide|establishing/.test(m)) return { cameraPreset: 'zoomout', motionStrength: 'halus' }
+  if (/static|locked|still|hold/.test(m)) return { cameraPreset: 'static', motionStrength: 'halus' }
+  if (/dramatic|whip|fast|intense|twist|push\s*in/.test(m)) return { cameraPreset: 'zoomin', motionStrength: 'kuat' }
+  return { cameraPreset: 'zoomin', motionStrength: 'sedang' }
+}
+
+function buildFallbackShotPrompt(
+  clip: Clip,
+  prevClip: Clip | null,
+  orientation: string,
+  chars: ReturnType<typeof charactersOf>,
+  derivs: ReturnType<typeof derivativesOf>,
+  locs: ReturnType<typeof locationsOf>,
+  prs: ReturnType<typeof propsOf>
+): {
+  visualPrompt: string
+  videoPrompt: string
+  cameraPreset: CameraPresetId
+  motionStrength: MotionStrength
+  transition: TransitionId
+} {
+  const loc = clip.locationId ? locs.find((l) => l.id === clip.locationId) : null
+  const settingLine = loc ? `Setting: ${formatLocationDetails(loc)}` : ''
+
+  const visibleNames = (clip.characterIds || [])
+    .map((id) => chars.find((c) => c.id === id)?.name)
+    .filter((n): n is string => Boolean(n))
+  const clipProps = (clip.propIds || [])
+    .map((id) => prs.find((p) => p.id === id))
+    .filter((p): p is NonNullable<typeof p> => Boolean(p))
+
+  const baseAction = clip.story.trim() || clip.narration.trim() || 'Character in dramatic confrontation'
+  const emotionDesc = clip.emotion?.trim() ? `, expression: ${clip.emotion.trim()}` : ''
+  const blockingDesc = clip.shotDetail?.blocking?.trim() ? `. Staging: ${clip.shotDetail.blocking.trim()}` : ''
+  const propCue = clipProps.length ? `. Visible props: ${clipProps.map(formatPropDetails).join('; ')}` : ''
+  const nameLead =
+    visibleNames.length && !visibleNames.some((n) => baseAction.toLowerCase().includes(n.toLowerCase()))
+      ? `${visibleNames.join(' and ')} — `
+      : ''
+  const actionLine = `Action: ${nameLead}${baseAction}${emotionDesc}${blockingDesc}${propCue}`
+
+  const wardrobeLine = buildWardrobeLine(clip, chars, derivs)
+  const lightingCue = clip.shotDetail?.lighting?.trim() || 'motivated dramatic lighting'
+  const framingLine = `Framing: ${orientation} shot, ${clip.framing || 'medium close-up'}, ${lightingCue}`
+  const avoidLine = `Avoid: swapped character faces, wrong outfit colors, deformed eyes, bad hands, split-screen grid, white studio sheet backdrop, on-screen text, subtitles, watermark`
+
+  const camMotion = clip.shotDetail?.cameraMotion?.trim() || 'smooth subtle cinematic camera push-in'
+  const reaction = clip.shotDetail?.nonSpeakingReaction?.trim() ? ` Listener reaction: ${clip.shotDetail.nonSpeakingReaction.trim()}.` : ''
+  const videoPrompt = `${baseAction.replace(/\.$/, '')}. Natural micro-expressions and lifelike posture.${reaction} Camera: ${camMotion}.`
+
+  const { cameraPreset, motionStrength } = inferCameraPresetFromMotion(clip.shotDetail?.cameraMotion, clip.framing)
+  const locationChanged = prevClip && prevClip.locationId !== clip.locationId
+  const transition: TransitionId = locationChanged ? 'fade' : 'cut'
+
+  return {
+    visualPrompt: [settingLine, actionLine, wardrobeLine, framingLine, avoidLine].filter(Boolean).join('\n'),
+    videoPrompt,
+    cameraPreset,
+    motionStrength,
+    transition
+  }
+}
+
+export async function writePrompts(
+  projectId: string,
+  episodeId: string,
+  clipIds?: string[],
+  options: WritePromptsOptions = {}
+): Promise<ProjectBundle> {
   const clips = clipsOf(projectId, episodeId)
-  const targets = clips.filter((c) => (clipIds ? clipIds.includes(c.id) : needsVisual(c) || !c.videoPrompt.trim()))
+  const forceOverwrite = Boolean(clipIds?.length || options.force)
+  const targets = clips.filter((c) => (clipIds ? clipIds.includes(c.id) : options.force ? true : needsVisual(c) || !c.videoPrompt.trim()))
   if (!targets.length) return getBundle(projectId, episodeId)
 
   const project = getProject(projectId)
+  const episode = getEpisode(episodeId)
   const chars = charactersOf(projectId)
   const locs = locationsOf(projectId)
+  const prs = propsOf(projectId)
   const derivs = derivativesOf(projectId)
+  const { style, prompt: effectiveStylePrompt, isRestrictedPalette } = resolveStylePrompt(project)
   const orientation = project.aspectRatio === '9:16' ? 'vertical 9:16' : `horizontal ${project.aspectRatio}`
 
-  for (const clip of targets) {
-    const loc = clip.locationId ? locs.find((l) => l.id === clip.locationId) : null
-    // Without a registered location the action carries the setting; a made-up default would fight the story.
-    const settingLine = loc ? `Setting: ${loc.name}${loc.description ? `, ${loc.description}` : ''}` : ''
+  const clipIndexMap = new Map(clips.map((c, idx) => [c.id, idx]))
+  const aiByClipId = new Map<string, RawShotPromptItem>()
 
-    const actionDesc = clip.story.trim() || clip.narration.trim() || 'Character facing camera'
-    const emotionDesc = clip.emotion ? `, intense expression of ${clip.emotion}` : ''
-    const actionLine = `Action: ${actionDesc}${emotionDesc}`
+  if (options.useAi !== false) {
+    const visualTpl = project.promptTemplates?.visual_prompt?.trim()
+    const videoTpl = project.promptTemplates?.video_prompt?.trim()
+    const mediumRule =
+      style.category === 'animation'
+        ? `7. STYLE-AUTHENTIC MEDIUM (${style.name}): Match the chosen animation/illustration/stop-motion medium authentically (line art, brushwork, cel shading, 3D CG shaders, or tactile wool/clay craft as defined by Target Visual Style). Do NOT force photorealistic DSLR lens jargon or real-human photographic skin-pore cues onto 2D anime, ink, or stop-motion styles.${isRestrictedPalette ? ' Respect the style\'s monochrome or strict restricted palette.' : ''}`
+        : style.category === 'custom'
+          ? '7. CUSTOM VISUAL STYLE: Follow the creator\'s Series visual guidelines and target art style verbatim for rendering medium, textures, and lighting.'
+          : `7. LIVE-ACTION CINEMATOGRAPHY (${style.name}): Use grounded cinema framing, motivated natural/practical lighting, and realistic blocking matching Target Visual Style.${isRestrictedPalette ? ' Respect the style\'s black-and-white / restricted palette.' : ''}`
+    const system = [
+      'You are an elite Visual Director and Cinematographer for vertical short drama series across all visual mediums (live-action, 2D anime, webtoon, 3D CG, ink art, and stop-motion).',
+      'Your mission: transform Indonesian storyboard shots into razor-sharp, vivid, cohesive ENGLISH image & video prompts optimized for multimodal reference-based image generation and AI video.',
+      'CRITICAL CONSISTENCY RULES:',
+      '1. STRICT LOREBOOK FIDELITY & COSTUME LOCK: Every shot MUST respect the exact registered Lorebook characters (name verbatim, age, face, hair, build), exact outfits (whether cultural wear like batik/kebaya/hanfu, armor, uniforms, streetwear, or formal attire — NEVER invent or substitute generic default clothing unless explicitly listed in that character\'s Lorebook!), location architecture/lighting, and prop appearance. When mentioning clothes in "action", echo the exact Lorebook garment/pattern or leave attire to the Lorebook Wardrobe block.',
+      '2. SPATIAL CLARITY & SPEAKER PROMINENCE: Whenever 2+ characters appear, explicitly specify left/right/foreground/background positions in both "action" and "blocking" so the image model NEVER swaps faces or blends costumes. Whenever a shot has a speaking character (on-screen dialogue), frame the SPEAKER prominently in foreground or center-midground (never tiny or obscured at the far end of a long table) so their facial expression, lip-sync, and exact outfit read clearly.',
+      '3. 180-DEGREE SET GEOGRAPHY & FIXED PROP PERMANENCE: For consecutive shots in the SAME location, lock ONE consistent 3D room/set map (which wall has windows/doors, furniture/landmark shape & material, light direction, who sits/stands screen-left vs screen-right, and exact physical spot of every prop). Vary "camera_pov" dynamically across cuts (e.g. Wide Establishing -> Over-the-Shoulder (OTS) past Character A\'s shoulder onto B -> Reverse OTS onto A -> Medium Close-Up on Speaker -> Insert Close-Up on Prop) WITHOUT moving or teleporting background furniture, windows, or props! Record exact prop & landmark positions in "prop_placement".',
+      '4. CINEMATIC 9:16 VERTICAL COMPOSITION & EPISODE COHESION: Make every frame visually striking with foreground depth elements (doorframes, blurred shoulders, table edges), dynamic angles, expressive body language, and consistent set materials, light direction, and mood across same-location shots.',
+      '5. SINGLE-TAKE VIDEO MOTION: Write concrete English "video_motion" for Veo 3.1 / Omni 1.2 Flash: natural acting gestures, eye movement, prop interaction, subtle ambient motion, and ONE smooth camera move. For on-screen dialogue shots, keep framing steady for clean lip-sync. Never mention background music or scene cuts.',
+      '6. PURE ENGLISH OUTPUT: Write every output field in crisp, concrete cinematic English (never Indonesian), except keeping exact character/location/prop proper names verbatim.',
+      mediumRule,
+      visualTpl ? `Creator visual prompt note: ${visualTpl}` : '',
+      videoTpl ? `Creator video prompt note: ${videoTpl}` : '',
+      project.seriesGuidelines ? `Series visual guidelines:\n${project.seriesGuidelines}` : ''
+    ].filter(Boolean).join('\n')
 
-    const wardrobeParts: string[] = []
-    const charIds = clip.characterIds || []
-    const costumeIds = clip.costumeIds || {}
-    for (const cid of charIds) {
-      const ch = chars.find((c) => c.id === cid)
-      if (!ch) continue
-      const did = costumeIds[cid]
-      const deriv = did ? derivs.find((d) => d.id === did) : null
-      if (deriv) {
-        wardrobeParts.push(`${ch.name} - custom: ${deriv.name} (${deriv.promptChange || 'formal clothes'})`)
-      } else {
-        wardrobeParts.push(`${ch.name} - default appearance as on character sheet`)
+    const charBible = chars.length
+      ? chars.map((c) => {
+          const variants = derivs
+            .filter((d) => d.characterId === c.id)
+            .map((d) => `${d.name}: ${d.promptChange}${d.costumeKeyphrase ? ` [KEY: ${d.costumeKeyphrase}]` : ''}`)
+            .join(' | ')
+          return `- ${c.name}: ${formatCharacterTraits(c, true)}${variants ? ` || Costumes: ${variants}` : ''}`
+        }).join('\n')
+      : '(none)'
+
+    const locBible = locs.length
+      ? locs.map((l) => `- ${l.name}: ${formatLocationDetails(l)}`).join('\n')
+      : '(none)'
+
+    const propBible = prs.length
+      ? prs.map((p) => `- ${formatPropDetails(p)}`).join('\n')
+      : '(none)'
+
+    const BATCH_SIZE = 12
+    const batches: Clip[][] = []
+    for (let i = 0; i < targets.length; i += BATCH_SIZE) {
+      batches.push(targets.slice(i, i + BATCH_SIZE))
+    }
+
+    for (let bi = 0; bi < batches.length; bi++) {
+      const batch = batches[bi]
+      const batchNumbers = batch.map((c) => (clipIndexMap.get(c.id) ?? 0) + 1)
+      emit.storyProgress({
+        projectId,
+        message:
+          batches.length > 1
+            ? `Mengoptimasi prompt visual & video AI (bagian ${bi + 1}/${batches.length})…`
+            : `Mengoptimasi ${batch.length} prompt visual & video dengan AI Director…`
+      })
+
+      // Include immediate neighbors so lighting and blocking flow seamlessly across cuts.
+      const contextNums = new Set<number>()
+      for (const n of batchNumbers) {
+        contextNums.add(n)
+        if (n > 1) contextNums.add(n - 1)
+        if (n < clips.length) contextNums.add(n + 1)
+      }
+
+      const shotDescriptions = [...contextNums]
+        .sort((a, b) => a - b)
+        .map((n) => {
+          const c = clips[n - 1]
+          const loc = c.locationId ? locs.find((l) => l.id === c.locationId) : null
+          const visibleChars = (c.characterIds || [])
+            .map((cid) => {
+              const ch = chars.find((x) => x.id === cid)
+              if (!ch) return null
+              const did = c.costumeIds?.[cid]
+              const d = did ? derivs.find((x) => x.id === did) : null
+              return d ? `${ch.name} (wearing "${d.name}")` : `${ch.name} (default outfit)`
+            })
+            .filter(Boolean)
+          const visibleProps = (c.propIds || [])
+            .map((pid) => prs.find((p) => p.id === pid)?.name)
+            .filter(Boolean)
+          const speaker = c.speakerId ? chars.find((x) => x.id === c.speakerId)?.name : null
+          const dType = c.shotDetail?.dialogueType ?? (c.speakerId ? 'dialogue' : 'narration')
+          const isTarget = batchNumbers.includes(n)
+          return [
+            `Shot ${n}${isTarget ? ' [GENERATE]' : ' [CONTEXT ONLY]'}: ${c.title}`,
+            `- Location: ${loc ? loc.name : '(unspecified)'}`,
+            `- Visible Characters: ${visibleChars.length ? visibleChars.join(', ') : '(none)'}`,
+            `- Props: ${visibleProps.length ? visibleProps.join(', ') : '(none)'}`,
+            `- Dialogue (${dType}${speaker ? `, speaker: ${speaker}` : ''}): ${c.narration.trim() || '(silent)'}`,
+            `- Indonesian Visual Action: ${c.story.trim() || '(none)'}`,
+            `- Emotion: ${c.emotion.trim() || '(natural)'}`,
+            `- Requested Framing: ${c.framing.trim() || 'medium close-up'}`,
+            c.shotDetail?.cameraPov ? `- Requested Camera POV: ${c.shotDetail.cameraPov}` : '',
+            c.shotDetail?.lighting ? `- Director Lighting Note: ${c.shotDetail.lighting}` : '',
+            c.shotDetail?.blocking ? `- Director Blocking Note: ${c.shotDetail.blocking}` : '',
+            c.shotDetail?.propPlacement ? `- Fixed Prop Placement Note: ${c.shotDetail.propPlacement}` : '',
+            c.shotDetail?.cameraMotion ? `- Director Camera Note: ${c.shotDetail.cameraMotion}` : '',
+            c.shotDetail?.nonSpeakingReaction ? `- Non-Speaking Reaction: ${c.shotDetail.nonSpeakingReaction}` : '',
+            c.shotDetail?.speechDelivery ? `- Speech Delivery: ${c.shotDetail.speechDelivery}` : ''
+          ].filter(Boolean).join('\n')
+        })
+        .join('\n\n')
+
+      const prompt = [
+        `Series: ${project.title || '(untitled)'} | Episode ${episode?.episodeNum ?? 1}: ${episode?.title ?? ''}`,
+        `Format: ${orientation} (${project.aspectRatio})`,
+        `Target Visual Style: ${style.name} (${style.category}) — ${effectiveStylePrompt}`,
+        `--- LOREBOOK VISUAL BIBLE ---\nCharacters:\n${charBible}\n\nLocations:\n${locBible}\n\nProps:\n${propBible}`,
+        `--- EPISODE SHOTS ---\n${shotDescriptions}`,
+        `Write cinematic English prompts ONLY for shots marked [GENERATE]: ${batchNumbers.join(', ')}.`,
+        `Allowed camera_preset: ${CAMERA_IDS.join(', ')}. Allowed motion_strength: ${STRENGTH_IDS.join(', ')}. Allowed transition: ${TRANSITION_IDS.join(', ')}.`
+      ].join('\n\n')
+
+      try {
+        const res = await generateJson<RawShotPromptsResponse>({
+          system,
+          prompt,
+          schema: SHOT_PROMPTS_SCHEMA,
+          name: `shot_prompts_${episodeId}_${bi + 1}`
+        })
+        for (const item of res.shots ?? []) {
+          const num = Number(item.shot_number)
+          if (!Number.isInteger(num) || !batchNumbers.includes(num)) continue
+          const targetClip = clips[num - 1]
+          if (targetClip && (str(item.action) || str(item.video_motion))) {
+            aiByClipId.set(targetClip.id, item)
+          }
+        }
+      } catch (err) {
+        if (options.requireAi) {
+          throw err
+        }
+        console.warn('[story] AI writePrompts unavailable, falling back to structured local prompts:', err instanceof Error ? err.message : String(err))
+        break
       }
     }
-    const wardrobeLine = wardrobeParts.length ? `Wardrobe: ${wardrobeParts.join('; ')}` : ''
+  }
 
-    const framingLine = `Framing: ${orientation} shot, ${clip.framing || 'medium close-up'}, shallow depth of field, cinematic lighting`
-    const avoidLine = `Avoid: deformed eyes, bad hands, blurry faces, on-screen text, subtitles, watermark`
+  for (const clip of targets) {
+    const idx = clipIndexMap.get(clip.id) ?? 0
+    const prevClip = idx > 0 ? clips[idx - 1] : null
+    const ai = aiByClipId.get(clip.id)
+    const fallback = buildFallbackShotPrompt(clip, prevClip, orientation, chars, derivs, locs, prs)
 
-    const visualPrompt = [settingLine, actionLine, wardrobeLine, framingLine, avoidLine].filter(Boolean).join('\n')
-    const videoPrompt = `Subtle micro-expressions, ${clip.story || 'looking with tension'}, subtle camera push-in, cinematic short drama lighting`
+    let visualPrompt = fallback.visualPrompt
+    let videoPrompt = fallback.videoPrompt
+    let cameraPreset = fallback.cameraPreset
+    let motionStrength = fallback.motionStrength
+    let transition = fallback.transition
+    let nextFraming = clip.framing
+    let nextShotDetail = clip.shotDetail
 
-    // Without an explicit list only empty prompts (or ones whose scene text changed since) are written,
-    // so prompts the creator edited stay theirs.
+    if (ai) {
+      const loc = clip.locationId ? locs.find((l) => l.id === clip.locationId) : null
+      const settingLine = loc ? `Setting: ${formatLocationDetails(loc)}` : ''
+      const visibleNames = (clip.characterIds || [])
+        .map((id) => chars.find((c) => c.id === id)?.name)
+        .filter((n): n is string => Boolean(n))
+
+      let actionText = str(ai.action)
+      if (actionText && visibleNames.length && !visibleNames.some((n) => actionText.toLowerCase().includes(n.toLowerCase()))) {
+        actionText = `${visibleNames.join(' and ')}: ${actionText}`
+      }
+      const actionLine = actionText ? `Action: ${actionText}` : ''
+      const wardrobeLine = buildWardrobeLine(clip, chars, derivs)
+      const aiFraming = str(ai.framing) || clip.framing || 'medium close-up'
+      const aiLighting = str(ai.lighting)
+      const aiBlocking = str(ai.blocking)
+      const aiCameraPov = str(ai.camera_pov)
+      const aiPropPlacement = str(ai.prop_placement)
+      const aiCamMotion = str(ai.camera_motion)
+      const framingLine = `Framing: ${orientation} shot, ${aiFraming}${aiLighting ? `, ${aiLighting}` : ''}`
+      const avoidLine = `Avoid: ${str(ai.avoid) || 'swapped character faces, wrong costume/outfit, teleported props, shifted background furniture, deformed hands, split-screen turnaround grid, plain studio background, on-screen text, subtitles, watermark'}`
+
+      visualPrompt = [settingLine, actionLine, wardrobeLine, framingLine, avoidLine].filter(Boolean).join('\n')
+      videoPrompt = str(ai.video_motion) || fallback.videoPrompt
+
+      const cam = str(ai.camera_preset) as CameraPresetId
+      const strength = str(ai.motion_strength) as MotionStrength
+      const trans = str(ai.transition) as TransitionId
+      cameraPreset = CAMERA_IDS.includes(cam) ? cam : fallback.cameraPreset
+      motionStrength = STRENGTH_IDS.includes(strength) ? strength : fallback.motionStrength
+      transition = TRANSITION_IDS.includes(trans) ? trans : fallback.transition
+      if (aiFraming) nextFraming = aiFraming
+      nextShotDetail = {
+        ...(clip.shotDetail ?? {}),
+        ...(aiLighting ? { lighting: aiLighting } : {}),
+        ...(aiBlocking ? { blocking: aiBlocking } : {}),
+        ...(!clip.shotDetail?.cameraPov && aiCameraPov ? { cameraPov: aiCameraPov } : {}),
+        ...(aiPropPlacement ? { propPlacement: aiPropPlacement } : {}),
+        ...(aiCamMotion ? { cameraMotion: aiCamMotion } : {})
+      }
+    }
+
+    // Without an explicit list or force flag, only empty prompts (or ones whose scene text changed since)
+    // are written, so prompts the creator edited stay theirs.
     const patch: Partial<Clip> = {}
-    if (clipIds || needsVisual(clip)) Object.assign(patch, { visualPrompt, visualSource: visualSourceOf(clip) })
-    if (clipIds || !clip.videoPrompt.trim()) patch.videoPrompt = videoPrompt
-    patchClip(clip.id, patch)
+    if (forceOverwrite || needsVisual(clip)) {
+      Object.assign(patch, {
+        visualPrompt,
+        visualSource: visualSourceOf(clip),
+        framing: nextFraming,
+        shotDetail: nextShotDetail,
+        cameraPreset,
+        motionStrength,
+        transition
+      })
+    }
+    if (forceOverwrite || !clip.videoPrompt.trim()) {
+      patch.videoPrompt = videoPrompt
+    }
+    if (Object.keys(patch).length > 0) {
+      patchClip(clip.id, patch)
+    }
   }
 
   return getBundle(projectId, episodeId)
@@ -1291,34 +1783,37 @@ const LOREBOOK_EXTRACTION_SCHEMA = {
         properties: {
           name: { type: 'string', description: 'Character full name in the story' },
           description: { type: 'string', description: 'Comprehensive visual appearance in 1-2 Indonesian sentences' },
-          voiceStyle: { type: 'string', description: 'Speaking tone / vocal style in Indonesian (e.g. tegas, sinis, dingin)' },
-          aliases: { type: 'array', items: { type: 'string' }, description: 'Aliases, nicknames, or title forms' },
+          voiceStyle: { type: 'string', description: 'Speaking tone / vocal style in Indonesian (e.g. tegas, sinis, dingin), or "" if unknown' },
+          aliases: { type: 'array', items: { type: 'string' }, description: 'Aliases, nicknames, or title forms (empty array if none)' },
           visual: {
             type: 'object',
             additionalProperties: false,
             properties: {
-              age: { type: 'string', description: 'Age range, e.g. "25-30 tahun"' },
-              gender: { type: 'string', description: 'Pria / Wanita' },
-              bodyType: { type: 'string', description: 'Body build and posture' },
-              facialFeatures: { type: 'string', description: 'Distinct face features' },
-              hair: { type: 'string', description: 'Hair length, color, styling' },
-              distinctiveFeatures: { type: 'string', description: 'Unique identifiers (scars, mole, glasses)' },
-              defaultOutfit: { type: 'string', description: 'Everyday signature wardrobe' }
-            }
+              age: { type: 'string', description: 'Age range, e.g. "25-30 tahun", or ""' },
+              gender: { type: 'string', description: 'Pria / Wanita, or ""' },
+              bodyType: { type: 'string', description: 'Body build and posture, or ""' },
+              facialFeatures: { type: 'string', description: 'Distinct face features, or ""' },
+              hair: { type: 'string', description: 'Hair length, color, parting, texture, styling, or ""' },
+              distinctiveFeatures: { type: 'string', description: 'Unique physical identifiers (skin tone, scars, mole, beard/mustache, smile lines), or ""' },
+              accessories: { type: 'string', description: 'Recurring accessories (eyewear frame shape, wristwatch, earrings, rings, bag), or ""' },
+              defaultOutfit: { type: 'string', description: 'Exact signature wardrobe: garment cut, fabric/pattern (e.g. exact batik motif & colors, sleeve length, collar, trousers/skirt, footwear — explicitly note "tanpa jas/blazer" if no jacket), or ""' }
+            },
+            required: ['age', 'gender', 'bodyType', 'facialFeatures', 'hair', 'distinctiveFeatures', 'accessories', 'defaultOutfit']
           },
           narrative: {
             type: 'object',
             additionalProperties: false,
             properties: {
-              role: { type: 'string', description: 'Role in story (protagonis, antagonis, pendukung)' },
-              desire: { type: 'string', description: 'Main motivation or desire' },
-              secret: { type: 'string', description: 'Hidden secret or vulnerability' },
-              arc: { type: 'string', description: 'Character trajectory or transformation' },
-              speechPattern: { type: 'string', description: 'Speech mannerism or habits' }
-            }
+              role: { type: 'string', description: 'Role in story (protagonis, antagonis, pendukung), or ""' },
+              desire: { type: 'string', description: 'Main motivation or desire, or ""' },
+              secret: { type: 'string', description: 'Hidden secret or vulnerability, or ""' },
+              arc: { type: 'string', description: 'Character trajectory or transformation, or ""' },
+              speechPattern: { type: 'string', description: 'Speech mannerism or habits, or ""' }
+            },
+            required: ['role', 'desire', 'secret', 'arc', 'speechPattern']
           }
         },
-        required: ['name', 'description']
+        required: ['name', 'description', 'voiceStyle', 'aliases', 'visual', 'narrative']
       }
     },
     derivatives: {
@@ -1343,19 +1838,22 @@ const LOREBOOK_EXTRACTION_SCHEMA = {
         properties: {
           name: { type: 'string', description: 'Location name' },
           description: { type: 'string', description: 'Visual atmosphere and scenic details' },
-          aliases: { type: 'array', items: { type: 'string' } },
+          aliases: { type: 'array', items: { type: 'string' }, description: 'Aliases or alternate names (empty array if none)' },
           profile: {
             type: 'object',
             additionalProperties: false,
             properties: {
-              interiorExterior: { type: 'string', description: 'Interior / Eksterior' },
-              timeOfDayLighting: { type: 'string', description: 'Lighting ambiance' },
-              architecturalStyle: { type: 'string', description: 'Design/architectural aesthetic' },
-              keyFeatures: { type: 'string', description: 'Defining physical features' }
-            }
+              interiorExterior: { type: 'string', description: 'Interior / Eksterior, or ""' },
+              timeOfDayLighting: { type: 'string', description: 'Exact light sources, window light direction, color temperature & time of day, or ""' },
+              architecturalStyle: { type: 'string', description: 'Design/architectural aesthetic, wall & floor materials, or ""' },
+              spatialLayout: { type: 'string', description: '4-wall 3D room layout & fixed landmarks (left wall, right wall, center furniture, windows, doors) for multi-POV continuity, or ""' },
+              colorPalette: { type: 'string', description: 'Dominant wall, floor, and furniture color palette, or ""' },
+              keyFeatures: { type: 'string', description: 'Defining permanent physical features & fixed furniture, or ""' }
+            },
+            required: ['interiorExterior', 'timeOfDayLighting', 'architecturalStyle', 'spatialLayout', 'colorPalette', 'keyFeatures']
           }
         },
-        required: ['name', 'description']
+        required: ['name', 'description', 'aliases', 'profile']
       }
     },
     props: {
@@ -1364,31 +1862,50 @@ const LOREBOOK_EXTRACTION_SCHEMA = {
         type: 'object',
         additionalProperties: false,
         properties: {
-          name: { type: 'string', description: 'Prop name' },
-          description: { type: 'string', description: 'Physical appearance' },
-          aliases: { type: 'array', items: { type: 'string' } },
+          name: { type: 'string', description: 'Single distinct hero prop name (do NOT bundle two unrelated objects into one prop)' },
+          description: { type: 'string', description: 'Concrete physical appearance' },
+          aliases: { type: 'array', items: { type: 'string' }, description: 'Aliases or alternate names (empty array if none)' },
           profile: {
             type: 'object',
             additionalProperties: false,
             properties: {
-              category: { type: 'string', description: 'Category (dokumen, senjata, perhiasan, dll)' },
-              appearance: { type: 'string', description: 'Specific color, material, texture' },
-              significance: { type: 'string', description: 'Plot or emotional significance' }
-            }
+              category: { type: 'string', description: 'Category (dokumen, elektronik, senjata, perhiasan, dll), or ""' },
+              sizeScale: { type: 'string', description: 'Real-world size relative to human hand/body (e.g. "ukuran A4, 14 inci, seukuran telapak tangan"), or ""' },
+              shape: { type: 'string', description: 'Exact silhouette and proportions, or ""' },
+              material: { type: 'string', description: 'Surface material & finish (kulit matte, plastik glossy, logam perak, kertas kaku), or ""' },
+              appearance: { type: 'string', description: 'Exact colors, texture, and state (open/closed, neat/worn), or ""' },
+              distinctiveDetails: { type: 'string', description: 'Unique markings, clasps, stickers, engravings, or wear, or ""' },
+              significance: { type: 'string', description: 'Plot or emotional significance, or ""' }
+            },
+            required: ['category', 'sizeScale', 'shape', 'material', 'appearance', 'distinctiveDetails', 'significance']
           }
         },
-        required: ['name', 'description']
+        required: ['name', 'description', 'aliases', 'profile']
       }
     }
   },
   required: ['characters', 'derivatives', 'locations', 'props']
 }
 
+interface LorebookExtractRun {
+  ctrl: AbortController
+  reason: 'cancel' | 'superseded' | null
+}
+
+const lorebookExtractControllers = new Map<string, LorebookExtractRun>()
+
+const countLorebookEntities = (r: LorebookExtractionResult): number =>
+  r.characters.length + r.derivatives.length + r.locations.length + r.props.length
+
 export async function extractLorebookFromStory(projectId: string): Promise<LorebookExtractionResult> {
   const p = getProject(projectId)
   const episodes = listEpisodes(projectId)
   const epSummaries = episodes
     .map((e) => {
+      const epClips = !e.scriptDraft?.shots?.length ? clipsOf(projectId, e.id) : []
+      const clipLines = epClips
+        .map((c) => [c.story?.trim(), c.narration?.trim(), c.visualPrompt?.trim()].filter(Boolean).join(' — '))
+        .filter(Boolean)
       const parts = [
         `Ep ${e.episodeNum} (${e.title}):`,
         e.hook ? `Hook: ${e.hook}` : '',
@@ -1409,14 +1926,18 @@ export async function extractLorebookFromStory(projectId: string): Promise<Loreb
                   .join(' ')
               )
               .join(' | ')}`
-          : ''
+          : clipLines.length
+            ? `Clips: ${clipLines.join(' | ')}`
+            : ''
       ].filter(Boolean)
       return parts.length > 1 ? parts.join('\n') : ''
     })
     .filter(Boolean)
     .join('\n\n')
 
-  const source = p.sourceText.trim() || p.synopsis.trim() || epSummaries
+  const sourceText = p.sourceText.trim()
+  const synopsisText = p.synopsis.trim()
+  const source = sourceText || synopsisText || epSummaries
   if (!source) throw new Error('Tidak ada teks cerita, sinopsis, atau ringkasan episode untuk diekstrak ke Lorebook.')
 
   emit.storyProgress({ projectId, message: 'Menganalisis cerita untuk mengekstrak Lorebook & profil karakter...' })
@@ -1425,8 +1946,13 @@ export async function extractLorebookFromStory(projectId: string): Promise<Loreb
     p.promptTemplates?.lorebook_extract ||
       'You are an expert story analyst and visual director specializing in worldbuilding bibles for vertical drama series.',
     'Extract ALL characters mentioned or implied in the story, synopsis, or episode plans (protagonists, antagonists, supporting characters — even if mentioned only briefly), their notable costume variants with anchor keyphrases, key locations/settings, and important props.',
+    'CONCRETE VISUAL PRECISION (CRITICAL FOR AI IMAGE CONSISTENCY): Never write vague adjectives like "tampan", "cantik", "berwibawa", "pakai batik", or "mewah" alone. Always specify observable, camera-ready traits:',
+    '- Characters: exact age number, skin tone, face shape, eye shape, eyebrow/jawline, exact hair length/color/parting, height/build, one memorable distinguishing mark, recurring accessories (glasses frame, watch, jewelry), and HYPER-SPECIFIC default outfit (exact garment cut, fabric type, exact motif/pattern e.g. "kemeja batik lengan panjang motif parang cokelat soga & emas, kerah kancing, tanpa jas/blazer", trousers/skirt color, footwear).',
+    '- Costume variants: concrete garment silhouette, fabric/motif, exact color palette, makeup/hair change, plus a crisp 4–8 word anchor keyphrase (e.g. "gaun sutra merah marun bahu terbuka, anting mutiara") that locks wardrobe consistency.',
+    '- Locations: interior/exterior, architectural style, dominant colorPalette, wall & floor materials, 4-wall spatialLayout (what sits on left wall, right wall, center furniture, windows/doors so every POV angle stays consistent), exact light sources & color temperature, and permanent keyFeatures.',
+    '- Props: SEPARATE distinct hero objects into individual props (never merge "Laptop & Map" into 1 prop if characters interact with them separately). Always specify sizeScale (relative to a human hand/table), exact shape, material finish (matte/glossy/metal/paper), exact colors, distinctiveDetails (clasps, stickers, papers sticking out, scratches), and condition.',
     'If the text is a short synopsis or episode outline, still extract every person, place, and key object present and infer concrete, cohesive Indonesian visual details for each.',
-    'Anchor keyphrases for costume variants must be concise, distinctive phrases (e.g. "gaun merah sutra belahan paha", "jas wol hitam bergaris emas") that prevent AI image/video models from drifting from key wardrobe details.',
+    'Return ONE JSON object with exact top-level keys "characters", "derivatives", "locations", and "props" (each an array). Use "" for unknown string subfields and [] for empty arrays — never omit an entity or return all four arrays empty when people, places, or objects appear in the story.',
     p.seriesGuidelines ? `Creator guidelines for this series:\n${p.seriesGuidelines}` : ''
   ].filter(Boolean).join('\n\n')
 
@@ -1435,57 +1961,102 @@ export async function extractLorebookFromStory(projectId: string): Promise<Loreb
   // appear late in a long novel are found too. Each part sees the names found so far, to reuse them, and the
   // results are merged by name and alias.
   const windows = planWindows(source, 0)
-  const ctrl = new AbortController()
-  lorebookExtractControllers.get(projectId)?.abort()
-  lorebookExtractControllers.set(projectId, ctrl)
+  const run: LorebookExtractRun = { ctrl: new AbortController(), reason: null }
+  const prevRun = lorebookExtractControllers.get(projectId)
+  if (prevRun) {
+    prevRun.reason = 'superseded'
+    prevRun.ctrl.abort()
+  }
+  lorebookExtractControllers.set(projectId, run)
+  let sawUnrecognizedShape = false
   try {
     for (const [wi, w] of windows.entries()) {
-      if (ctrl.signal.aborted) break
+      if (run.ctrl.signal.aborted) break
       const label = windows.length > 1 ? `bagian ${wi + 1} dari ${windows.length}` : 'cerita'
-      emit.storyProgress({ projectId, message: `Mengekstrak Lorebook dari ${label}...` })
+      const slice = source.slice(w.start, w.end)
       const known = [...merged.characters, ...merged.locations, ...merged.props].map((x) => x.name)
-      const prompt = [
-        `Series Title: ${p.title}`,
-        `Series Synopsis: ${p.synopsis}`,
-        epSummaries ? `Planned Episodes:\n${epSummaries}` : '',
+      const basePrompt = [
+        p.title ? `Series Title: ${p.title}` : '',
+        synopsisText && source !== synopsisText ? `Series Synopsis: ${synopsisText}` : '',
+        epSummaries && source !== epSummaries ? `Planned Episodes:\n${epSummaries}` : '',
         known.length ? `Already found in earlier parts (reuse these exact names when they appear again):\n${known.join(', ')}` : '',
-        `Source Story Content (${label}):\n"""\n${source.slice(w.start, w.end)}\n"""`
+        `Source Story Content (${label}):\n"""\n${slice}\n"""`
       ].filter(Boolean).join('\n\n')
 
-      let res: any
-      try {
-        res = await generateJson<any>({ system, prompt, schema: LOREBOOK_EXTRACTION_SCHEMA, name: 'lorebook_extraction', signal: ctrl.signal })
-      } catch (e) {
-        if (ctrl.signal.aborted) break
-        // Earlier parts are kept: the creator can still review them instead of losing the whole run.
-        if (merged.characters.length || merged.locations.length || merged.props.length) {
-          emit.storyProgress({
-            projectId,
-            message: `Gagal mengekstrak ${label}: ${e instanceof Error ? e.message : String(e)}. Hasil bagian sebelumnya tetap bisa ditinjau.`
+      const maxAttempts = slice.trim().length >= 20 ? 2 : 1
+      let parsedWindow: LorebookExtractionResult = { characters: [], derivatives: [], locations: [], props: [] }
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        if (run.ctrl.signal.aborted) break
+        emit.storyProgress({
+          projectId,
+          message:
+            attempt === 1
+              ? `Mengekstrak Lorebook dari ${label}...`
+              : `Mengulang ekstraksi ${label} karena belum ada entitas terdeteksi...`
+        })
+        const prompt =
+          attempt === 1
+            ? basePrompt
+            : `${basePrompt}\n\nIMPORTANT: Your previous response returned no entities. Re-read the story carefully and extract every person/character, setting/location, and key object/prop into the JSON keys "characters", "derivatives", "locations", and "props".`
+
+        let res: unknown
+        try {
+          res = await generateJson<unknown>({
+            system,
+            prompt,
+            schema: LOREBOOK_EXTRACTION_SCHEMA,
+            name: 'lorebook_extraction',
+            signal: run.ctrl.signal
           })
-          break
+        } catch (e) {
+          if (run.ctrl.signal.aborted) break
+          // Earlier parts are kept: the creator can still review them instead of losing the whole run.
+          if (countLorebookEntities(merged) > 0) {
+            emit.storyProgress({
+              projectId,
+              message: `Gagal mengekstrak ${label}: ${e instanceof Error ? e.message : String(e)}. Hasil bagian sebelumnya tetap bisa ditinjau.`
+            })
+            break
+          }
+          throw e
         }
-        throw e
+        const inspected = parseLorebookCandidatesWithMeta(res)
+        parsedWindow = inspected.result
+        if (countLorebookEntities(parsedWindow) > 0) break
+        if (!inspected.recognizedContainer) sawUnrecognizedShape = true
+        console.warn(
+          `[story] lorebook extraction returned 0 items (window ${wi + 1}/${windows.length}, attempt ${attempt}/${maxAttempts}); top-level keys:`,
+          res && typeof res === 'object' ? Object.keys(res as Record<string, unknown>) : typeof res
+        )
       }
-      mergeLorebookCandidates(merged, parseLorebookCandidates(res))
+      mergeLorebookCandidates(merged, parsedWindow)
     }
   } finally {
-    if (lorebookExtractControllers.get(projectId) === ctrl) lorebookExtractControllers.delete(projectId)
+    if (lorebookExtractControllers.get(projectId) === run) lorebookExtractControllers.delete(projectId)
   }
+
+  // Superseded runs must not resolve as "no entities found" and falsely pop a toast over the active run.
+  if (run.reason === 'superseded') throw new Error('Ekstraksi digantikan oleh permintaan baru.')
+  if (run.reason === 'cancel' && countLorebookEntities(merged) === 0) throw new Error('Ekstraksi dibatalkan.')
+  if (countLorebookEntities(merged) === 0 && sawUnrecognizedShape) {
+    throw new Error('Format balasan AI tidak sesuai untuk ekstraksi Lorebook. Coba ulangi atau pilih model LLM lain di Pengaturan.')
+  }
+
   emit.storyProgress({
     projectId,
-    message: ctrl.signal.aborted
+    message: run.ctrl.signal.aborted
       ? 'Ekstraksi dihentikan; hasil yang sudah ditemukan tetap bisa ditinjau.'
       : `Ekstraksi selesai: ${merged.characters.length} karakter, ${merged.derivatives.length} kostum, ${merged.locations.length} lokasi, dan ${merged.props.length} prop.`
   })
   return merged
 }
 
-const lorebookExtractControllers = new Map<string, AbortController>()
-
 /** Stops a running Lorebook extraction; what was found so far is still returned for review. */
 export function cancelLorebookExtraction(projectId: string): void {
-  lorebookExtractControllers.get(projectId)?.abort()
+  const run = lorebookExtractControllers.get(projectId)
+  if (!run) return
+  run.reason = 'cancel'
+  run.ctrl.abort()
 }
 
 const nameKey = (x: string): string => x.trim().toLowerCase()
@@ -1522,71 +2093,425 @@ export function mergeLorebookCandidates(into: LorebookExtractionResult, add: Lor
   }
 }
 
-function parseLorebookCandidates(res: any): LorebookExtractionResult {
-  const root = res?.lorebook && typeof res.lorebook === 'object' ? res.lorebook : res
-  const rawChars = Array.isArray(root?.characters) ? root.characters : []
-  const rawDerivs = Array.isArray(root?.derivatives) ? root.derivatives : []
-  const rawLocs = Array.isArray(root?.locations) ? root.locations : []
-  const rawProps = Array.isArray(root?.props) ? root.props : []
+const CHAR_ARRAY_KEYS = ['characters', 'karakter', 'tokoh', 'pemeran', 'cast', 'people']
+const DERIV_ARRAY_KEYS = ['derivatives', 'costumes', 'costume_variants', 'costumeVariants', 'variants', 'kostum', 'varian', 'outfits']
+const LOC_ARRAY_KEYS = ['locations', 'lokasi', 'places', 'settings', 'tempat']
+const PROP_ARRAY_KEYS = ['props', 'properti', 'objects', 'items', 'benda']
+const WRAPPER_KEYS = ['lorebook', 'lorebook_extraction', 'lorebookExtraction', 'result', 'data', 'entities', 'output']
 
-  const characters: CandidateCharacter[] = rawChars.map((c: any) => ({
-    tempId: randomUUID(),
-    name: str(c.name),
-    description: str(c.description),
-    voiceStyle: str(c.voiceStyle ?? c.voice_style) || undefined,
-    aliases: Array.isArray(c.aliases) ? c.aliases.map(str).filter(Boolean) : [],
-    profile: {
-      visual: {
-        age: str(c.visual?.age),
-        gender: str(c.visual?.gender),
-        bodyType: str(c.visual?.bodyType ?? c.visual?.body_type),
-        facialFeatures: str(c.visual?.facialFeatures ?? c.visual?.facial_features),
-        hair: str(c.visual?.hair),
-        distinctiveFeatures: str(c.visual?.distinctiveFeatures ?? c.visual?.distinctive_features),
-        defaultOutfit: str(c.visual?.defaultOutfit ?? c.visual?.default_outfit)
-      },
-      narrative: {
-        role: str(c.narrative?.role),
-        desire: str(c.narrative?.desire),
-        secret: str(c.narrative?.secret),
-        arc: str(c.narrative?.arc),
-        speechPattern: str(c.narrative?.speechPattern ?? c.narrative?.speech_pattern)
+function pickArray(obj: Record<string, unknown>, candidates: string[]): unknown[] | null {
+  const lowerMap = new Map<string, unknown>()
+  for (const [k, v] of Object.entries(obj)) lowerMap.set(k.toLowerCase(), v)
+  for (const key of candidates) {
+    const hit = lowerMap.get(key.toLowerCase())
+    if (Array.isArray(hit)) return hit
+  }
+  return null
+}
+
+function unwrapLorebookRoot(res: unknown): Record<string, unknown> | null {
+  if (!res || typeof res !== 'object' || Array.isArray(res)) return null
+  let cur = res as Record<string, unknown>
+  const hasAnyList = (o: Record<string, unknown>): boolean =>
+    Boolean(
+      pickArray(o, CHAR_ARRAY_KEYS) ||
+        pickArray(o, DERIV_ARRAY_KEYS) ||
+        pickArray(o, LOC_ARRAY_KEYS) ||
+        pickArray(o, PROP_ARRAY_KEYS)
+    )
+  if (hasAnyList(cur)) return cur
+  for (const wk of WRAPPER_KEYS) {
+    const nested = cur[wk]
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      const rec = nested as Record<string, unknown>
+      if (hasAnyList(rec)) return rec
+    }
+  }
+  // Single-key wrapper fallback (e.g. { worldbuilding: { characters: [...] } }).
+  const entries = Object.entries(cur)
+  if (entries.length === 1 && entries[0][1] && typeof entries[0][1] === 'object' && !Array.isArray(entries[0][1])) {
+    const rec = entries[0][1] as Record<string, unknown>
+    if (hasAnyList(rec)) return rec
+  }
+  return cur
+}
+
+function parseLorebookCandidatesWithMeta(res: unknown): { result: LorebookExtractionResult; recognizedContainer: boolean } {
+  const root = unwrapLorebookRoot(res)
+  if (!root) return { result: { characters: [], derivatives: [], locations: [], props: [] }, recognizedContainer: false }
+
+  const charArr = pickArray(root, CHAR_ARRAY_KEYS)
+  const derivArr = pickArray(root, DERIV_ARRAY_KEYS)
+  const locArr = pickArray(root, LOC_ARRAY_KEYS)
+  const propArr = pickArray(root, PROP_ARRAY_KEYS)
+  const recognizedContainer = Boolean(charArr || derivArr || locArr || propArr)
+
+  const rawChars = charArr ?? []
+  const rawDerivs = derivArr ?? []
+  const rawLocs = locArr ?? []
+  const rawProps = propArr ?? []
+
+  const entityName = (o: any): string => str(o?.name ?? o?.nama ?? o?.fullName ?? o?.full_name ?? o?.title)
+  const entityDesc = (o: any): string => str(o?.description ?? o?.deskripsi ?? o?.visualDescription ?? o?.visual_description ?? o?.summary)
+
+  const characters: CandidateCharacter[] = rawChars
+    .map((item: any): CandidateCharacter => {
+      const c = typeof item === 'string' ? { name: item } : (item ?? {})
+      const vis = c.visual ?? c.profile?.visual ?? {}
+      const nar = c.narrative ?? c.profile?.narrative ?? {}
+      return {
+        tempId: randomUUID(),
+        name: entityName(c),
+        description: entityDesc(c),
+        voiceStyle: str(c.voiceStyle ?? c.voice_style ?? c.gaya_suara),
+        aliases: Array.isArray(c.aliases) ? c.aliases.map(str).filter(Boolean) : [],
+        profile: {
+          visual: {
+            age: str(vis.age ?? vis.usia),
+            gender: str(vis.gender ?? vis.jenis_kelamin),
+            bodyType: str(vis.bodyType ?? vis.body_type),
+            facialFeatures: str(vis.facialFeatures ?? vis.facial_features),
+            hair: str(vis.hair ?? vis.rambut),
+            distinctiveFeatures: str(vis.distinctiveFeatures ?? vis.distinctive_features),
+            accessories: str(vis.accessories ?? vis.aksesoris),
+            defaultOutfit: str(vis.defaultOutfit ?? vis.default_outfit)
+          },
+          narrative: {
+            role: str(nar.role ?? nar.peran),
+            desire: str(nar.desire),
+            secret: str(nar.secret),
+            arc: str(nar.arc),
+            speechPattern: str(nar.speechPattern ?? nar.speech_pattern)
+          }
+        }
+      }
+    })
+    .filter((c) => Boolean(c.name))
+
+  const derivatives: CandidateDerivative[] = rawDerivs
+    .map((d: any): CandidateDerivative => ({
+      tempId: randomUUID(),
+      characterName: str(d?.characterName ?? d?.character_name ?? d?.character ?? d?.owner ?? d?.tokoh ?? d?.karakter),
+      name: entityName(d),
+      promptChange: str(d?.promptChange ?? d?.prompt_change ?? d?.description ?? d?.deskripsi),
+      costumeKeyphrase: str(d?.costumeKeyphrase ?? d?.costume_keyphrase ?? d?.keyphrase)
+    }))
+    .filter((d) => Boolean(d.name && d.characterName))
+
+  const locations: CandidateLocation[] = rawLocs
+    .map((item: any): CandidateLocation => {
+      const l = typeof item === 'string' ? { name: item } : (item ?? {})
+      const prof = l.profile ?? {}
+      return {
+        tempId: randomUUID(),
+        name: entityName(l),
+        description: entityDesc(l),
+        aliases: Array.isArray(l.aliases) ? l.aliases.map(str).filter(Boolean) : [],
+        profile: {
+          interiorExterior: str(prof.interiorExterior ?? prof.interior_exterior ?? l.interiorExterior ?? l.interior_exterior),
+          timeOfDayLighting: str(prof.timeOfDayLighting ?? prof.time_of_day_lighting ?? l.timeOfDayLighting ?? l.time_of_day_lighting),
+          architecturalStyle: str(prof.architecturalStyle ?? prof.architectural_style ?? l.architecturalStyle ?? l.architectural_style),
+          spatialLayout: str(prof.spatialLayout ?? prof.spatial_layout ?? l.spatialLayout ?? l.spatial_layout),
+          colorPalette: str(prof.colorPalette ?? prof.color_palette ?? l.colorPalette ?? l.color_palette),
+          keyFeatures: str(prof.keyFeatures ?? prof.key_features ?? l.keyFeatures ?? l.key_features)
+        }
+      }
+    })
+    .filter((l) => Boolean(l.name))
+
+  const props: CandidateProp[] = rawProps
+    .map((item: any): CandidateProp => {
+      const pr = typeof item === 'string' ? { name: item } : (item ?? {})
+      const prof = pr.profile ?? {}
+      return {
+        tempId: randomUUID(),
+        name: entityName(pr),
+        description: entityDesc(pr),
+        aliases: Array.isArray(pr.aliases) ? pr.aliases.map(str).filter(Boolean) : [],
+        profile: {
+          category: str(prof.category ?? prof.kategori ?? pr.category),
+          sizeScale: str(prof.sizeScale ?? prof.size_scale ?? pr.sizeScale ?? pr.size_scale),
+          shape: str(prof.shape ?? prof.bentuk ?? pr.shape),
+          material: str(prof.material ?? prof.bahan ?? pr.material),
+          appearance: str(prof.appearance ?? prof.tampilan ?? pr.appearance),
+          distinctiveDetails: str(prof.distinctiveDetails ?? prof.distinctive_details ?? pr.distinctiveDetails),
+          significance: str(prof.significance ?? prof.signifikansi ?? pr.significance)
+        }
+      }
+    })
+    .filter((pr) => Boolean(pr.name))
+
+  return { result: { characters, derivatives, locations, props }, recognizedContainer }
+}
+
+export function parseLorebookCandidates(res: unknown): LorebookExtractionResult {
+  return parseLorebookCandidatesWithMeta(res).result
+}
+
+const ENRICH_LOREBOOK_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    characters: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'string' },
+          description: { type: 'string' },
+          age: { type: 'string' },
+          gender: { type: 'string' },
+          bodyType: { type: 'string' },
+          facialFeatures: { type: 'string' },
+          hair: { type: 'string' },
+          distinctiveFeatures: { type: 'string' },
+          accessories: { type: 'string' },
+          defaultOutfit: { type: 'string' }
+        },
+        required: [
+          'id',
+          'description',
+          'age',
+          'gender',
+          'bodyType',
+          'facialFeatures',
+          'hair',
+          'distinctiveFeatures',
+          'accessories',
+          'defaultOutfit'
+        ]
+      }
+    },
+    locations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'string' },
+          description: { type: 'string' },
+          interiorExterior: { type: 'string' },
+          architecturalStyle: { type: 'string' },
+          spatialLayout: { type: 'string' },
+          colorPalette: { type: 'string' },
+          timeOfDayLighting: { type: 'string' },
+          atmosphere: { type: 'string' },
+          keyFeatures: { type: 'string' },
+          fixedDetails: { type: 'string' }
+        },
+        required: [
+          'id',
+          'description',
+          'interiorExterior',
+          'architecturalStyle',
+          'spatialLayout',
+          'colorPalette',
+          'timeOfDayLighting',
+          'atmosphere',
+          'keyFeatures',
+          'fixedDetails'
+        ]
+      }
+    },
+    props: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'string' },
+          description: { type: 'string' },
+          category: { type: 'string' },
+          sizeScale: { type: 'string' },
+          shape: { type: 'string' },
+          material: { type: 'string' },
+          appearance: { type: 'string' },
+          distinctiveDetails: { type: 'string' },
+          status: { type: 'string' }
+        },
+        required: [
+          'id',
+          'description',
+          'category',
+          'sizeScale',
+          'shape',
+          'material',
+          'appearance',
+          'distinctiveDetails',
+          'status'
+        ]
       }
     }
-  })).filter((c: CandidateCharacter) => Boolean(c.name))
+  },
+  required: ['characters', 'locations', 'props']
+}
 
-  const derivatives: CandidateDerivative[] = rawDerivs.map((d: any) => ({
-    tempId: randomUUID(),
-    characterName: str(d.characterName ?? d.character_name),
-    name: str(d.name),
-    promptChange: str(d.promptChange ?? d.prompt_change),
-    costumeKeyphrase: str(d.costumeKeyphrase ?? d.costume_keyphrase)
-  })).filter((d: CandidateDerivative) => Boolean(d.name && d.characterName))
+interface RawEnrichResponse {
+  characters?: Array<{
+    id?: string
+    description?: string
+    age?: string
+    gender?: string
+    bodyType?: string
+    facialFeatures?: string
+    hair?: string
+    distinctiveFeatures?: string
+    accessories?: string
+    defaultOutfit?: string
+  }>
+  locations?: Array<{
+    id?: string
+    description?: string
+    interiorExterior?: string
+    architecturalStyle?: string
+    spatialLayout?: string
+    colorPalette?: string
+    timeOfDayLighting?: string
+    atmosphere?: string
+    keyFeatures?: string
+    fixedDetails?: string
+  }>
+  props?: Array<{
+    id?: string
+    description?: string
+    category?: string
+    sizeScale?: string
+    shape?: string
+    material?: string
+    appearance?: string
+    distinctiveDetails?: string
+    status?: string
+  }>
+}
 
-  const locations: CandidateLocation[] = rawLocs.map((l: any) => ({
-    tempId: randomUUID(),
-    name: str(l.name),
-    description: str(l.description),
-    aliases: Array.isArray(l.aliases) ? l.aliases.map(str).filter(Boolean) : [],
-    profile: {
-      interiorExterior: str(l.profile?.interiorExterior),
-      timeOfDayLighting: str(l.profile?.timeOfDayLighting),
-      architecturalStyle: str(l.profile?.architecturalStyle),
-      keyFeatures: str(l.profile?.keyFeatures)
-    }
-  })).filter((l: CandidateLocation) => Boolean(l.name))
+/**
+ * Uses the LLM to enrich sparse/generic Lorebook visual profiles (characters, locations, props) with concrete,
+ * camera-ready details while strictly preserving creator intent (never replacing batik with suits, etc.).
+ */
+export async function enrichLorebookDetails(
+  projectId: string,
+  target?: { kind: 'character' | 'location' | 'prop'; id: string }
+): Promise<EnrichLorebookResult> {
+  const project = getProject(projectId)
+  const allChars = charactersOf(projectId)
+  const allLocs = locationsOf(projectId)
+  const allProps = propsOf(projectId)
 
-  const props: CandidateProp[] = rawProps.map((pr: any) => ({
-    tempId: randomUUID(),
-    name: str(pr.name),
-    description: str(pr.description),
-    aliases: Array.isArray(pr.aliases) ? pr.aliases.map(str).filter(Boolean) : [],
-    profile: {
-      category: str(pr.profile?.category),
-      appearance: str(pr.profile?.appearance),
-      significance: str(pr.profile?.significance)
-    }
-  })).filter((pr: CandidateProp) => Boolean(pr.name))
+  const targetChars = target ? (target.kind === 'character' ? allChars.filter((c) => c.id === target.id) : []) : allChars
+  const targetLocs = target ? (target.kind === 'location' ? allLocs.filter((l) => l.id === target.id) : []) : allLocs
+  const targetProps = target ? (target.kind === 'prop' ? allProps.filter((p) => p.id === target.id) : []) : allProps
 
-  return { characters, derivatives, locations, props }
+  if (!targetChars.length && !targetLocs.length && !targetProps.length) {
+    return { updatedCharacters: 0, updatedLocations: 0, updatedProps: 0 }
+  }
+
+  emit.storyProgress({
+    projectId,
+    message: target ? 'Memperkaya detail visual item Lorebook dengan AI…' : 'Memperkaya detail visual semua Tokoh, Lokasi & Prop dengan AI…'
+  })
+
+  const { style, prompt: effectiveStylePrompt, isRestrictedPalette } = resolveStylePrompt(project)
+  const system = [
+    'You are an expert Production Designer and Visual Continuity Director for vertical drama series across all visual styles (live-action, 2D anime, webtoon, 3D CG, ink art, and stop-motion).',
+    'Upgrade sparse or generic Lorebook profiles into concrete, visual-ready descriptions (in clear, natural Indonesian with exact colors/tones, materials, motifs, proportions, and spatial landmarks) matching the project\'s genre and visual style so multimodal AI image generators keep every character, outfit, set, and prop 100% consistent across all camera POVs.',
+    'STRICT FIDELITY RULES:',
+    '1. NEVER contradict what the creator already wrote! Preserve the exact garment type, era, and genre (e.g. batik, kebaya, hanfu, armor, uniform, streetwear, sci-fi gear, or casual wear) and expand it into concrete motif, cut, material, colors, and footwear — NEVER replace a character\'s stated clothing with generic default attire.',
+    `2. STYLE HARMONIZATION (${style.name} · ${style.category}): Tailor material and aesthetic details to harmonize with the project\'s chosen visual style.${isRestrictedPalette ? ' Note that this style uses a monochrome or restricted palette, so focus on tonal contrast, texture, silhouette, and motif clarity.' : ''}`,
+    '3. Characters: specify exact age number, skin/surface tone, face shape, jawline/eyes, exact hair length/color/parting, posture/build, distinguishing mark, recurring accessories (glasses shape, watch, jewelry, gear), and full defaultOutfit.',
+    '4. Locations: specify interior/exterior, architecturalStyle, dominant colorPalette, concrete 4-wall spatialLayout (left wall, right wall, center furniture/landmarks, windows, doors) for 180-degree multi-POV continuity, exact light sources & mood, atmosphere, and permanent fixedDetails.',
+    '5. Props: specify category, real-world sizeScale (relative to human hand/table), exact shape, material & surface finish, exact appearance, distinctiveDetails (clasps, markings, wear), and physical condition/status.',
+    'Return ONLY items matching the provided input IDs. Keep IDs verbatim.'
+  ].join('\n')
+
+  const payload = {
+    seriesTitle: project.title,
+    style: `${style.name} (${style.category}) — ${effectiveStylePrompt}`,
+    synopsis: (project.synopsis || project.sourceText || '').slice(0, 1500),
+    characters: targetChars.map((c) => ({ id: c.id, name: c.name, description: c.description, visual: c.profile?.visual ?? {}, narrative: c.profile?.narrative ?? {} })),
+    locations: targetLocs.map((l) => ({ id: l.id, name: l.name, description: l.description, profile: l.profile ?? {} })),
+    props: targetProps.map((p) => ({ id: p.id, name: p.name, description: p.description, profile: p.profile ?? {} }))
+  }
+
+  const res = await generateJson<RawEnrichResponse>({
+    system,
+    prompt: `Enrich these Lorebook entries with concrete, camera-ready visual details:\n${JSON.stringify(payload, null, 2)}`,
+    schema: ENRICH_LOREBOOK_SCHEMA,
+    name: 'enrich_lorebook_details'
+  })
+
+  let updatedCharacters = 0
+  for (const item of res.characters ?? []) {
+    const existing = targetChars.find((c) => c.id === item.id)
+    if (!existing) continue
+    const prevVis = existing.profile?.visual ?? {}
+    updateCharacter(existing.id, {
+      description: str(item.description) || existing.description,
+      profile: {
+        ...existing.profile,
+        visual: {
+          ...prevVis,
+          age: str(item.age) || prevVis.age,
+          gender: str(item.gender) || prevVis.gender,
+          bodyType: str(item.bodyType) || prevVis.bodyType,
+          facialFeatures: str(item.facialFeatures) || prevVis.facialFeatures,
+          hair: str(item.hair) || prevVis.hair,
+          distinctiveFeatures: str(item.distinctiveFeatures) || prevVis.distinctiveFeatures,
+          accessories: str(item.accessories) || prevVis.accessories,
+          defaultOutfit: str(item.defaultOutfit) || prevVis.defaultOutfit
+        }
+      }
+    })
+    updatedCharacters++
+  }
+
+  let updatedLocations = 0
+  for (const item of res.locations ?? []) {
+    const existing = targetLocs.find((l) => l.id === item.id)
+    if (!existing) continue
+    const prev = existing.profile ?? {}
+    updateLocation(existing.id, {
+      description: str(item.description) || existing.description,
+      profile: {
+        ...prev,
+        interiorExterior: str(item.interiorExterior) || prev.interiorExterior,
+        architecturalStyle: str(item.architecturalStyle) || prev.architecturalStyle,
+        spatialLayout: str(item.spatialLayout) || prev.spatialLayout,
+        colorPalette: str(item.colorPalette) || prev.colorPalette,
+        timeOfDayLighting: str(item.timeOfDayLighting) || prev.timeOfDayLighting,
+        atmosphere: str(item.atmosphere) || prev.atmosphere,
+        keyFeatures: str(item.keyFeatures) || prev.keyFeatures,
+        fixedDetails: str(item.fixedDetails) || prev.fixedDetails
+      }
+    })
+    updatedLocations++
+  }
+
+  let updatedProps = 0
+  for (const item of res.props ?? []) {
+    const existing = targetProps.find((p) => p.id === item.id)
+    if (!existing) continue
+    const prev = existing.profile ?? {}
+    updateProp(existing.id, {
+      description: str(item.description) || existing.description,
+      profile: {
+        ...prev,
+        category: str(item.category) || prev.category,
+        sizeScale: str(item.sizeScale) || prev.sizeScale,
+        shape: str(item.shape) || prev.shape,
+        material: str(item.material) || prev.material,
+        appearance: str(item.appearance) || prev.appearance,
+        distinctiveDetails: str(item.distinctiveDetails) || prev.distinctiveDetails,
+        status: str(item.status) || prev.status
+      }
+    })
+    updatedProps++
+  }
+
+  if (updatedCharacters || updatedLocations || updatedProps) {
+    syncProjectSeriesLocks(projectId)
+    touchProject(projectId)
+  }
+
+  return { updatedCharacters, updatedLocations, updatedProps }
 }

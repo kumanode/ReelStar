@@ -4,11 +4,12 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import ffmpegStatic from 'ffmpeg-static'
 import { visualSourceOf } from '@shared/script'
-import { MIN_ITEM_MS, splitNarration, voiceSpan, wordGapNear } from '@shared/timeline'
-import type { Asset, Clip, ProjectBundle } from '@shared/types'
+import { computeSpeechTrimWindow, MIN_ITEM_MS, splitNarration, voiceSpan, wordGapNear } from '@shared/timeline'
+import { WHISPER_TIMING } from '@shared/captions'
+import type { Asset, AutoTrimEpisodeResult, Clip, ProjectBundle } from '@shared/types'
 import { emit } from './events'
 import { assetAbsPath, binPath } from './paths'
-import { getAsset, getBundle, getClip, insertAsset, insertClipAfter, patchClip, patchClipText, touchProject } from './repo'
+import { clipsOf, getAsset, getBundle, getClip, insertAsset, insertClipAfter, patchClip, patchClipText, touchProject } from './repo'
 
 /**
  * Timeline edits that touch files or several clips at once: splitting a clip in two and taking a voice off
@@ -131,4 +132,64 @@ export function detachVoice(clipId: string): void {
   const patch: Partial<Clip> = { audioAssetId: null, voiceInMs: 0, voiceOutMs: null, voiceStartMs: 0 }
   patchClip(clipId, patch)
   emit.clip({ clipId, patch })
+}
+
+/**
+ * Non-destructively trims or resets leading/trailing silence on Whisper-timed video dialogue clips in an
+ * episode, tightening fixed 4/6/8s AI video durations into snappy vertical drama pacing.
+ */
+export function autoTrimEpisode(
+  projectId: string,
+  episodeId: string,
+  mode: 'apply' | 'reset' = 'apply'
+): AutoTrimEpisodeResult {
+  const clips = clipsOf(projectId, episodeId)
+  let trimmedCount = 0
+  let savedMs = 0
+
+  for (const clip of clips) {
+    if (!clip.videoAssetId || !clip.audioAssetId) continue
+    const video = getAsset(clip.videoAssetId)
+    const audio = getAsset(clip.audioAssetId)
+    if (!video || !audio) continue
+    const totalMs = video.durationMs ?? audio.durationMs ?? 0
+    if (totalMs <= 0) continue
+
+    if (mode === 'reset') {
+      const wasTrimmed = clip.mediaInMs > 0 || clip.durationMs < totalMs - 100 || clip.voiceInMs > 0 || clip.voiceOutMs != null
+      if (!wasTrimmed) continue
+      const patch: Partial<Clip> = {
+        mediaInMs: 0,
+        durationMs: Math.max(1000, totalMs),
+        voiceInMs: 0,
+        voiceOutMs: null,
+        voiceStartMs: 0
+      }
+      patchClip(clip.id, patch)
+      emit.clip({ clipId: clip.id, patch })
+      trimmedCount++
+      continue
+    }
+
+    // Only auto-trim when we have real Whisper timings from video dialogue audio so we never clip spoken words.
+    if (audio.meta.source !== 'video') continue
+    if (audio.meta.timedBy !== WHISPER_TIMING || !audio.meta.words?.length) continue
+
+    const win = computeSpeechTrimWindow(audio.meta.words, totalMs)
+    if (!win) continue
+    const patch: Partial<Clip> = {
+      mediaInMs: win.mediaInMs,
+      durationMs: win.durationMs,
+      voiceInMs: win.voiceInMs,
+      voiceOutMs: win.voiceOutMs,
+      voiceStartMs: win.voiceStartMs
+    }
+    patchClip(clip.id, patch)
+    emit.clip({ clipId: clip.id, patch })
+    trimmedCount++
+    savedMs += win.savedMs
+  }
+
+  if (trimmedCount > 0) touchProject(projectId)
+  return { trimmedCount, savedMs, mode }
 }

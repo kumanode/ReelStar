@@ -208,7 +208,7 @@ export function TaskCenterModal({ open, onClose }: TaskCenterModalProps) {
         await switchEpisode(job.episodeId)
       }
       setActiveView('episode')
-      setActiveTab('storyboard')
+      setActiveTab('production')
       select(job.clipId)
     } else if (job.characterId) {
       setActiveView('lorebook')

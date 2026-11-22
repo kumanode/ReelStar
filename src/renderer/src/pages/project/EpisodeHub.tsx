@@ -67,6 +67,8 @@ export function EpisodeHub() {
     setActiveView,
     setActiveTab,
     openLorebookAndExtract,
+    pendingAutoPlanProjectId,
+    consumeAutoPlan,
     flush,
     load
   } = useProject()
@@ -77,6 +79,7 @@ export function EpisodeHub() {
   const [isBatchDrafting, setIsBatchDrafting] = useState(false)
   const [guidelinesOpen, setGuidelinesOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const autoPlanRanRef = useRef(false)
 
   useEffect(() => {
     return window.api.on.storyProgress((progressEvent) => {
@@ -85,6 +88,17 @@ export function EpisodeHub() {
       }
     })
   }, [project?.id])
+
+  // Auto-plan episodes immediately when created from New Serial modal with "Langsung pecah jadi episode otomatis".
+  useEffect(() => {
+    if (!project?.id || pendingAutoPlanProjectId !== project.id) return
+    if (autoPlanRanRef.current) return
+    const text = (project.sourceText || project.synopsis || '').trim()
+    consumeAutoPlan()
+    if (!text) return
+    autoPlanRanRef.current = true
+    void handlePlanEpisodes(false)
+  }, [pendingAutoPlanProjectId, project?.id])
 
   if (!project) return null
 
@@ -152,6 +166,12 @@ export function EpisodeHub() {
       const plannedSec = planned.reduce((acc, e) => acc + (e.durationSec || targetDurationSec), 0)
       if (plannedSec > MAX_SERIES_DURATION_SEC) {
         toast('info', `Total durasi hasil rencana ${formatDuration(plannedSec)}, lebih dari batas 1 jam. Hapus atau gabungkan beberapa episode, atau pilih durasi per episode yang lebih pendek.`)
+      }
+      // If Lorebook is still empty after fresh serial planning, take the creator directly into auto-extraction.
+      if (!continuation && lorebookEmpty && count > 0) {
+        load(await window.api.projects.get(project.id), { keepHistory: false })
+        openLorebookAndExtract()
+        return
       }
     } catch (err) {
       toast('error', `Gagal merencanakan episode: ${errorText(err)}`)
@@ -252,7 +272,7 @@ export function EpisodeHub() {
       episodeNum: nextNum
     })
     await switchEpisode(ep.id)
-    setActiveTab('plan')
+    setActiveTab('production')
     setActiveView('episode')
   }
 
@@ -295,7 +315,7 @@ export function EpisodeHub() {
 
   const handleOpenEpisode = async (epId: string) => {
     await switchEpisode(epId)
-    setActiveTab('plan')
+    setActiveTab('production')
     setActiveView('episode')
   }
 
@@ -364,8 +384,11 @@ export function EpisodeHub() {
             </div>
 
             <AutoTextarea
-              value={project.sourceText ?? ''}
-              onChange={(e) => updateProject({ sourceText: e.target.value })}
+              value={project.sourceText || project.synopsis || ''}
+              onChange={(e) => {
+                const v = e.target.value
+                updateProject({ sourceText: v, ...(!project.synopsis.trim() || project.synopsis === project.sourceText ? { synopsis: v.slice(0, 400) } : {}) })
+              }}
               placeholder={
                 project.sourceKind === 'screenplay'
                   ? 'Tempel naskah jadi di sini (dialog dan adegan dipertahankan kata per kata)...'
@@ -724,7 +747,7 @@ export function EpisodeHub() {
                         size="sm"
                         onClick={() => void handleOpenEpisode(ep.id)}
                       >
-                        Buka Rencana
+                        Buka Produksi
                         <ArrowRight className="size-3.5" />
                       </Button>
                     </div>

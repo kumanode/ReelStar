@@ -43,14 +43,17 @@ interface ProjectState {
   canRedo: boolean
 
   activeView: 'hub' | 'lorebook' | 'episode'
-  activeTab: 'plan' | 'storyboard' | 'editor'
+  activeTab: 'production' | 'editor'
   sidebarCollapsed: boolean
   pendingLorebookExtract: boolean
+  pendingAutoPlanProjectId: string | null
 
   setActiveView(view: 'hub' | 'lorebook' | 'episode'): void
-  setActiveTab(tab: 'plan' | 'storyboard' | 'editor'): void
+  setActiveTab(tab: 'production' | 'editor'): void
   openLorebookAndExtract(): void
   consumeLorebookExtract(): void
+  requestAutoPlan(projectId: string): void
+  consumeAutoPlan(): void
   setSidebarCollapsed(collapsed: boolean): void
   toggleSidebar(): void
 
@@ -244,12 +247,13 @@ export const useProject = create<ProjectState>((set, get) => {
     canRedo: false,
 
     activeView: 'episode',
-    activeTab: 'plan',
+    activeTab: 'production',
     sidebarCollapsed: false,
     pendingLorebookExtract: false,
+    pendingAutoPlanProjectId: null,
 
     setActiveView: (view) => {
-      set({ activeView: view })
+      set({ activeView: view, ...(view !== 'episode' ? { sidebarCollapsed: false } : {}) })
       const p = get().project
       if (p) localStorage.setItem(`last_view:${p.id}`, view)
     },
@@ -265,6 +269,8 @@ export const useProject = create<ProjectState>((set, get) => {
       if (p) localStorage.setItem(`last_view:${p.id}`, 'lorebook')
     },
     consumeLorebookExtract: () => set({ pendingLorebookExtract: false }),
+    requestAutoPlan: (projectId) => set({ pendingAutoPlanProjectId: projectId }),
+    consumeAutoPlan: () => set({ pendingAutoPlanProjectId: null }),
     setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
     toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
 
@@ -436,7 +442,14 @@ export const useProject = create<ProjectState>((set, get) => {
         lastHistoryTime = -Infinity
       }
       const lastView = (localStorage.getItem(`last_view:${b.project.id}`) as 'hub' | 'lorebook' | 'episode') || null
-      const lastTab = (localStorage.getItem(`last_tab:${b.project.id}`) as 'plan' | 'storyboard' | 'editor') || null
+      const rawLastTab = localStorage.getItem(`last_tab:${b.project.id}`)
+      // Map legacy 'plan' / 'storyboard' tabs saved before Phase 9 into the unified 'production' tab.
+      const lastTab: 'production' | 'editor' | null =
+        rawLastTab === 'editor'
+          ? 'editor'
+          : rawLastTab === 'production' || rawLastTab === 'plan' || rawLastTab === 'storyboard'
+            ? 'production'
+            : null
 
       let defaultView: 'hub' | 'lorebook' | 'episode' = 'episode'
       if (lastView) {
@@ -445,10 +458,10 @@ export const useProject = create<ProjectState>((set, get) => {
         defaultView = 'hub'
       }
 
-      const defaultTab: 'plan' | 'storyboard' | 'editor' =
-        lastTab || (b.episode?.status === 'editing' || b.episode?.status === 'exported' ? 'editor' : 'plan')
+      const defaultTab: 'production' | 'editor' =
+        lastTab || (b.episode?.status === 'editing' || b.episode?.status === 'exported' ? 'editor' : 'production')
 
-      const shouldCollapseSidebar = defaultTab === 'editor'
+      const shouldCollapseSidebar = defaultView === 'episode' && defaultTab === 'editor'
 
       set({
         loaded: true,
@@ -468,7 +481,7 @@ export const useProject = create<ProjectState>((set, get) => {
         selectedClipId: get().selectedClipId && b.clips.some((c) => c.id === get().selectedClipId) ? get().selectedClipId : (b.clips[0]?.id ?? null),
         canUndo: past.length > 0,
         canRedo: future.length > 0,
-        activeView: defaultView,
+        activeView: get().pendingAutoPlanProjectId === b.project.id ? 'hub' : defaultView,
         activeTab: defaultTab,
         sidebarCollapsed: shouldCollapseSidebar
       })
@@ -498,9 +511,10 @@ export const useProject = create<ProjectState>((set, get) => {
         canUndo: false,
         canRedo: false,
         activeView: 'episode',
-        activeTab: 'plan',
+        activeTab: 'production',
         sidebarCollapsed: false,
-        pendingLorebookExtract: false
+        pendingLorebookExtract: false,
+        pendingAutoPlanProjectId: null
       })
     },
     select: (clipId) => set({ selectedClipId: clipId }),
@@ -782,7 +796,27 @@ export const useProject = create<ProjectState>((set, get) => {
       const prev = get().assets[asset.id]
       const wordsChanged = !!prev && JSON.stringify(prev.meta.words) !== JSON.stringify(asset.meta.words)
       rebaseAsset(asset, wordsChanged && !pendingWordEdits.has(asset.id))
-      set({ assets: { ...get().assets, [asset.id]: asset } })
+      const patch: Partial<ProjectState> = { assets: { ...get().assets, [asset.id]: asset } }
+      // Location, prop, and costume-variant sheet jobs emit `asset` without a separate entity patch event,
+      // so sync their sheetAssetId here so Lorebook cards and Production status update live without reloading.
+      if (asset.kind === 'image') {
+        if (asset.locationId) {
+          patch.locations = get().locations.map((l) =>
+            l.id === asset.locationId ? { ...l, sheetAssetId: asset.id } : l
+          )
+        }
+        if (asset.propId) {
+          patch.props = get().props.map((pr) =>
+            pr.id === asset.propId ? { ...pr, sheetAssetId: asset.id } : pr
+          )
+        }
+        if (asset.derivativeId) {
+          patch.derivatives = get().derivatives.map((d) =>
+            d.id === asset.derivativeId ? { ...d, sheetAssetId: asset.id } : d
+          )
+        }
+      }
+      set(patch)
     },
     upsertJob: (job) => {
       if (job.projectId !== get().project?.id) return
@@ -794,12 +828,23 @@ export const useProject = create<ProjectState>((set, get) => {
 ;(window as unknown as { useProject?: typeof useProject }).useProject = useProject
 
 /** Latest active or recent job of a kind for a clip or character. */
-export function jobFor(jobs: Record<string, Job>, kind: Job['kind'], target: { clipId?: string; characterId?: string }): Job | null {
+export function jobFor(
+  jobs: Record<string, Job>,
+  kind: Job['kind'],
+  target: { clipId?: string; characterId?: string; derivativeId?: string; locationId?: string; propId?: string }
+): Job | null {
   let best: Job | null = null
   for (const j of Object.values(jobs)) {
     if (j.kind !== kind) continue
     if (target.clipId && j.clipId !== target.clipId) continue
-    if (target.characterId && j.characterId !== target.characterId) continue
+    if (target.derivativeId) {
+      if (j.derivativeId !== target.derivativeId) continue
+    } else if (target.characterId) {
+      // Base character sheet jobs have no derivativeId; avoid matching a costume variant job.
+      if (j.characterId !== target.characterId || j.derivativeId) continue
+    }
+    if (target.locationId && j.locationId !== target.locationId) continue
+    if (target.propId && j.propId !== target.propId) continue
     if (!best || j.createdAt > best.createdAt) best = j
   }
   return best

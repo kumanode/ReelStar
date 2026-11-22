@@ -665,3 +665,52 @@ di Pengaturan dan berlaku untuk semua proyek.
 | Preset ekspor dengan rasio berbeda | Pratinjau ≠ ekspor | Fase 8 hanya preset rasio sama; crop/pad/matte ditulis di `shared/` sebagai tugas terpisah |
 | Model aktif global diganti di tengah produksi | Satu serial tercampur model, banyak hasil basi sekaligus | Konfirmasi sebelum menyimpan dengan jumlah serial terdampak; hasil hanya ditandai basi, tidak dibuat ulang |
 | Normalisasi setting lama salah memetakan penyedia/kunci | Kunci pengguna seolah hilang | Id penyedia tidak berubah (termasuk `custom`); uji salinan database lama di Checkpoint 8 |
+
+
+---
+
+## Fase 9 — Redesign Alur Produksi Short Drama Terpadu
+
+Acuan mockup interaktif: `docs/mockup/redesign-alur.html`.
+Tujuan: merampingkan pengalaman produksi serial drama tanpa membuang satu pun fitur Fase 1–8 — memangkas 3 tab episode menjadi 2 tab (`Produksi` + `Editor & Rilis`), memadatkan Lorebook dari 5 tab + modal menjadi 3 tab, menyatukan alur `Susun Shot → Konfirmasi Aset Inline → Tulis Prompt`, memisahkan tegas tombol **Generate Gambar**, **Generate Video**, dan **Buat TTS**, menambahkan **Smart Dependency Batch** khusus Gambar (lembar kosong ikut dibuat lebih dulu tanpa ping-pong ke Lorebook), **Pratinjau Animatic**, serta **Auto-Trim Hening Veo** + **Bar Finishing Drama** di Editor.
+
+Urutan pengerjaan: `59 → 60 → 61 → 62 → 63 → 64`, `65` (paralel setelah 59), `66 → 67 → 68 → Checkpoint 9`.
+
+### Tugas 59 — Kerangka Studio Episode 2 Tab (`Produksi` + `Editor & Rilis`)
+- Ubah `activeTab` di `src/renderer/src/store/project.ts` menjadi `'production' | 'editor'` dengan migrasi aman dari nilai tersimpan `'plan'`/`'storyboard'` → `'production'`.
+- Perbarui `StudioHeader.tsx`, `StudioSidebar.tsx`, `ProjectPage.tsx`, `EpisodeHub.tsx`, `LorebookPage.tsx`, dan `TaskCenterModal.tsx`.
+
+### Tugas 60 — Halaman `ProductionStep` Terpadu (Gabungan `PlanStep` + `StoryboardStep`)
+- Buat `ProductionStep.tsx`, `ShotCard.tsx`, `NewAssetsBanner.tsx`, dan `ProductionDrawers.tsx` dengan bahasa desain Kertas & Tinta (`paper`, `surface`, `sand`, `ink`, `accent`, `sun-soft`, tanpa `<select>` bawaan).
+- Progressive disclosure untuk `Script Doctor`, `Kunci Kontinuitas`, `Bar Ritme`, `Versi/Snapshot`, serta `Detail & Prompt` per kartu (termasuk override referensi per shot).
+
+### Tugas 61 — Alur 1 Klik `Susun Shot & Prompt` + Banner Aset Baru Inline
+- Jalankan `story:planEpisodeScript` → tampilkan banner inline jika ada `draft.newAssets` → begitu dikonfirmasi (`story:confirmEpisodeScript`), langsung auto-chain `story:writePrompts` untuk klip kosong.
+
+### Tugas 62 — Pemisahan Tegas Tombol Generate Gambar, Video, dan TTS
+- Pisahkan tombol `Buat Gambar`, `Buat Video`, dan `Buat TTS` di toolbar atas, bar seleksi multi-shot, dan per kartu shot.
+- Perluas `generate:batchEstimate` & `generate:missingImages` / `generate:missingVideos` untuk menerima `clipIds?: string[]` opsional.
+
+### Tugas 63 — Smart Dependency Batch untuk Gambar (Hilangkan Ping-Pong ke Lorebook)
+- Di `batchEstimate` (`kind === 'image'`), hitung `prerequisiteSheets` (karakter → varian → lokasi → prop) agar batch Gambar tidak terblokir hanya karena lembar kosong; jalankan berantai Lembar → Gambar di `generate:missingImages` ketika `autoGenerateSheets` aktif.
+- Di `kind === 'video'`, shot tanpa gambar tetap dilewati/ditandai jelas tanpa diam-diam meng-generate gambar.
+
+### Tugas 64 — Pratinjau Animatic 9:16 di Tab Produksi
+- Buat `AnimaticPreviewModal.tsx` memakai aturan `src/shared/` (`motion.ts`, `captions.ts`, `timeline.ts`) untuk memutar gambar + audio + subtitle langsung dari Tab Produksi.
+
+### Tugas 65 — Pemadatan `LorebookPage` (5 Tab → 3 Tab) & Alur Ringkas `EpisodeHub`
+- Padatkan `LorebookPage.tsx` menjadi 3 tab: **Pemeran**, **Dunia** (Lokasi & Prop dengan filter), dan **Aturan Serial** (Lock Words + Continuity Ledger + Arahan & Template Prompt).
+- Di `EpisodeHub.tsx`, perencanaan serial baru otomatis memicu ekstraksi kandidat Lorebook bila Lorebook masih kosong.
+
+### Tugas 66 — Auto-Trim Hening Video Dialog (Berbasis Timestamp Whisper)
+- Tambahkan `computeSpeechTrimWindow(words, totalDurationMs, opts?)` di `src/shared/timeline.ts` (non-destruktif via `mediaInMs`, `durationMs`, `voiceInMs`, `voiceOutMs`).
+- Pasang opsi `autoTrimSilence` di `extractVideoDialogueAudio` dan `BatchEstimateModal` (mode Video), plus IPC `clips:autoTrimEpisode` (3 tempat).
+
+### Tugas 67 — Bar "Finishing Drama" di `EditorStep`
+- Tambahkan bar atas ringkas di `EditorStep.tsx`: `Auto-Trim Hening`, `Smart AI SFX`, dan `Musik Drama` (ElevenLabs) dalam 1 klik.
+
+### Tugas 68 — Salin Mockup, Bersih-Bersih Kode Lama, & Dokumentasi
+- Salin mockup ke `docs/mockup/redesign-alur.html`, hapus `PlanStep.tsx` & `StoryboardStep.tsx` usang, perbarui `AGENTS.md`, `docs/alur-produksi.md`, dan `docs/keputusan-teknis.md`.
+
+### Checkpoint 9 — Verifikasi Menyeluruh
+- `npm run typecheck`, `npm run build`, uji dev harness end-to-end dengan `STUDIO_USER_DATA` sementara, screenshot 1180×720 & 1600×900 tema terang & gelap.

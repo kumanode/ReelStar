@@ -7,8 +7,7 @@ import { StudioHeader } from './StudioHeader'
 import { StudioSidebar } from './StudioSidebar'
 import { EpisodeHub } from './EpisodeHub'
 import { LorebookPage } from './LorebookPage'
-import { PlanStep } from './PlanStep'
-import { StoryboardStep } from './StoryboardStep'
+import { ProductionStep } from './ProductionStep'
 import { EditorStep } from './EditorStep'
 import { ExportDialog } from './ExportDialog'
 
@@ -61,8 +60,7 @@ export function ProjectPage({ id }: { id: string }) {
           {activeView === 'lorebook' && <LorebookPage />}
           {activeView === 'episode' && (
             <div className="min-h-0 flex-1 overflow-hidden">
-              {activeTab === 'plan' && <PlanStep />}
-              {activeTab === 'storyboard' && <StoryboardStep />}
+              {activeTab === 'production' && <ProductionStep />}
               {activeTab === 'editor' && <EditorStep />}
             </div>
           )}

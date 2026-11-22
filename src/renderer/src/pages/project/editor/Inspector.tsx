@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { dialogVoiceNote } from '@shared/validation'
+import { resolveActive } from '@shared/providers'
+import { dialogVoiceNote, referenceLimit } from '@shared/validation'
 import { AudioLines, Check, Clapperboard, Copy, ExternalLink, Film, FolderOpen, Layers, Mic, Move, Music, Play, Sparkles, Type, Upload, Volume2, X } from 'lucide-react'
-import { collectReferenceSheets, hasReferenceOverride } from '@shared/prompts'
+import { collectReferenceSheets, findSceneAnchorForClip, hasReferenceOverride } from '@shared/prompts'
 import {
   CAPTION_FONTS,
   CAPTION_POSITIONS,
@@ -16,7 +17,7 @@ import { CAMERA_PRESETS, MOTION_STRENGTHS } from '@shared/motion'
 import { FILTERS } from '@shared/filters'
 import { geminiVoiceName } from '@shared/models'
 import { voiceSpan } from '@shared/timeline'
-import type { Asset, CameraCustomFraming, Clip, WordTiming } from '@shared/types'
+import type { AppSettings, Asset, CameraCustomFraming, Clip, WordTiming } from '@shared/types'
 import { Select } from '../../../components/Select'
 import { AutoTextarea } from '../../../components/AutoTextarea'
 import { Button, Field, Segmented, Switch, confirmDialog, cx, inputCls } from '../../../components/ui'
@@ -74,6 +75,7 @@ const historyGestureHandlers = {
 function ClipTab({ clip, index }: { clip: Clip; index: number }) {
   const {
     project,
+    clips,
     characters,
     derivatives,
     locations,
@@ -91,17 +93,33 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
   const videoJob = jobFor(jobs, 'video', { clipId: clip.id })
   const videoCamera = clip.videoCamera ?? 'static'
   const [cancelingVideo, setCancelingVideo] = useState(false)
+  const [appSettings, setAppSettings] = useState<AppSettings | null>(null)
+  useEffect(() => {
+    void window.api.settings.get().then(setAppSettings).catch(() => setAppSettings(null))
+  }, [])
+
+  const refCap = useMemo(() => {
+    if (!project) return 3
+    const activeImage = resolveActive(appSettings, 'image')
+    return referenceLimit(project, {
+      isFlow2Api: activeImage.provider.protocol === 'flow2api',
+      flow2apiImageModel: activeImage.model,
+      activeImageModel: activeImage.model
+    })
+  }, [project, appSettings])
 
   const refItems = useMemo(() => {
+    const anchor = findSceneAnchorForClip(clip, clips)
     return collectReferenceSheets(
       clip,
       characters,
       derivatives ?? [],
       locations ?? [],
       props ?? [],
-      4
+      refCap,
+      anchor
     )
-  }, [clip, characters, derivatives, locations, props])
+  }, [clip, clips, characters, derivatives, locations, props, refCap])
   // A camera change plays the clip in the preview at once, without moving the playhead.
   const audition = (): void => useAudition.getState().start({ kind: 'clip', clipId: clip.id })
   const setCamera = (patch: Partial<Clip>): void => {

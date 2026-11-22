@@ -10,7 +10,6 @@ import {
   Download,
   Trash2,
   Coins,
-  FileText,
   Clapperboard,
   SlidersHorizontal,
   Activity,
@@ -224,18 +223,10 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
             onChange={setActiveTab}
             options={[
               {
-                id: 'plan',
+                id: 'production',
                 label: (
                   <span className="flex items-center gap-1.5 text-xs">
-                    <FileText className="size-3.5" /> Rencana
-                  </span>
-                )
-              },
-              {
-                id: 'storyboard',
-                label: (
-                  <span className="flex items-center gap-1.5 text-xs">
-                    <Clapperboard className="size-3.5" /> Storyboard
+                    <Clapperboard className="size-3.5" /> Produksi
                   </span>
                 )
               },
@@ -243,7 +234,7 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
                 id: 'editor',
                 label: (
                   <span className="flex items-center gap-1.5 text-xs">
-                    <SlidersHorizontal className="size-3.5" /> Editor
+                    <SlidersHorizontal className="size-3.5" /> Editor &amp; Rilis
                   </span>
                 )
               }

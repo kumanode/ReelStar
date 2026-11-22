@@ -22,5 +22,13 @@ export function AutoTextarea({
     el.style.height = `${Math.min(el.scrollHeight + border, maxHeight)}px`
   }, [value, maxHeight])
 
-  return <textarea ref={ref} rows={minRows} value={value} className={cx('shrink-0 resize-y', className)} {...rest} />
+  return (
+    <textarea
+      ref={ref}
+      rows={minRows}
+      value={value}
+      className={cx('shrink-0', !className?.includes('resize-') && 'resize-y', className)}
+      {...rest}
+    />
+  )
 }

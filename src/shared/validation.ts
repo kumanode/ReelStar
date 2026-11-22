@@ -1,6 +1,6 @@
 import { FLOW2API_VIDEO_MODELS, getFlow2ApiModel } from './flow2api-catalog'
 import { getImageModel, getVideoModel, maxRefs, modelSupportsNativeAudio } from './higgsfield'
-import { collectReferenceSheets } from './prompts'
+import { collectReferenceSheets, findSceneAnchorForClip } from './prompts'
 import {
   computeClipImageBasisHash,
   computeClipVideoBasisHash,
@@ -309,7 +309,8 @@ function resultStatus(assets: Asset[] | Record<string, Asset>, assetId: string |
 /** The basis hash a clip image is generated from, with the same reference sheets generation will send. */
 export function clipImageBasis(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): { basisHash: string; refSheetAssetIds: string[] } {
   const activeImageModel = ctx.activeImageModel || (ctx.isFlow2Api ? ctx.flow2apiImageModel : null) || project.imageModel
-  const refs = collectReferenceSheets(clip, ctx.characters, ctx.derivatives, ctx.locations, ctx.props, referenceLimit(project, ctx))
+  const sceneAnchor = findSceneAnchorForClip(clip, ctx.clips)
+  const refs = collectReferenceSheets(clip, ctx.characters, ctx.derivatives, ctx.locations, ctx.props, referenceLimit(project, ctx), sceneAnchor)
   const refSheetAssetIds = refs.map((r) => r.sheetAssetId)
   const lockWords = ctx.lockWords || project.seriesLock || []
   const basisHash = computeClipImageBasisHash({
@@ -320,6 +321,7 @@ export function clipImageBasis(clip: Clip, project: Project, ctx: GenerationPrer
     locations: ctx.locations,
     props: ctx.props,
     refSheetAssetIds,
+    refItems: refs,
     lockWords,
     imageModel: activeImageModel
   })
@@ -575,10 +577,16 @@ export function cleanShotDetail(
   if (cm) detail.cameraMotion = cm
   const cr = String(raw.cameraReason || (raw as Record<string, unknown>).camera_reason || '').trim()
   if (cr) detail.cameraReason = cr
+  const cp = String(raw.cameraPov || (raw as Record<string, unknown>).camera_pov || '').trim()
+  if (cp) detail.cameraPov = cp
   const lt = String(raw.lighting || '').trim()
   if (lt) detail.lighting = lt
   const bl = String(raw.blocking || '').trim()
   if (bl) detail.blocking = bl
+  const pp = String(raw.propPlacement || (raw as Record<string, unknown>).prop_placement || '').trim()
+  if (pp) detail.propPlacement = pp
+  const sam = String(raw.sceneAnchorMode || (raw as Record<string, unknown>).scene_anchor_mode || '').trim()
+  if (sam === 'auto' || sam === 'off') detail.sceneAnchorMode = sam
   const nr = String(raw.nonSpeakingReaction || (raw as Record<string, unknown>).non_speaking_reaction || '').trim()
   if (nr) detail.nonSpeakingReaction = nr
   const sfx = String(raw.sfxAmbience || (raw as Record<string, unknown>).sfx_ambience || '').trim()

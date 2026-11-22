@@ -4,22 +4,24 @@ ReelStar adalah studio produksi drama pendek (short drama) multi-episode (9:16 v
 Satu serial (proyek) terdiri dari banyak episode yang berbagi aset cerita di **Lorebook**, dikelola melalui **Episode Hub**, dan diproduksi per episode di **Studio Episode**.
 
 ```
-Sumber Cerita (Novel / Naskah Jadi) 
+Sumber Cerita (Novel / Naskah Jadi)
            │
            ▼
      [Episode Hub] ──► Rencana Episode (Hook, Cliffhanger, Story Beats)
+           │            └─► Otomatis lanjut ke ekstrak Lorebook jika masih kosong
+           ▼
+  [Dunia & Pemeran] ──► 3 Tab: Pemeran (Karakter + Varian) · Dunia (Lokasi + Prop) · Aturan Serial
            │
            ▼
-      [Lorebook] ────► Karakter (3-tampak) + Varian Kostum + Lokasi + Prop
+   [Studio Episode] (2 Tab)
+   ├─► Produksi (Terpadu: Susun Shot → Setujui Aset Inline → Prompt Otomatis
+   │             • Tombol terpisah: Buat Gambar [Smart Dependency Lembar→Gambar] · Buat Video · Buat TTS
+   │             • Seleksi multi-shot, Progressive Disclosure Doctor/Kunci/Versi, Pratinjau Animatic)
+   └─► Editor & Rilis (Bar Finishing Drama: Auto-Trim Hening · Smart AI SFX · Musik ElevenLabs,
+                       Timeline Multi-Track, Safe Zone 9:16, Caption Whisper)
            │
            ▼
-   [Studio Episode]
-   ├─► Rencana & Tinjau (Daftar Shot, Balon Dialog, Usulan Aset Baru)
-   ├─► Storyboard (Prompt Visual Berlabel, Lembar Referensi, Generate)
-   └─► Editor (Timeline, Player Sinkron, Audio Dialog/TTS, Caption Whisper)
-           │
-           ▼
-     Ekspor MP4 per Episode (<Judul Serial> - Ep <N>.mp4)
+     Ekspor MP4 & Paket Pengiriman ZIP per Episode (<Judul Serial> - Ep <N>.mp4)
 ```
 
 ---
@@ -79,28 +81,26 @@ Lorebook menyimpan seluruh entitas cerita serial yang dapat dirujuk di setiap ep
 
 ---
 
-## 4. Studio Episode: Rencana & Tinjau
+## 4. Studio Episode: Produksi Terpadu (`ProductionStep.tsx`, `ShotCard.tsx`, `generation.ts`, `story.ts`)
 
-Langkah penyusunan struktur adegan per episode:
-- Daftar shot berurutan dengan durasi, framing, dan lokasi.
-- Balon ucapan dialog dengan pembicara dan emosi; balon narator untuk deskripsi alur.
-- Chip rujukan karakter, kostum varian, lokasi, dan prop.
-- Peringatan shot interaktif (ucapan terlalu panjang untuk durasi, pembicara tidak terlihat di framing, atau aset belum terdaftar).
-- Panel aset baru: Menampilkan entitas baru yang diusulkan oleh naskah dengan pilihan Buat Baru, Gabung, atau Abaikan.
-- Tombol **Konfirmasi Rencana**: Mendaftarkan aset baru dan mengubah draft menjadi klip resmi episode dalam satu transaksi database aman.
-
----
-
-## 5. Storyboard & Prompt Visual (`StoryboardStep.tsx`, `generation.ts`, `story.ts`)
-
-Penyusunan gambar dan video AI:
-- **Prompt Berlabel**: Disusun dari setting lokasi, aksi karakter, wardrobe kostum varian, komposisi framing, dan hal yang dihindari (Avoid).
-- **Status Hasil**: Setiap klip memiliki status yang dihitung dari hash basis input:
-  - *Terkini*: Hasil cocok dengan input sekarang.
-  - *Basi*: Input prompt atau lembar referensi berubah sejak gambar/video dibuat.
-  - *Belum Ada*: Klip belum memiliki gambar/video.
-  - *Terblokir*: Syarat referensi atau durasi belum terpenuhi.
-- **Batch Generator**: Tombol "Buat yang belum ada" dengan dialog estimasi kredit Higgsfield/Flow2API.
+Tab **Produksi** menyatukan penyusunan naskah shot, tinjauan aset baru, prompt visual, dan generasi media ke satu
+kanvas tanpa bolak-balik antar tab:
+- **Susun Shot & Prompt (1 alur)**: `story:planEpisodeScript` menghasilkan draf shot dan usulan aset baru. Usulan aset
+  tampil sebagai banner inline (`NewAssetsBanner.tsx`). Saat dikonfirmasi (`story:confirmEpisodeScript`), sistem
+  otomatis melanjutkan ke `story:writePrompts` untuk mengisi prompt visual & video yang kosong.
+- **Pemisahan tegas tombol generasi**: `Buat Gambar`, `Buat Video`, dan `Buat TTS` berdiri terpisah di toolbar atas,
+  bar seleksi multi-shot, dan tiap kartu shot (`ShotCard.tsx`).
+- **Smart Dependency Batch (khusus Gambar)**: saat kreator klik `Buat Gambar`, lembar Lorebook terdaftar yang masih
+  kosong otomatis dijadwalkan di Tahap 1 (Gelombang 1 karakter/lokasi/prop → Gelombang 2 varian kostum) sebelum
+  Gelombang 3 gambar shot, tanpa memaksa keluar ke Lorebook. Untuk batch Video, shot tanpa gambar tetap dilewati agar
+  kredit video tidak terpakai tanpa persetujuan gambar.
+- **Progressive Disclosure**: Dokter Naskah (`Cek Naskah`), Kunci Kontinuitas (`Kunci`), Riwayat Snapshot (`Versi`),
+  dan Bar Ritme tampil sebagai pill ringkas di sub-header; `Detail & Prompt` beserta override referensi per shot
+  dilipat per kartu.
+- **Pratinjau Animatic (`AnimaticPreviewModal.tsx`)**: memutar urutan gambar/video, audio, dan subtitle langsung di
+  Tab Produksi sebelum membakar kredit Video AI.
+- **Status Hasil**: setiap klip menampilkan badge status Gambar dan Video terpisah (`Terkini`, `Basi`, `Belum`,
+  `Terblokir`) dari hash basis input.
 
 ---
 
