@@ -10,13 +10,13 @@ import {
   collectReferenceSheets,
   compileClipPrompt,
   compileClipVideoPrompt,
-  findPlannedAnchorClipId,
   findSceneAnchorForClip,
   formatCharacterTraits,
   formatLocationDetails,
   formatPropDetails,
   type ReferenceSheetItem
 } from '@shared/prompts'
+import { resolveClipTtsVoice } from '@shared/models'
 import { resolveActive, withActiveTts } from '@shared/providers'
 import {
   computeClipTtsBasisHash,
@@ -263,19 +263,24 @@ async function waitForSheets(characterIds: string[], signal: AbortSignal): Promi
 }
 
 /**
- * When a shot belongs to the same contiguous location block as an earlier anchor shot whose image is
- * currently generating (e.g. during a batch), wait without holding a queue slot so this POV shot
+ * When a shot belongs to the same contiguous location block as earlier shots whose images are
+ * currently generating (e.g. during a full or partial batch), wait without holding a queue slot so this POV shot
  * inherits the freshly rendered Scene Continuity Anchor image for consistent background & prop placement.
  */
 async function waitForSceneAnchorImage(clip: Clip, signal: AbortSignal, onWait?: () => void): Promise<void> {
   if (!clip.locationId || clip.shotDetail?.sceneAnchorMode === 'off') return
-  const episodeClips = clipsOf(clip.projectId, clip.episodeId)
-  const anchorId = findPlannedAnchorClipId(clip, episodeClips)
-  if (!anchorId || anchorId === clip.id) return
+  if (Array.isArray(clip.referenceAssetIds) && clip.referenceAssetIds.length > 0) return
+  const episodeClips = clipsOf(clip.projectId, clip.episodeId).sort((a, b) => a.sort - b.sort)
+  const pos = episodeClips.findIndex((c) => c.id === clip.id)
+  if (pos <= 0) return
+  let start = pos
+  while (start > 0 && episodeClips[start - 1].locationId === clip.locationId) start--
+  const earlierIds = episodeClips.slice(start, pos).map((c) => c.id)
+  if (!earlierIds.length) return
   const started = Date.now()
   let notified = false
   while (Date.now() - started < 15 * 60 * 1000) {
-    if (!activeJobFor({ clipId: anchorId }, 'image')) return
+    if (!earlierIds.some((id) => activeJobFor({ clipId: id }, 'image'))) return
     if (!notified) {
       notified = true
       onWait?.()
@@ -287,7 +292,7 @@ async function waitForSceneAnchorImage(clip: Clip, signal: AbortSignal, onWait?:
 /**
  * When a shot continues from the previous shot's last frame and the previous shot's video is currently
  * generating (e.g. during a batch), wait for that video to finish so we extract its real final frame
- * instead of falling back to its static storyboard image.
+ * instead of falling back to its static storyboard image. Fails if the predecessor fails or is canceled.
  */
 async function waitForPreviousClipVideo(clip: Clip, signal: AbortSignal, onWait?: () => void): Promise<void> {
   if (!clip.continueFromPrevious) return
@@ -295,15 +300,21 @@ async function waitForPreviousClipVideo(clip: Clip, signal: AbortSignal, onWait?
   const idx = episodeClips.findIndex((c) => c.id === clip.id)
   if (idx <= 0) return
   const prevId = episodeClips[idx - 1].id
+  const prevJob = activeJobFor({ clipId: prevId }, 'video')
+  if (!prevJob) return
   const started = Date.now()
   let notified = false
   while (Date.now() - started < 15 * 60 * 1000) {
-    if (!activeJobFor({ clipId: prevId }, 'video')) return
+    if (!activeJobFor({ clipId: prevId }, 'video')) break
     if (!notified) {
       notified = true
       onWait?.()
     }
     await sleep(2000, signal)
+  }
+  const finalStatus = getJob(prevJob.id)?.status
+  if (finalStatus === 'failed' || finalStatus === 'canceled') {
+    throw new Error('Video shot sebelumnya gagal atau dibatalkan, sehingga shot sambungan dihentikan.')
   }
 }
 
@@ -341,6 +352,7 @@ interface HfPayload {
   basisHash?: string
   credits?: number
   autoTrimSilence?: boolean
+  requestedSeconds?: number
 }
 
 /**
@@ -502,7 +514,8 @@ async function finishHiggsfield(ctx: TaskCtx, job: Job, requestId: string, paylo
       ...(payload.target === 'thumbnail' ? { thumbnail: true } : {}),
       ...(payload.resolution ? { resolution: payload.resolution } : {}),
       ...(payload.basisHash ? { basisHash: payload.basisHash } : {}),
-      ...(typeof payload.credits === 'number' ? { credits: payload.credits } : {})
+      ...(typeof payload.credits === 'number' ? { credits: payload.credits } : {}),
+      ...(typeof payload.requestedSeconds === 'number' ? { requestedSeconds: payload.requestedSeconds } : {})
     }
   })
   emit.asset(asset)
@@ -582,15 +595,36 @@ function isFlow2Api(): boolean {
 }
 
 /** Everything the shared status and prerequisite rules read, gathered once per call. */
-/** The image model picked under Pengaturan › Model aktif; projects no longer choose their own (Tugas 54). */
+/** The normalized image model picked under Pengaturan › Model aktif; projects no longer choose their own (Tugas 54). */
 function activeImageModelId(): string {
-  return resolveActive(getSettings(), 'image').model
+  const active = resolveActive(getSettings(), 'image')
+  const raw = active.model.trim()
+  if (active.provider.protocol === 'flow2api') {
+    return raw || getFlow2ApiModel(null, 'image').id
+  }
+  return getImageModel(raw).id
+}
+
+function activeVideoModelId(): string {
+  const active = resolveActive(getSettings(), 'video')
+  const raw = active.model.trim()
+  if (active.provider.protocol === 'flow2api') {
+    return raw || getFlow2ApiModel(null, 'video').id
+  }
+  return getVideoModel(raw).id
 }
 
 function prereqContext(projectId: string, episodeId?: string): GenerationPrerequisitesContext {
   const s = getSettings()
   const activeImage = resolveActive(s, 'image')
   const activeVideo = resolveActive(s, 'video')
+  const isFlow = activeImage.provider.protocol === 'flow2api'
+  const imgModel = isFlow
+    ? activeImage.model.trim() || getFlow2ApiModel(null, 'image').id
+    : getImageModel(activeImage.model.trim()).id
+  const vidModel = isFlow
+    ? activeVideo.model.trim() || getFlow2ApiModel(null, 'video').id
+    : getVideoModel(activeVideo.model.trim()).id
   let lockWords: LockWord[] = []
   try {
     const project = getProject(projectId)
@@ -599,6 +633,8 @@ function prereqContext(projectId: string, episodeId?: string): GenerationPrerequ
   } catch {
     // If project cannot be fetched, proceed with empty locks
   }
+  const activeJobs = activeJobsOf(projectId)
+  const queuedClipIds = new Set(activeJobs.filter((j) => j.kind === 'video' && j.clipId).map((j) => j.clipId!))
   return {
     characters: charactersOf(projectId),
     derivatives: derivativesOf(projectId),
@@ -606,13 +642,14 @@ function prereqContext(projectId: string, episodeId?: string): GenerationPrerequ
     props: propsOf(projectId),
     assets: assetsOf(projectId),
     clips: clipsOf(projectId, episodeId),
-    activeJobs: activeJobsOf(projectId),
-    isFlow2Api: activeImage.provider.protocol === 'flow2api',
-    flow2apiImageModel: activeImage.model,
-    flow2apiVideoModel: activeVideo.model,
-    activeImageModel: activeImage.model,
-    activeVideoModel: activeVideo.model,
-    lockWords
+    activeJobs,
+    isFlow2Api: isFlow,
+    flow2apiImageModel: imgModel,
+    flow2apiVideoModel: vidModel,
+    activeImageModel: imgModel,
+    activeVideoModel: vidModel,
+    lockWords,
+    queuedClipIds
   }
 }
 
@@ -671,7 +708,7 @@ export function generateClipImage(clipId: string): Job {
           }
         }
 
-        const baseModel = resolveActive(getSettings(), 'image').model
+        const baseModel = activeImageModelId()
         const modelId = resolveFlow2ApiModelId(baseModel, project.aspectRatio)
         const prompt = compileClipPrompt({
           project,
@@ -807,72 +844,88 @@ function thumbnailPrompt(project: Project, req: ThumbnailRequest, chars: Charact
 }
 
 export function generateThumbnail(projectId: string, req: ThumbnailRequest): Job {
-  const project = getProject(projectId)
   const variation = req.variation
   const chars = leadCharacters(projectId, 2)
+  const waitForLeadSheets = async (ctx: TaskCtx): Promise<void> => {
+    await waitForSheets(chars.map((c) => c.id), ctx.signal)
+  }
+
   if (isFlow2Api()) {
     const job = insertJob({ projectId, kind: 'image', provider: 'flow2api', payload: { target: 'thumbnail', variation } })
     emit.job(job)
-    return runJob(job, 'flow2api', async (ctx) => {
-      await waitForSheets(chars.map((c) => c.id), ctx.signal)
-      const refBuffers: Buffer[] = []
-      const refNames: string[] = []
-      for (const c of chars) {
-        const sheet = getAsset(getCharacter(c.id).sheetAssetId)
-        const abs = sheet && assetAbsPath(projectId, sheet.localPath)
-        if (abs && existsSync(abs)) {
-          refBuffers.push(readFileSync(abs))
-          refNames.push(c.name)
+    return runJob(
+      job,
+      'flow2api',
+      async (ctx) => {
+        const project = getProject(projectId)
+        const refBuffers: Buffer[] = []
+        const refNames: string[] = []
+        for (const c of chars) {
+          const freshChar = getCharacter(c.id)
+          const sheet = getAsset(freshChar.sheetAssetId)
+          const abs = sheet && assetAbsPath(projectId, sheet.localPath)
+          if (abs && existsSync(abs)) {
+            refBuffers.push(readFileSync(abs))
+            refNames.push(freshChar.name)
+          }
         }
-      }
-      const variedPrompt = thumbnailPrompt(project, req, chars, refNames)
-      const baseModel = resolveActive(getSettings(), 'image').model
-      const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
-      const { mediaUrl } = await f2a.generateImage({ prompt: variedPrompt, model: modelId, referenceImages: refBuffers, signal: ctx.signal, onProgress: (progress, message) => ctx.progress(progress, message) })
-      const downloadStartedAt = Date.now()
-      const { bytes, contentType } = await downloadTo(mediaUrl, ctx.signal)
-      if (ctx.signal.aborted) throw new Error('Dibatalkan')
-      console.info('[flow2api] thumbnail download completed', { elapsedMs: Date.now() - downloadStartedAt, bytes: bytes.length })
-      const rel = saveFile(projectId, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
-      const size = await probeSize(assetAbsPath(projectId, rel))
-      if (ctx.signal.aborted) throw new Error('Dibatalkan')
-      const asset = insertAsset({ projectId, kind: 'image', provider: 'flow2api', model: modelId, prompt: variedPrompt, remoteUrl: mediaUrl, localPath: rel, width: size?.width ?? null, height: size?.height ?? null, meta: { thumbnail: true } })
-      emit.asset(asset)
-      return asset.id
-    })
+        const variedPrompt = thumbnailPrompt(project, req, chars, refNames)
+        const baseModel = activeImageModelId()
+        const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
+        const { mediaUrl } = await f2a.generateImage({ prompt: variedPrompt, model: modelId, referenceImages: refBuffers, signal: ctx.signal, onProgress: (progress, message) => ctx.progress(progress, message) })
+        const downloadStartedAt = Date.now()
+        const { bytes, contentType } = await downloadTo(mediaUrl, ctx.signal)
+        if (ctx.signal.aborted) throw new Error('Dibatalkan')
+        console.info('[flow2api] thumbnail download completed', { elapsedMs: Date.now() - downloadStartedAt, bytes: bytes.length })
+        const rel = saveFile(projectId, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
+        const size = await probeSize(assetAbsPath(projectId, rel))
+        if (ctx.signal.aborted) throw new Error('Dibatalkan')
+        const asset = insertAsset({ projectId, kind: 'image', provider: 'flow2api', model: modelId, prompt: variedPrompt, remoteUrl: mediaUrl, localPath: rel, width: size?.width ?? null, height: size?.height ?? null, meta: { thumbnail: true } })
+        emit.asset(asset)
+        return asset.id
+      },
+      waitForLeadSheets
+    )
   }
   const job = insertJob({ projectId, kind: 'image', provider: 'higgsfield', payload: { target: 'thumbnail', variation } })
-  return startHiggsfield(job, async (ctx) => {
-    const model = getImageModel(activeImageModelId())
-    const refs = await resolveReferenceUrls(
-      model,
-      chars.map((c) => ({ kind: 'character' as const, id: c.id, sheetAssetId: c.sheetAssetId || '', name: c.name })),
-      ctx.signal
-    )
-    const variedPrompt = thumbnailPrompt(project, req, chars, refs.names)
-    return {
-      endpoint: model.id,
-      body: imageBody(model, variedPrompt, '16:9', refs.urls),
-      payload: { target: 'thumbnail', model: model.id, prompt: variedPrompt }
-    }
-  })
+  return startHiggsfield(
+    job,
+    async (ctx) => {
+      const project = getProject(projectId)
+      const freshChars = chars.map((c) => getCharacter(c.id))
+      const model = getImageModel(activeImageModelId())
+      const refs = await resolveReferenceUrls(
+        model,
+        freshChars.map((c) => ({ kind: 'character' as const, id: c.id, sheetAssetId: c.sheetAssetId || '', name: c.name })),
+        ctx.signal
+      )
+      const variedPrompt = thumbnailPrompt(project, req, freshChars, refs.names)
+      return {
+        endpoint: model.id,
+        body: imageBody(model, variedPrompt, '16:9', refs.urls),
+        payload: { target: 'thumbnail', model: model.id, prompt: variedPrompt }
+      }
+    },
+    waitForLeadSheets
+  )
 }
 
 export function generateCharacterSheet(characterId: string): Job {
   const existing = activeJobFor({ characterId }, 'sheet')
   if (existing) return existing
   const c = getCharacter(characterId)
-  const project = getProject(c.projectId)
-  // The same function the Lorebook badge uses, so a fresh sheet is never "stale" the moment it lands.
-  const basisHash = getCharacterSheetStatus(c, project, [], activeImageModelId()).basisHash
 
   if (isFlow2Api()) {
     const job = insertJob({ projectId: c.projectId, characterId, kind: 'sheet', provider: 'flow2api' })
     emit.job(job)
     return runJob(job, 'flow2api', async (ctx) => {
-      const prompt = sheetPrompt(project, getCharacter(characterId))
-      const baseModel = resolveActive(getSettings(), 'image').model
+      const freshChar = getCharacter(characterId)
+      const freshProject = getProject(freshChar.projectId)
+      const baseModel = activeImageModelId()
       const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
+      const prompt = sheetPrompt(freshProject, freshChar)
+      // Recomputed inside runJob from fresh data so queued edits never stamp a stale basisHash.
+      const basisHash = getCharacterSheetStatus(freshChar, freshProject, [], baseModel).basisHash
 
       ctx.progress(0.04, 'Menyiapkan prompt lembar karakter Flow2API')
       const { mediaUrl } = await f2a.generateImage({
@@ -887,12 +940,12 @@ export function generateCharacterSheet(characterId: string): Job {
       const { bytes, contentType } = await downloadTo(mediaUrl, ctx.signal)
       if (ctx.signal.aborted) throw new Error('Dibatalkan')
       console.info('[flow2api] character sheet download completed', { elapsedMs: Date.now() - downloadStartedAt, bytes: bytes.length })
-      const rel = saveFile(project.id, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
-      const abs = assetAbsPath(project.id, rel)
+      const rel = saveFile(freshProject.id, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
+      const abs = assetAbsPath(freshProject.id, rel)
       const size = await probeSize(abs)
       if (ctx.signal.aborted) throw new Error('Dibatalkan')
       const asset = insertAsset({
-        projectId: project.id,
+        projectId: freshProject.id,
         characterId,
         kind: 'image',
         provider: 'flow2api',
@@ -907,15 +960,18 @@ export function generateCharacterSheet(characterId: string): Job {
       setCharacterSheet(characterId, asset.id)
       emit.character({ characterId, patch: { sheetAssetId: asset.id } })
       emit.asset(asset)
-      touchProject(c.projectId)
+      touchProject(freshChar.projectId)
       return asset.id
     })
   }
 
   const job = insertJob({ projectId: c.projectId, characterId, kind: 'sheet', provider: 'higgsfield' })
   return startHiggsfield(job, async () => {
+    const freshChar = getCharacter(characterId)
+    const freshProject = getProject(freshChar.projectId)
     const model = getImageModel(activeImageModelId())
-    const prompt = sheetPrompt(project, getCharacter(characterId))
+    const prompt = sheetPrompt(freshProject, freshChar)
+    const basisHash = getCharacterSheetStatus(freshChar, freshProject, [], model.id).basisHash
     return {
       endpoint: model.id,
       body: imageBody(model, prompt, '16:9', []),
@@ -925,6 +981,8 @@ export function generateCharacterSheet(characterId: string): Job {
 }
 
 export function generateDerivativeSheet(derivativeId: string): Job {
+  const existing = activeJobFor({ derivativeId }, 'sheet')
+  if (existing) return existing
   const d = getDerivative(derivativeId)
   if (!d) throw new Error('Varian kostum tidak ditemukan')
   const c = getCharacter(d.characterId)
@@ -932,19 +990,24 @@ export function generateDerivativeSheet(derivativeId: string): Job {
   const baseSheet = getAsset(c.sheetAssetId)
   if (!baseSheet) throw new Error('Lembar karakter dasar tidak ditemukan.')
 
-  const project = getProject(c.projectId)
-  const prompt = derivativeSheetPrompt(project, c, d)
-  const basisHash = getDerivativeSheetStatus(d, c, project, [], false, activeImageModelId()).basisHash
-
   if (isFlow2Api()) {
     const job = insertJob({ projectId: c.projectId, characterId: c.id, kind: 'sheet', provider: 'flow2api', payload: { target: 'derivative-sheet', derivativeId } })
     emit.job(job)
     return runJob(job, 'flow2api', async (ctx) => {
-      const baseModel = resolveActive(getSettings(), 'image').model
+      const freshD = getDerivative(derivativeId)
+      if (!freshD) throw new Error('Varian kostum tidak ditemukan')
+      const freshC = getCharacter(freshD.characterId)
+      if (!freshC.sheetAssetId) throw new Error('Buat lembar karakter dasar terlebih dahulu sebelum membuat varian kostum.')
+      const freshBaseSheet = getAsset(freshC.sheetAssetId)
+      if (!freshBaseSheet) throw new Error('Lembar karakter dasar tidak ditemukan.')
+      const freshProject = getProject(freshC.projectId)
+      const baseModel = activeImageModelId()
       const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
+      const prompt = derivativeSheetPrompt(freshProject, freshC, freshD)
+      const basisHash = getDerivativeSheetStatus(freshD, freshC, freshProject, [], false, baseModel).basisHash
 
       const refBuffers: Buffer[] = []
-      const absSheet = assetAbsPath(project.id, baseSheet.localPath)
+      const absSheet = assetAbsPath(freshProject.id, freshBaseSheet.localPath)
       if (existsSync(absSheet)) {
         refBuffers.push(readFileSync(absSheet))
       }
@@ -961,14 +1024,14 @@ export function generateDerivativeSheet(derivativeId: string): Job {
       ctx.progress(0.93, 'Mengunduh lembar varian')
       const { bytes, contentType } = await downloadTo(mediaUrl, ctx.signal)
       if (ctx.signal.aborted) throw new Error('Dibatalkan')
-      const rel = saveFile(project.id, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
-      const abs = assetAbsPath(project.id, rel)
+      const rel = saveFile(freshProject.id, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
+      const abs = assetAbsPath(freshProject.id, rel)
       const size = await probeSize(abs)
       if (ctx.signal.aborted) throw new Error('Dibatalkan')
       const asset = insertAsset({
-        projectId: project.id,
-        characterId: c.id,
-        derivativeId: d.id,
+        projectId: freshProject.id,
+        characterId: freshC.id,
+        derivativeId: freshD.id,
         kind: 'image',
         provider: 'flow2api',
         model: modelId,
@@ -979,17 +1042,26 @@ export function generateDerivativeSheet(derivativeId: string): Job {
         height: size?.height ?? null,
         meta: { basisHash }
       })
-      setDerivativeSheet(d.id, asset.id)
+      setDerivativeSheet(freshD.id, asset.id)
       emit.asset(asset)
-      touchProject(c.projectId)
+      touchProject(freshC.projectId)
       return asset.id
     })
   }
 
   const job = insertJob({ projectId: c.projectId, characterId: c.id, kind: 'sheet', provider: 'higgsfield', payload: { target: 'derivative-sheet', derivativeId } })
   return startHiggsfield(job, async (ctx) => {
+    const freshD = getDerivative(derivativeId)
+    if (!freshD) throw new Error('Varian kostum tidak ditemukan')
+    const freshC = getCharacter(freshD.characterId)
+    if (!freshC.sheetAssetId) throw new Error('Buat lembar karakter dasar terlebih dahulu sebelum membuat varian kostum.')
+    const freshBaseSheet = getAsset(freshC.sheetAssetId)
+    if (!freshBaseSheet) throw new Error('Lembar karakter dasar tidak ditemukan.')
+    const freshProject = getProject(freshC.projectId)
     const model = getImageModel(activeImageModelId())
-    const refUrl = await publicUrlFor(baseSheet, ctx.signal)
+    const prompt = derivativeSheetPrompt(freshProject, freshC, freshD)
+    const basisHash = getDerivativeSheetStatus(freshD, freshC, freshProject, [], false, model.id).basisHash
+    const refUrl = await publicUrlFor(freshBaseSheet, ctx.signal)
     return {
       endpoint: model.id,
       body: imageBody(model, prompt, '16:9', [refUrl]),
@@ -999,18 +1071,22 @@ export function generateDerivativeSheet(derivativeId: string): Job {
 }
 
 export function generateLocationSheet(locationId: string): Job {
+  const existing = activeJobFor({ locationId }, 'image')
+  if (existing) return existing
   const l = getLocation(locationId)
   if (!l) throw new Error('Lokasi tidak ditemukan')
-  const project = getProject(l.projectId)
-  const prompt = locationSheetPrompt(project, l)
-  const basisHash = getLocationSheetStatus(l, project, [], activeImageModelId()).basisHash
 
   if (isFlow2Api()) {
     const job = insertJob({ projectId: l.projectId, kind: 'image', provider: 'flow2api', payload: { target: 'location-sheet', locationId } })
     emit.job(job)
     return runJob(job, 'flow2api', async (ctx) => {
-      const baseModel = resolveActive(getSettings(), 'image').model
+      const freshL = getLocation(locationId)
+      if (!freshL) throw new Error('Lokasi tidak ditemukan')
+      const freshProject = getProject(freshL.projectId)
+      const baseModel = activeImageModelId()
       const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
+      const prompt = locationSheetPrompt(freshProject, freshL)
+      const basisHash = getLocationSheetStatus(freshL, freshProject, [], baseModel).basisHash
 
       ctx.progress(0.04, 'Menyiapkan prompt lembar lokasi Flow2API')
       const { mediaUrl } = await f2a.generateImage({
@@ -1023,13 +1099,13 @@ export function generateLocationSheet(locationId: string): Job {
       ctx.progress(0.93, 'Mengunduh lembar lokasi')
       const { bytes, contentType } = await downloadTo(mediaUrl, ctx.signal)
       if (ctx.signal.aborted) throw new Error('Dibatalkan')
-      const rel = saveFile(project.id, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
-      const abs = assetAbsPath(project.id, rel)
+      const rel = saveFile(freshProject.id, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
+      const abs = assetAbsPath(freshProject.id, rel)
       const size = await probeSize(abs)
       if (ctx.signal.aborted) throw new Error('Dibatalkan')
       const asset = insertAsset({
-        projectId: project.id,
-        locationId: l.id,
+        projectId: freshProject.id,
+        locationId: freshL.id,
         kind: 'image',
         provider: 'flow2api',
         model: modelId,
@@ -1040,16 +1116,21 @@ export function generateLocationSheet(locationId: string): Job {
         height: size?.height ?? null,
         meta: { basisHash }
       })
-      setLocationSheet(l.id, asset.id)
+      setLocationSheet(freshL.id, asset.id)
       emit.asset(asset)
-      touchProject(l.projectId)
+      touchProject(freshL.projectId)
       return asset.id
     })
   }
 
   const job = insertJob({ projectId: l.projectId, kind: 'image', provider: 'higgsfield', payload: { target: 'location-sheet', locationId } })
   return startHiggsfield(job, async () => {
+    const freshL = getLocation(locationId)
+    if (!freshL) throw new Error('Lokasi tidak ditemukan')
+    const freshProject = getProject(freshL.projectId)
     const model = getImageModel(activeImageModelId())
+    const prompt = locationSheetPrompt(freshProject, freshL)
+    const basisHash = getLocationSheetStatus(freshL, freshProject, [], model.id).basisHash
     return {
       endpoint: model.id,
       body: imageBody(model, prompt, '16:9', []),
@@ -1059,18 +1140,22 @@ export function generateLocationSheet(locationId: string): Job {
 }
 
 export function generatePropSheet(propId: string): Job {
+  const existing = activeJobFor({ propId }, 'image')
+  if (existing) return existing
   const pr = getProp(propId)
   if (!pr) throw new Error('Prop tidak ditemukan')
-  const project = getProject(pr.projectId)
-  const prompt = propSheetPrompt(project, pr)
-  const basisHash = getPropSheetStatus(pr, project, [], activeImageModelId()).basisHash
 
   if (isFlow2Api()) {
     const job = insertJob({ projectId: pr.projectId, kind: 'image', provider: 'flow2api', payload: { target: 'prop-sheet', propId } })
     emit.job(job)
     return runJob(job, 'flow2api', async (ctx) => {
-      const baseModel = resolveActive(getSettings(), 'image').model
+      const freshPr = getProp(propId)
+      if (!freshPr) throw new Error('Prop tidak ditemukan')
+      const freshProject = getProject(freshPr.projectId)
+      const baseModel = activeImageModelId()
       const modelId = resolveFlow2ApiModelId(baseModel, '16:9')
+      const prompt = propSheetPrompt(freshProject, freshPr)
+      const basisHash = getPropSheetStatus(freshPr, freshProject, [], baseModel).basisHash
 
       ctx.progress(0.04, 'Menyiapkan prompt lembar prop Flow2API')
       const { mediaUrl } = await f2a.generateImage({
@@ -1083,13 +1168,13 @@ export function generatePropSheet(propId: string): Job {
       ctx.progress(0.93, 'Mengunduh lembar prop')
       const { bytes, contentType } = await downloadTo(mediaUrl, ctx.signal)
       if (ctx.signal.aborted) throw new Error('Dibatalkan')
-      const rel = saveFile(project.id, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
-      const abs = assetAbsPath(project.id, rel)
+      const rel = saveFile(freshProject.id, 'images', extFromType(contentType, mediaUrl, '.png'), bytes)
+      const abs = assetAbsPath(freshProject.id, rel)
       const size = await probeSize(abs)
       if (ctx.signal.aborted) throw new Error('Dibatalkan')
       const asset = insertAsset({
-        projectId: project.id,
-        propId: pr.id,
+        projectId: freshProject.id,
+        propId: freshPr.id,
         kind: 'image',
         provider: 'flow2api',
         model: modelId,
@@ -1100,16 +1185,21 @@ export function generatePropSheet(propId: string): Job {
         height: size?.height ?? null,
         meta: { basisHash }
       })
-      setPropSheet(pr.id, asset.id)
+      setPropSheet(freshPr.id, asset.id)
       emit.asset(asset)
-      touchProject(pr.projectId)
+      touchProject(freshPr.projectId)
       return asset.id
     })
   }
 
   const job = insertJob({ projectId: pr.projectId, kind: 'image', provider: 'higgsfield', payload: { target: 'prop-sheet', propId } })
   return startHiggsfield(job, async () => {
+    const freshPr = getProp(propId)
+    if (!freshPr) throw new Error('Prop tidak ditemukan')
+    const freshProject = getProject(freshPr.projectId)
     const model = getImageModel(activeImageModelId())
+    const prompt = propSheetPrompt(freshProject, freshPr)
+    const basisHash = getPropSheetStatus(freshPr, freshProject, [], model.id).basisHash
     return {
       endpoint: model.id,
       body: imageBody(model, prompt, '16:9', []),
@@ -1129,9 +1219,10 @@ async function resolveInitialImageForClip(
       const prev = episodeClips[idx - 1]
       if (prev.videoAssetId) {
         const videoAsset = getAsset(prev.videoAssetId)
-        if (videoAsset) {
-          const videoAbs = assetAbsPath(project.id, videoAsset.localPath)
-          const frameRel = `images/lastframe-${fresh.id}.png`
+        const videoAbs = videoAsset ? assetAbsPath(project.id, videoAsset.localPath) : null
+        if (videoAsset && videoAbs && existsSync(videoAbs)) {
+          // Unique filename + isReference flag so regenerating never overwrites prior assets or pollutes clip image history.
+          const frameRel = `images/lastframe-${randomUUID()}.png`
           const frameAbs = assetAbsPath(project.id, frameRel)
           mkdirSync(dirname(frameAbs), { recursive: true })
           await extractLastFrame(videoAbs, frameAbs)
@@ -1145,16 +1236,17 @@ async function resolveInitialImageForClip(
             localPath: frameRel,
             width: size?.width ?? null,
             height: size?.height ?? null,
-            meta: { extractedFromVideo: prev.videoAssetId }
+            meta: { extractedFromVideo: prev.videoAssetId, isReference: true, extractedLastFrame: true }
           })
           emit.asset(frameAsset)
           const buf = readFileSync(frameAbs)
           return { buffer: buf, asset: frameAsset, prevAssetId: videoAsset.id }
         }
-      } else if (prev.imageAssetId) {
+      }
+      if (prev.imageAssetId) {
         const imgAsset = getAsset(prev.imageAssetId)
-        if (imgAsset) {
-          const abs = assetAbsPath(project.id, imgAsset.localPath)
+        const abs = imgAsset ? assetAbsPath(project.id, imgAsset.localPath) : null
+        if (imgAsset && abs && existsSync(abs)) {
           const buf = readFileSync(abs)
           return { buffer: buf, asset: imgAsset, prevAssetId: imgAsset.id }
         }
@@ -1180,104 +1272,134 @@ export function generateClipVideo(clipId: string, autoTrimSilence = true): Job {
     throw new Error(`Syarat generate video tidak terpenuhi:\n- ${prereqs.blockers.join('\n- ')}`)
   }
 
+  // Run beforeQueue outside the concurrency slot so chained continueFromPrevious clips never deadlock the queue.
+  const waitForPrevVideo = async (ctx: TaskCtx): Promise<void> => {
+    await waitForPreviousClipVideo(getClip(clipId), ctx.signal, () =>
+      ctx.progress(0.02, 'Menunggu video shot sebelumnya selesai')
+    )
+  }
+
   if (isFlow2Api()) {
     const job = insertJob({ projectId: clip.projectId, clipId, kind: 'video', provider: 'flow2api' })
     emit.job(job)
-    return runJob(job, 'flow2api', async (ctx) => {
-      await waitForPreviousClipVideo(getClip(clipId), ctx.signal, () => ctx.progress(0.02, 'Menunggu video shot sebelumnya selesai'))
-      const fresh = getClip(clipId)
-      const project = getProject(fresh.projectId)
-      const allChars = charactersOf(project.id)
-      const initial = await resolveInitialImageForClip(fresh, project)
+    return runJob(
+      job,
+      'flow2api',
+      async (ctx) => {
+        const fresh = getClip(clipId)
+        const project = getProject(fresh.projectId)
+        const allChars = charactersOf(project.id)
+        const pctx = prereqContext(project.id, fresh.episodeId)
+        const durationSec = videoSecondsFor(project, fresh, pctx).seconds
+        const baseModel = activeVideoModelId()
+        const video = resolveFlow2ApiVideo(baseModel, project.aspectRatio, durationSec)
+        const modelId = video.model
+        // Skip initial image resolution for text-to-video models that ignore reference frames.
+        const initial = video.withImage ? await resolveInitialImageForClip(fresh, project) : null
 
-      const pctx = prereqContext(project.id, fresh.episodeId)
-      const durationSec = videoSecondsFor(project, fresh, pctx).seconds
-      const baseModel = resolveActive(getSettings(), 'video').model
-      const video = resolveFlow2ApiVideo(baseModel, project.aspectRatio, durationSec)
-      const modelId = video.model
+        const prompt = compileClipVideoPrompt(project, fresh, allChars, pctx.lockWords || [], 2000)
+        const basisHash = computeClipVideoBasisHash({
+          project: { ...project, videoModel: baseModel },
+          clip: fresh,
+          characters: allChars,
+          seconds: durationSec,
+          prevAssetId: initial?.prevAssetId ?? null,
+          lockWords: pctx.lockWords,
+          videoModel: baseModel
+        })
 
-      const prompt = compileClipVideoPrompt(project, fresh, allChars, pctx.lockWords || [], 2000)
-      const basisHash = computeClipVideoBasisHash({ project: { ...project, videoModel: baseModel }, clip: fresh, characters: allChars, seconds: durationSec, prevAssetId: initial.prevAssetId, lockWords: pctx.lockWords, videoModel: baseModel })
+        ctx.progress(0.04, baseModel.toLowerCase().includes('omni') ? 'Menyiapkan video Flow2API (Omni)' : 'Menyiapkan video Flow2API (Veo)')
+        const { mediaUrl } = await f2a.generateVideo({
+          prompt,
+          model: modelId,
+          aspectRatio: video.aspectRatio,
+          durationSec: video.durationSec,
+          initialImage: initial?.buffer,
+          signal: ctx.signal,
+          onProgress: (p, msg) => ctx.progress(p, msg)
+        })
 
-      ctx.progress(0.04, baseModel.toLowerCase().includes('omni') ? 'Menyiapkan video Flow2API (Omni)' : 'Menyiapkan video Flow2API (Veo)')
-      const { mediaUrl } = await f2a.generateVideo({
-        prompt,
-        model: modelId,
-        aspectRatio: video.aspectRatio,
-        durationSec: video.durationSec,
-        initialImage: video.withImage ? initial.buffer : undefined,
-        signal: ctx.signal,
-        onProgress: (p, msg) => ctx.progress(p, msg)
-      })
-
-      ctx.progress(0.93, 'Mengunduh video hasil')
-      const downloadStartedAt = Date.now()
-      const { bytes, contentType } = await downloadTo(mediaUrl, ctx.signal)
-      if (ctx.signal.aborted) throw new Error('Dibatalkan')
-      console.info('[flow2api] video download completed', { elapsedMs: Date.now() - downloadStartedAt, bytes: bytes.length })
-      const rel = saveFile(project.id, 'videos', extFromType(contentType, mediaUrl, '.mp4'), bytes)
-      const abs = assetAbsPath(project.id, rel)
-      const size = await probeSize(abs)
-      const durationMs = await probeDurationMs(abs).catch(() => null)
-      if (ctx.signal.aborted) throw new Error('Dibatalkan')
-      const asset = insertAsset({
-        projectId: project.id,
-        clipId: fresh.id,
-        kind: 'video',
-        provider: 'flow2api',
-        model: modelId,
-        prompt,
-        remoteUrl: mediaUrl,
-        localPath: rel,
-        durationMs,
-        width: size?.width ?? null,
-        height: size?.height ?? null,
-        meta: { basisHash }
-      })
-      emit.asset(asset)
-      const patch = { videoAssetId: asset.id, motionType: 'video' as const, mediaInMs: 0 }
-      patchClip(clipId, patch)
-      emit.clip({ clipId, patch })
-      touchProject(project.id)
-      await extractVideoDialogueAudio(project.id, clipId, asset, ctx.signal, autoTrimSilence)
-      return asset.id
-    })
+        ctx.progress(0.93, 'Mengunduh video hasil')
+        const downloadStartedAt = Date.now()
+        const { bytes, contentType } = await downloadTo(mediaUrl, ctx.signal)
+        if (ctx.signal.aborted) throw new Error('Dibatalkan')
+        console.info('[flow2api] video download completed', { elapsedMs: Date.now() - downloadStartedAt, bytes: bytes.length })
+        const rel = saveFile(project.id, 'videos', extFromType(contentType, mediaUrl, '.mp4'), bytes)
+        const abs = assetAbsPath(project.id, rel)
+        const size = await probeSize(abs)
+        const durationMs = await probeDurationMs(abs).catch(() => null)
+        if (ctx.signal.aborted) throw new Error('Dibatalkan')
+        const asset = insertAsset({
+          projectId: project.id,
+          clipId: fresh.id,
+          kind: 'video',
+          provider: 'flow2api',
+          model: modelId,
+          prompt,
+          remoteUrl: mediaUrl,
+          localPath: rel,
+          durationMs,
+          width: size?.width ?? null,
+          height: size?.height ?? null,
+          meta: { basisHash, requestedSeconds: durationSec }
+        })
+        emit.asset(asset)
+        const patch = { videoAssetId: asset.id, motionType: 'video' as const, mediaInMs: 0 }
+        patchClip(clipId, patch)
+        emit.clip({ clipId, patch })
+        touchProject(project.id)
+        await extractVideoDialogueAudio(project.id, clipId, asset, ctx.signal, autoTrimSilence)
+        return asset.id
+      },
+      waitForPrevVideo
+    )
   }
 
   const job = insertJob({ projectId: clip.projectId, clipId, kind: 'video', provider: 'higgsfield' })
-  return startHiggsfield(job, async (ctx) => {
-    await waitForPreviousClipVideo(getClip(clipId), ctx.signal, () => ctx.progress(0.02, 'Menunggu video shot sebelumnya selesai'))
-    const fresh = getClip(clipId)
-    const project = getProject(fresh.projectId)
-    const pctx = prereqContext(project.id, fresh.episodeId)
-    const model = getVideoModel(pctx.activeVideoModel || project.videoModel)
-    const allChars = charactersOf(project.id)
-    const initial = await resolveInitialImageForClip(fresh, project)
+  return startHiggsfield(
+    job,
+    async (ctx) => {
+      const fresh = getClip(clipId)
+      const project = getProject(fresh.projectId)
+      const pctx = prereqContext(project.id, fresh.episodeId)
+      const model = getVideoModel(activeVideoModelId())
+      const allChars = charactersOf(project.id)
+      const initial = await resolveInitialImageForClip(fresh, project)
 
-    ctx.progress(0.05, 'Menyiapkan gambar awal')
-    const url = await publicUrlFor(initial.asset, ctx.signal)
-    let prompt = compileClipVideoPrompt(project, fresh, allChars, pctx.lockWords || [], promptLimit(model))
-    if (model.input.mode === 'reference') {
-      prompt = `Open on the exact scene of the reference image and keep its art style, characters and composition. ${prompt}`
-    }
-    const seconds = videoSecondsFor(project, fresh, pctx).seconds
-    const basisHash = computeClipVideoBasisHash({ project: { ...project, videoModel: model.id }, clip: fresh, characters: allChars, seconds, prevAssetId: initial.prevAssetId, lockWords: pctx.lockWords, videoModel: model.id })
-    const isVideoDialog = isVideoDialogue(project, fresh)
-    return {
-      endpoint: model.id,
-      body: videoBody(
-        model,
-        prompt,
-        url,
+      ctx.progress(0.05, 'Menyiapkan gambar awal')
+      const url = await publicUrlFor(initial.asset, ctx.signal)
+      let prompt = compileClipVideoPrompt(project, fresh, allChars, pctx.lockWords || [], promptLimit(model))
+      if (model.input.mode === 'reference') {
+        prompt = `Open on the exact scene of the reference image and keep its art style, characters and composition. ${prompt}`
+      }
+      const seconds = videoSecondsFor(project, fresh, pctx).seconds
+      const basisHash = computeClipVideoBasisHash({
+        project: { ...project, videoModel: model.id },
+        clip: fresh,
+        characters: allChars,
         seconds,
-        project.aspectRatio,
-        project.videoResolution,
-        null,
-        isVideoDialog
-      ),
-      payload: { target: 'clip-video', model: model.id, prompt, basisHash, autoTrimSilence }
-    }
-  })
+        prevAssetId: initial.prevAssetId,
+        lockWords: pctx.lockWords,
+        videoModel: model.id
+      })
+      const isVideoDialog = isVideoDialogue(project, fresh)
+      return {
+        endpoint: model.id,
+        body: videoBody(
+          model,
+          prompt,
+          url,
+          seconds,
+          project.aspectRatio,
+          project.videoResolution,
+          null,
+          isVideoDialog
+        ),
+        payload: { target: 'clip-video', model: model.id, prompt, basisHash, autoTrimSilence, requestedSeconds: seconds }
+      }
+    },
+    waitForPrevVideo
+  )
 }
 
 export function generateClipTts(clipId: string): Job {
@@ -1296,9 +1418,8 @@ export function generateClipTts(clipId: string): Job {
     let rel: string
     let words: WordTiming[] | undefined
     let estimated = false
-    const char = fresh.speakerId ? charactersOf(p.id).find((c) => c.id === fresh.speakerId) : null
-    const charVoice = char?.ttsProvider === p.ttsProvider ? char.ttsVoice : null
-    const voice = charVoice || p.ttsVoice || (p.ttsProvider === 'gemini' ? 'Charon' : '')
+    const chars = charactersOf(p.id)
+    const voice = resolveClipTtsVoice(fresh, chars, p)
     if (p.ttsProvider === 'elevenlabs') {
       if (!voice) throw new Error('Pilih suara ElevenLabs dulu di Lorebook atau Storyboard.')
       const out = await eleven.speak(text, voice, p.language, ctx.signal)
@@ -1517,11 +1638,7 @@ export function generateMissingImages(
   const wave2Targets = finalSheets.filter((s) => s.kind === 'derivative')
   const targetClipIds = targets.map((t) => t.clip.id)
 
-  void (async () => {
-    const wave1Ids = [...wave1Jobs.values()].map((j) => j.id)
-    const w1 = wave1Ids.length ? await waitJobsSettled(wave1Ids) : { anyCanceled: false, failedIds: new Set<string>() }
-    if (w1.anyCanceled) return
-
+  const startWave2 = (w1Canceled: boolean): Job[] => {
     const wave2Jobs: Job[] = []
     for (const d of wave2Targets) {
       const deriv = getDerivative(d.id)
@@ -1532,7 +1649,7 @@ export function generateMissingImages(
         const blocker = derivativeWaveBlocker(
           parentJob ? (getJob(parentJob.id)?.status ?? null) : null,
           !!char.sheetAssetId,
-          w1.anyCanceled
+          w1Canceled
         )
         if (!blocker) wave2Jobs.push(generateDerivativeSheet(d.id))
         else if (blocker.skip === 'failed') recordSkippedSheet(projectId, deriv.characterId, d.id, blocker.reason)
@@ -1540,13 +1657,10 @@ export function generateMissingImages(
         recordSkippedSheet(projectId, deriv.characterId, d.id, err instanceof Error ? err.message : String(err))
       }
     }
+    return wave2Jobs
+  }
 
-    if (wave2Jobs.length) {
-      const w2 = await waitJobsSettled(wave2Jobs.map((j) => j.id))
-      if (w2.anyCanceled) return
-    }
-
-    // Wave 3: generate clip images for clips whose prerequisites are now satisfied.
+  const startWave3 = (): void => {
     for (const cid of targetClipIds) {
       try {
         generateClipImage(cid)
@@ -1554,22 +1668,84 @@ export function generateMissingImages(
         console.warn('[smart-batch-image] skipped clip after sheet wave:', cid, (err as Error).message)
       }
     }
+  }
+
+  // When only Wave 2 (costume variants) is missing, start them synchronously so callers get active jobs immediately.
+  if (wave1Jobs.size === 0) {
+    const wave2Jobs = startWave2(false)
+    void (async () => {
+      if (wave2Jobs.length) {
+        const w2 = await waitJobsSettled(wave2Jobs.map((j) => j.id))
+        if (w2.anyCanceled) return
+      }
+      startWave3()
+    })()
+    return wave2Jobs
+  }
+
+  void (async () => {
+    const wave1Ids = [...wave1Jobs.values()].map((j) => j.id)
+    const w1 = await waitJobsSettled(wave1Ids)
+    if (w1.anyCanceled) return
+
+    const wave2Jobs = startWave2(w1.anyCanceled)
+    if (wave2Jobs.length) {
+      const w2 = await waitJobsSettled(wave2Jobs.map((j) => j.id))
+      if (w2.anyCanceled) return
+    }
+
+    // Wave 3: generate clip images for clips whose prerequisites are now satisfied.
+    startWave3()
   })()
 
   return [...wave1Jobs.values()]
 }
 
+/**
+ * Evaluates clip video status in ascending `sort` order, propagating `queuedClipIds` across eligible clips
+ * so multi-shot `continueFromPrevious` chains (Shot 1 -> Shot 2 -> Shot 3) in the same batch are not blocked.
+ */
+function evaluateVideoBatchStatuses<T extends { clip: Clip }>(
+  scoped: T[],
+  project: Project,
+  baseCtx: GenerationPrerequisitesContext,
+  includeStale: boolean,
+  explicitSelection: boolean
+): Array<T & { status: ClipStatusResult }> {
+  const ordered = [...scoped].sort((a, b) => a.clip.sort - b.clip.sort)
+  const queuedClipIds = new Set<string>(baseCtx.queuedClipIds ?? [])
+  const byId = new Map<string, ClipStatusResult>()
+  for (const it of ordered) {
+    const evalCtx: GenerationPrerequisitesContext = { ...baseCtx, queuedClipIds }
+    const status = getClipVideoStatus(it.clip, project, evalCtx)
+    byId.set(it.clip.id, status)
+    const willGenerate = explicitSelection
+      ? status.status !== 'blocked'
+      : status.status === 'missing' || (includeStale && status.status === 'stale')
+    if (willGenerate) queuedClipIds.add(it.clip.id)
+  }
+  return scoped.map((it) => ({ ...it, status: byId.get(it.clip.id)! }))
+}
+
 /** Generates AI video for the clips the creator picked; checks all video prerequisites (including continueFromPrevious). */
 export function generateClipsVideo(clipIds: string[], autoTrimSilence = true): Job[] {
   if (!clipIds.length) return []
-  for (const id of clipIds) {
-    const clip = getClip(id)
-    const prereqs = checkClipVideoPrerequisites(clip, getProject(clip.projectId), prereqContext(clip.projectId, clip.episodeId))
+  // Sort by clip sort ascending so chained continueFromPrevious clips validate and queue strictly after predecessors.
+  const clips = clipIds.map((id) => getClip(id)).sort((a, b) => a.sort - b.sort)
+  const queuedIds = new Set<string>()
+  for (const clip of clips) {
+    const baseCtx = prereqContext(clip.projectId, clip.episodeId)
+    const mergedQueued = new Set<string>([...(baseCtx.queuedClipIds ?? []), ...queuedIds])
+    const prereqs = checkClipVideoPrerequisites(clip, getProject(clip.projectId), {
+      ...baseCtx,
+      queuedClipIds: mergedQueued
+    })
     if (!prereqs.ok) {
-      throw new Error(`Klip "${clip.title || id}" tidak memenuhi syarat video:\n- ${prereqs.blockers.join('\n- ')}`)
+      throw new Error(`Klip "${clip.title || clip.id}" tidak memenuhi syarat video:\n- ${prereqs.blockers.join('\n- ')}`)
     }
+    queuedIds.add(clip.id)
   }
-  return clipIds.map((id) => generateClipVideo(id, autoTrimSilence))
+  return clips.map((clip) => generateClipVideo(clip.id, autoTrimSilence))
 }
 
 /**
@@ -1587,11 +1763,12 @@ export function generateMissingVideos(
   const ctx = prereqContext(projectId, episodeId)
   const idFilter = clipIds?.length ? new Set(clipIds) : null
   const allScoped = clipsOf(projectId, episodeId)
-    .map((clip, i) => ({ clip, index: i + 1, title: clip.title || `Shot ${i + 1}`, status: getClipVideoStatus(clip, project, ctx) }))
+    .map((clip, i) => ({ clip, index: i + 1, title: clip.title || `Shot ${i + 1}` }))
     .filter((it) => !idFilter || idFilter.has(it.clip.id))
 
   // Keep image and video strictly separated: clips without a storyboard image are skipped, not auto-imaged.
-  const withImage = allScoped.filter((it) => !!it.clip.imageAssetId || !!it.clip.continueFromPrevious)
+  const withImageBase = allScoped.filter((it) => !!it.clip.imageAssetId || !!it.clip.continueFromPrevious)
+  const withImage = evaluateVideoBatchStatuses(withImageBase, project, ctx, includeStale, Boolean(idFilter))
 
   let targets: typeof withImage
   let blocking: typeof withImage
@@ -1604,7 +1781,9 @@ export function generateMissingVideos(
     blocking = planned.blocking
   }
   if (blocking.length) throw new Error(blockedMessage('video', blocking))
-  return targets.map((t) => generateClipVideo(t.clip.id, autoTrimSilence))
+  return [...targets]
+    .sort((a, b) => a.clip.sort - b.clip.sort)
+    .map((t) => generateClipVideo(t.clip.id, autoTrimSilence))
 }
 
 export function generateMissingTts(projectId: string, episodeId?: string): Job[] {
@@ -1677,10 +1856,13 @@ export async function batchEstimate(
     }
   }
 
-  const items = scopedForEval.map((it) => ({
-    ...it,
-    status: kind === 'image' ? getClipImageStatus(it.clip, project, evalCtx) : getClipVideoStatus(it.clip, project, evalCtx)
-  }))
+  const items =
+    kind === 'video'
+      ? evaluateVideoBatchStatuses(scopedForEval, project, evalCtx, includeStale, Boolean(idFilter))
+      : scopedForEval.map((it) => ({
+          ...it,
+          status: getClipImageStatus(it.clip, project, evalCtx)
+        }))
 
   let targets: typeof items
   let blocking: typeof items
@@ -1707,16 +1889,29 @@ export async function batchEstimate(
     }
   }
 
-  // One estimate per distinct video length: the price depends on it, and lookups are cached anyway.
-  const priceBySeconds = new Map<number, number | null>()
+  // One estimate per distinct (seconds, enableAudio) combination: video price depends on both duration and native audio.
+  const priceByKey = new Map<string, number | null>()
+  const draftImageResolution =
+    kind === 'image' && !ctx.isFlow2Api && settings.imageGenerationMode === 'draft'
+      ? (resolutionOptions(getImageModel(ctx.activeImageModel))[0] ?? null)
+      : null
   const priceOf = async (clip: Clip): Promise<number | null> => {
     if (ctx.isFlow2Api) return null
     const seconds = kind === 'video' ? videoSecondsFor(project, clip, ctx).seconds : 0
-    if (!priceBySeconds.has(seconds)) {
-      const est = await estimateCredits(kind, (kind === 'image' ? ctx.activeImageModel : ctx.activeVideoModel) || '', project.aspectRatio, seconds || 5, project.videoResolution).catch(() => null)
-      priceBySeconds.set(seconds, est?.credits ?? null)
+    const enableAudio = kind === 'video' ? isVideoDialogue(project, clip) : false
+    const key = `${seconds}:${enableAudio ? 1 : 0}`
+    if (!priceByKey.has(key)) {
+      const est = await estimateCredits(
+        kind,
+        (kind === 'image' ? ctx.activeImageModel : ctx.activeVideoModel) || '',
+        project.aspectRatio,
+        seconds || 5,
+        kind === 'image' ? draftImageResolution : project.videoResolution,
+        enableAudio
+      ).catch(() => null)
+      priceByKey.set(key, est?.credits ?? null)
     }
-    return priceBySeconds.get(seconds) ?? null
+    return priceByKey.get(key) ?? null
   }
 
   const shown = items.filter((it) => targets.includes(it) || blocking.includes(it))
@@ -1883,31 +2078,38 @@ export function generateMissingSheets(projectId: string, includeStale = false): 
   }
   const wave2Targets = targets.filter((t) => t.kind === 'derivative')
 
+  const runWave2 = (anyCanceled: boolean): Job[] => {
+    const started: Job[] = []
+    for (const d of wave2Targets) {
+      const deriv = getDerivative(d.id)
+      if (!deriv) continue
+      try {
+        const char = getCharacter(deriv.characterId)
+        const parentJob = wave1Jobs.get(char.id)
+        const blocker = derivativeWaveBlocker(
+          parentJob ? (getJob(parentJob.id)?.status ?? null) : null,
+          !!char.sheetAssetId,
+          anyCanceled
+        )
+        if (!blocker) started.push(generateDerivativeSheet(d.id))
+        else if (blocker.skip === 'failed') recordSkippedSheet(projectId, deriv.characterId, d.id, blocker.reason)
+      } catch (err) {
+        recordSkippedSheet(projectId, deriv.characterId, d.id, err instanceof Error ? err.message : String(err))
+      }
+    }
+    return started
+  }
+
+  // When only Wave 2 (costume variants) is needed, start them immediately instead of returning an empty job list.
+  if (wave1Jobs.size === 0 && wave2Targets.length > 0) {
+    return runWave2(false)
+  }
+
   if (wave2Targets.length > 0) {
     void (async () => {
       const ids = [...wave1Jobs.values()].map((j) => j.id)
-      const settled = (id: string) => !['queued', 'running'].includes(getJob(id)?.status ?? '')
-      while (!ids.every(settled)) {
-        await new Promise((r) => setTimeout(r, 500))
-      }
-      const anyCanceled = ids.some((id) => getJob(id)?.status === 'canceled')
-      for (const d of wave2Targets) {
-        const deriv = getDerivative(d.id)
-        if (!deriv) continue
-        try {
-          const char = getCharacter(deriv.characterId)
-          const parentJob = wave1Jobs.get(char.id)
-          const blocker = derivativeWaveBlocker(
-            parentJob ? (getJob(parentJob.id)?.status ?? null) : null,
-            !!char.sheetAssetId,
-            anyCanceled
-          )
-          if (!blocker) generateDerivativeSheet(d.id)
-          else if (blocker.skip === 'failed') recordSkippedSheet(projectId, deriv.characterId, d.id, blocker.reason)
-        } catch (err) {
-          recordSkippedSheet(projectId, deriv.characterId, d.id, err instanceof Error ? err.message : String(err))
-        }
-      }
+      const w1 = await waitJobsSettled(ids)
+      runWave2(w1.anyCanceled)
     })()
   }
 
@@ -1976,7 +2178,7 @@ export function resumeJobs(): void {
   }
 }
 
-export async function setActiveAsset(clipId: string, assetId: string): Promise<void> {
+export async function setActiveAsset(clipId: string, assetId: string, preserveTiming = false): Promise<void> {
   const asset = getAsset(assetId)
   if (!asset || asset.clipId !== clipId) throw new Error('Aset tidak cocok dengan klip ini')
   const patch: Partial<Clip> =
@@ -1985,14 +2187,16 @@ export async function setActiveAsset(clipId: string, assetId: string): Promise<v
       : asset.kind === 'video'
         ? { videoAssetId: asset.id, mediaInMs: 0 }
         : asset.kind === 'audio'
-          ? { audioAssetId: asset.id, durationMs: Math.max(1500, (asset.durationMs ?? 0) + 400), voiceInMs: 0, voiceOutMs: null, voiceStartMs: 0 }
+          ? preserveTiming
+            ? { audioAssetId: asset.id }
+            : { audioAssetId: asset.id, durationMs: Math.max(1500, (asset.durationMs ?? 0) + 400), voiceInMs: 0, voiceOutMs: null, voiceStartMs: 0 }
           : {}
   if (asset.kind === 'video') {
     const voice = assetsOf(asset.projectId).find((a) => a.kind === 'audio' && a.clipId === clipId && a.meta.videoAssetId === asset.id)
     if (voice) Object.assign(patch, { audioAssetId: voice.id, durationMs: Math.max(1000, asset.durationMs ?? voice.durationMs ?? 0), voiceInMs: 0, voiceOutMs: null, voiceStartMs: 0 })
   }
   patchClip(clipId, patch)
-  emit.clip({ clipId, patch })
+  emit.clip({ clipId, patch, ...(preserveTiming ? { fromUser: true } : {}) })
 }
 
 /** Estimates that failed recently (no key, or a model the account cannot use), so pickers do not keep asking. */
@@ -2007,14 +2211,19 @@ export async function estimateCredits(
   modelId: string,
   aspect: AspectRatio,
   seconds = 5,
-  resolution?: string | null
+  resolution?: string | null,
+  enableAudio = false
 ): Promise<CreditEstimate | null> {
   if (isFlow2Api()) return null
   const model = kind === 'image' ? getImageModel(modelId) : getVideoModel(modelId)
+  const effectiveImageRes =
+    resolution === undefined && getSettings().imageGenerationMode === 'draft'
+      ? resolutionOptions(model)[0]
+      : resolution
   const body =
     kind === 'image'
-      ? imageBody(model, 'estimate', aspect, [])
-      : videoBody(model, 'estimate', 'https://example.com/frame.png', seconds, aspect, resolution)
+      ? imageBody(model, 'estimate', aspect, [], effectiveImageRes)
+      : videoBody(model, 'estimate', 'https://example.com/frame.png', seconds, aspect, resolution, null, enableAudio)
   const key = `estimate:${model.id}:${JSON.stringify(body)}`
   const hit = readCache<CreditEstimate>(key)
   if (hit && Date.now() - hit.updatedAt < DAY) return hit.value

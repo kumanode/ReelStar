@@ -173,6 +173,7 @@ export function voiceWindow(it: TimelineItem): { from: number; to: number; inSec
 
 export function itemAt(items: TimelineItem[], t: number): number {
   if (!items.length) return -1
+  if (t < 0) return 0
   const i = items.findIndex((it) => t >= it.start && t < it.end)
   return i === -1 ? items.length - 1 : i
 }
@@ -255,7 +256,10 @@ export function usePlaybackEngine(
     m.loop = true
     m.preload = 'auto'
     musicEl.current = m
-    return () => m.pause()
+    return () => {
+      m.pause()
+      m.src = ''
+    }
   }, [music?.id])
 
   useEffect(() => {
@@ -275,7 +279,8 @@ export function usePlaybackEngine(
         a.volume = voiceMuted ? 0 : Math.min(1, voiceGain(it) / loudest)
         // The voice as trimmed and placed in its clip; it stops at the clip's end.
         const target = w.inSec + (t - w.from)
-        if (playing && t >= w.from && t < w.to) {
+        const atEnd = Number.isFinite(a.duration) && a.duration > 0 && target >= a.duration - 0.03
+        if (playing && t >= w.from && t < w.to && !atEnd) {
           voiceActive = true
           if (a.paused) {
             a.currentTime = target
@@ -304,7 +309,8 @@ export function usePlaybackEngine(
         const to = from + s.durationMs / 1000
         const inSec = (s.inMs ?? 0) / 1000
         const target = inSec + (t - from)
-        if (playing && t >= from && t < to) {
+        const atEnd = Number.isFinite(a.duration) && a.duration > 0 && target >= a.duration - 0.03
+        if (playing && t >= from && t < to && !atEnd) {
           if (a.paused) {
             a.currentTime = target
             void a.play().catch(() => {})
@@ -315,7 +321,9 @@ export function usePlaybackEngine(
     const tick = (now: number): void => {
       const s = usePlayback.getState()
       if (s.playing) {
-        const t = s.t + (now - last) / 1000
+        // Clamp delta so first-frame rAF timestamps never go negative and suspension never causes huge jumps.
+        const dt = Math.min(0.1, Math.max(0, (now - last) / 1000))
+        const t = s.t + dt
         if (t >= total) usePlayback.setState({ t: total, playing: false })
         else usePlayback.setState({ t })
       }
@@ -333,5 +341,25 @@ export function usePlaybackEngine(
     }
   }, [items, total, musicDb, duck, voiceDb, musicRange.startSec, musicRange.endSec, musicRange.inSec, sfxList])
 
-  useEffect(() => () => usePlayback.setState({ playing: false }), [])
+  useEffect(
+    () => () => {
+      usePlayback.setState({ playing: false })
+      for (const a of voices.current.values()) {
+        a.pause()
+        a.src = ''
+      }
+      voices.current.clear()
+      for (const a of sfxAudios.current.values()) {
+        a.pause()
+        a.src = ''
+      }
+      sfxAudios.current.clear()
+      if (musicEl.current) {
+        musicEl.current.pause()
+        musicEl.current.src = ''
+        musicEl.current = null
+      }
+    },
+    []
+  )
 }

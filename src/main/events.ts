@@ -1,6 +1,7 @@
 import { BrowserWindow } from 'electron'
 import { EVENTS } from '@shared/api'
 import type { Asset, CharacterPatchEvent, ClipPatchEvent, Job, StoryProgressEvent, WhisperStatus } from '@shared/types'
+import { currentRevision } from './repo'
 
 function send(channel: string, payload: unknown): void {
   for (const w of BrowserWindow.getAllWindows()) {
@@ -10,7 +11,7 @@ function send(channel: string, payload: unknown): void {
 
 export const emit = {
   job: (job: Job): void => send(EVENTS.job, job),
-  clip: (e: ClipPatchEvent): void => send(EVENTS.clip, e),
+  clip: (e: ClipPatchEvent): void => send(EVENTS.clip, { ...e, rev: e.rev ?? currentRevision() }),
   character: (e: CharacterPatchEvent): void => send(EVENTS.character, e),
   asset: (asset: Asset): void => send(EVENTS.asset, asset),
   whisper: (status: WhisperStatus): void => send(EVENTS.whisper, status),

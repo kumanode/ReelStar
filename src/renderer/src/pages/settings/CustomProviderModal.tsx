@@ -90,29 +90,33 @@ export function CustomProviderModal({ open, onClose, settings, editingProvider, 
 
     setSaving(true)
     try {
-      const existing = settings.customProviders || []
-      const nextCustom = editingProvider
-        ? existing.map((p) => (p.id === editingProvider.id ? newDef : p))
-        : [...existing, newDef]
-
-      // Save key if supplied
-      if (apiKey.trim()) {
-        await window.api.settings.setKey(id, apiKey.trim())
-      }
-
+      const trimmedKey = apiKey.trim()
       if (testFirst) {
         setTesting(true)
-        const testRes = await window.api.settings.testKey(id)
+        const testRes = await window.api.settings.testKey(id, {
+          key: trimmedKey || undefined,
+          baseUrl: trimmedUrl,
+          protocol
+        })
         if (!testRes.ok) {
           toast('error', `Gagal terhubung: ${testRes.message}`)
-          setSaving(false)
-          setTesting(false)
           return
         }
         toast('success', `Koneksi berhasil: ${testRes.message}`)
       }
 
+      const existing = settings.customProviders || []
+      const nextCustom = editingProvider
+        ? existing.map((p) => (p.id === editingProvider.id ? newDef : p))
+        : [...existing, newDef]
+
+      // Persist provider definition first so setKey's internal connection test sees the new URL and protocol.
       const updated = await window.api.settings.set({ customProviders: nextCustom })
+
+      if (trimmedKey) {
+        await window.api.settings.setKey(id, trimmedKey)
+      }
+
       toast('success', `Penyedia "${trimmedName}" berhasil disimpan.`)
       onSaved(updated)
       onClose()
@@ -128,14 +132,39 @@ export function CustomProviderModal({ open, onClose, settings, editingProvider, 
     <Modal
       open={open}
       onClose={onClose}
-      title={editingProvider ? 'Edit Penyedia Custom' : 'Tambah Penyedia Custom'}
+      title={editingProvider ? 'Ubah Penyedia Kustom' : 'Tambah Penyedia Kustom'}
       subtitle="Sambungkan server lokal atau penyedia pihak ketiga yang kompatibel dengan OpenAI atau Flow2API."
       width={560}
+      footer={
+        <div className="flex items-center justify-end gap-2.5">
+          <Button onClick={onClose} disabled={saving || testing}>
+            Batal
+          </Button>
+          <Button
+            variant="secondary"
+            icon={<TestTube2 className="size-4" />}
+            loading={testing}
+            disabled={saving || !name.trim() || !baseUrl.trim()}
+            onClick={() => void handleSave(true)}
+          >
+            Uji & Simpan
+          </Button>
+          <Button
+            variant="primary"
+            icon={<Sparkles className="size-4" />}
+            loading={saving && !testing}
+            disabled={testing || !name.trim() || !baseUrl.trim()}
+            onClick={() => void handleSave(false)}
+          >
+            Simpan
+          </Button>
+        </div>
+      }
     >
       <div className="flex flex-col gap-4 py-2">
         <Field label="Nama Penyedia" hint="Nama yang akan ditampilkan di daftar penyedia.">
           <input
-            className={inputCls}
+            className={cx(inputCls, 'h-11')}
             placeholder="Contoh: Ollama Lokal, DeepSeek, Local AI"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -165,7 +194,7 @@ export function CustomProviderModal({ open, onClose, settings, editingProvider, 
           <div className="flex items-center gap-2">
             <Server className="size-4 shrink-0 text-muted" />
             <input
-              className={cx(inputCls, 'font-mono text-xs')}
+              className={cx(inputCls, 'h-11 font-mono text-xs')}
               placeholder={protocol === 'openai-chat' ? 'http://localhost:11434/v1' : 'http://localhost:8000/v1'}
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
@@ -179,14 +208,14 @@ export function CustomProviderModal({ open, onClose, settings, editingProvider, 
         >
           <input
             type="password"
-            className={cx(inputCls, 'font-mono text-xs')}
+            className={cx(inputCls, 'h-11 font-mono text-xs')}
             placeholder={keyOptional ? 'Opsional untuk server lokal' : 'sk-...'}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
           />
         </Field>
 
-        <label className="flex items-center gap-2.5 text-xs text-ink-2 cursor-pointer">
+        <label className="flex cursor-pointer items-center gap-2.5 text-xs text-ink-2">
           <input
             type="checkbox"
             checked={keyOptional}
@@ -195,30 +224,6 @@ export function CustomProviderModal({ open, onClose, settings, editingProvider, 
           />
           <span>Server lokal tanpa autentikasi (kunci API tidak diwajibkan)</span>
         </label>
-      </div>
-
-      <div className="mt-4 flex items-center justify-end gap-2.5">
-        <Button onClick={onClose} disabled={saving || testing}>
-          Batal
-        </Button>
-        <Button
-          variant="secondary"
-          icon={<TestTube2 className="size-4" />}
-          loading={testing}
-          disabled={saving || !name.trim() || !baseUrl.trim()}
-          onClick={() => void handleSave(true)}
-        >
-          Uji & Simpan
-        </Button>
-        <Button
-          variant="primary"
-          icon={<Sparkles className="size-4" />}
-          loading={saving && !testing}
-          disabled={testing || !name.trim() || !baseUrl.trim()}
-          onClick={() => void handleSave(false)}
-        >
-          Simpan
-        </Button>
       </div>
     </Modal>
   )

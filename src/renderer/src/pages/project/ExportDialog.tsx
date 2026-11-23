@@ -44,15 +44,16 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [opts, setOpts] = useState<ExportOptions | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
   const [tab, setTab] = useState<'ekspor' | 'youtube'>('ekspor')
-  const [yt, setYtState] = useState<YtSession>(() => (project ? (ytCache.get(project.id) ?? EMPTY_SESSION) : EMPTY_SESSION))
+  const ytKey = project ? `${project.id}:${episode?.id ?? ''}` : ''
+  const [yt, setYtState] = useState<YtSession>(() => (ytKey ? (ytCache.get(ytKey) ?? EMPTY_SESSION) : EMPTY_SESSION))
   // Reads the cache rather than state so two awaited steps in a row do not overwrite each other.
   const updateYt = (patch: Partial<YtSession>): void => {
-    if (!project) return
-    const next = { ...(ytCache.get(project.id) ?? EMPTY_SESSION), ...patch }
-    ytCache.set(project.id, next)
+    if (!ytKey) return
+    const next = { ...(ytCache.get(ytKey) ?? EMPTY_SESSION), ...patch }
+    ytCache.set(ytKey, next)
     setYtState(next)
   }
-  useEffect(() => setYtState(project ? (ytCache.get(project.id) ?? EMPTY_SESSION) : EMPTY_SESSION), [project?.id])
+  useEffect(() => setYtState(ytKey ? (ytCache.get(ytKey) ?? EMPTY_SESSION) : EMPTY_SESSION), [ytKey])
   const ytData = yt.meta
   const pickedTitle = yt.title.trim()
   const concept = yt.concept && yt.concept.title === pickedTitle ? yt.concept : null
@@ -68,6 +69,10 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const thumbFailed = thumbJobs.find((j) => j.status === 'failed')
   const [packaging, setPackaging] = useState(false)
   const [packagePath, setPackagePath] = useState<string | null>(null)
+
+  useEffect(() => {
+    setPackagePath(null)
+  }, [open, episode?.id])
 
   const handleExportPackage = async () => {
     if (!project) return
@@ -108,7 +113,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
     setYtLoading(true)
     try {
       await flush()
-      const data = await window.api.story.youtubeMetadata(project.id)
+      const data = await window.api.story.youtubeMetadata(project.id, episode?.id)
       // The first title is picked so the thumbnail step is one click away; any other title is one click too.
       updateYt({ meta: data, title: data.titles[0] ?? project.title })
       toast('info', 'Judul dan deskripsi siap. Pilih judul, lalu buat thumbnail-nya.')
@@ -124,7 +129,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
     setThumbnailBusy('concept')
     try {
       await flush()
-      const c = await window.api.story.thumbnailConcept(project.id, pickedTitle)
+      const c = await window.api.story.thumbnailConcept(project.id, pickedTitle, episode?.id)
       updateYt({ concept: c })
       return c
     } catch (e) {
@@ -199,7 +204,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
         folder
       })
     })
-  }, [open])
+  }, [open, episode?.id])
 
   if (!project || !opts) return null
   const job: Job | null = jobId ? (jobs[jobId] ?? null) : null
@@ -208,7 +213,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const missing = clips
     .map((c, i) => ({ c, i }))
     .filter(({ c }) => !(c.imageAssetId || (c.motionType === 'video' && c.videoAssetId)))
-  const noVoice = clips.filter((c) => !c.audioAssetId).length
+  const noVoice = clips.filter((c) => c.narration.trim() && !c.audioAssetId).length
   const res = RESOLUTIONS.find((r) => r.id === opts.resolution)!
   const sizeMb = Math.round((totalMs / 1000) * res.mb * (opts.fps === 60 ? 1.5 : 1))
   const currentDurationSec = totalMs / 1000
@@ -226,6 +231,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
 
   const start = async (): Promise<void> => {
     try {
+      setPackagePath(null)
       await flush()
       const exportOpts = { ...opts, episodeId: opts.episodeId ?? episode?.id }
       const j = await window.api.exporter.start(project.id, exportOpts)
@@ -236,22 +242,85 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
     }
   }
 
+  const activeEditor = episode?.editor ?? project.editor
   const toggles: { key: keyof ExportOptions; title: string; desc: string; disabled?: boolean }[] = [
     {
       key: 'burnCaptions',
       title: 'Tempel caption ke video',
-      desc: project.editor.captionStyle === 'none' ? 'Gaya caption diatur ke Tanpa caption' : 'Caption jadi bagian dari gambar',
-      disabled: project.editor.captionStyle === 'none'
+      desc: activeEditor.captionStyle === 'none' ? 'Gaya caption diatur ke Tanpa caption' : 'Caption jadi bagian dari gambar',
+      disabled: activeEditor.captionStyle === 'none'
     },
     { key: 'writeSrt', title: 'Simpan juga file subtitle (.srt)', desc: 'Untuk diunggah terpisah ke YouTube' },
     { key: 'normalizeAudio', title: 'Samakan volume suara', desc: 'Normalisasi ke −14 LUFS, standar YouTube' },
     {
       key: 'duckMusic',
       title: 'Kecilkan musik saat narasi',
-      desc: project.editor.musicAssetId ? 'Musik otomatis turun ketika ada suara' : 'Belum ada musik latar',
-      disabled: !project.editor.musicAssetId
+      desc: activeEditor.musicAssetId ? 'Musik otomatis turun ketika ada suara' : 'Belum ada musik latar',
+      disabled: !activeEditor.musicAssetId
     }
   ]
+
+  const exportFooter =
+    tab === 'ekspor' && job?.status !== 'done' ? (
+      <div className="flex flex-col gap-3">
+        {job && (running || job.status === 'failed') && (
+          <div className="flex flex-col gap-1.5">
+            <div className="flex justify-between text-[13px]">
+              <span className={job.status === 'failed' ? 'text-bad-ink' : 'text-ink-2'}>
+                {job.status === 'failed' ? job.error : (job.message ?? 'Menyiapkan…')}
+              </span>
+              {running && <span className="font-mono">{Math.round(job.progress * 100)}%</span>}
+            </div>
+            {running && <Progress value={job.progress} />}
+          </div>
+        )}
+        <div className="flex items-center gap-2.5">
+          <span className="flex-1 text-[13px] text-muted">
+            {running && 'Kamu boleh menutup dialog ini, ekspor tetap berjalan.'}
+          </span>
+          {running ? (
+            <Button variant="danger" onClick={() => job && void window.api.generate.cancel(job.id)}>
+              Batalkan
+            </Button>
+          ) : (
+            <>
+              <Button onClick={onClose}>Batal</Button>
+              <Button
+                variant="secondary"
+                icon={<Archive className="size-4" />}
+                loading={packaging}
+                disabled={clips.length === 0 || !episode}
+                title={
+                  clips.length === 0
+                    ? 'Episode belum memiliki klip untuk dikemas'
+                    : 'Ekspor seluruh aset (video jika ada, subtitle SRT, lembar tokoh/lokasi/prop, manifest & checksum) dalam arsip ZIP siap kirim.'
+                }
+                onClick={() => void handleExportPackage()}
+              >
+                {packagePath ? 'Buka Paket (.zip)' : 'Paket (.zip)'}
+              </Button>
+            </>
+          )}
+          <Button
+            variant="primary"
+            size="lg"
+            icon={<Download className="size-[18px]" />}
+            loading={running}
+            disabled={clips.length === 0 || !episode || missing.length > 0}
+            title={
+              clips.length === 0
+                ? 'Episode belum memiliki klip untuk diekspor'
+                : missing.length > 0
+                  ? `${missing.length} klip belum memiliki gambar atau video`
+                  : undefined
+            }
+            onClick={() => void start()}
+          >
+            {running ? 'Mengekspor…' : 'Mulai ekspor'}
+          </Button>
+        </div>
+      </div>
+    ) : undefined
 
   return (
     <Modal
@@ -259,6 +328,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
       onClose={onClose}
       title="Ekspor video & Kemasan"
       subtitle={`${project.title}${episodes && episodes.length > 1 && episode ? ` · Ep ${episode.episodeNum}` : ''} · ${mmss(totalMs)} · ${clips.length} klip · ${project.aspectRatio}`}
+      footer={exportFooter}
       width={680}
     >
       <div className="mb-3">
@@ -432,7 +502,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
                           <button
                             type="button"
                             onClick={() => void saveThumbnail(asset)}
-                            className="absolute inset-x-1.5 bottom-1.5 flex items-center justify-center gap-1 rounded-md bg-ink/80 py-1 text-[11px] font-semibold text-paper opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+                            className="absolute inset-x-1.5 bottom-1.5 flex items-center justify-center gap-1 rounded-md bg-black/75 py-1 text-[11px] font-semibold text-white opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
                           >
                             <Download className="size-3" /> Simpan JPG
                           </button>
@@ -486,7 +556,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
               loading={packaging}
               onClick={() => void handleExportPackage()}
             >
-              {packagePath ? 'Buka Paket (.zip)' : 'Buat Paket (.zip)'}
+              {packagePath ? 'Buka Paket (.zip)' : 'Paket (.zip)'}
             </Button>
             <Button variant="accent" icon={<Film className="size-4" />} onClick={() => setTab('youtube')}>
               Lihat Kemasan YouTube & Bab
@@ -510,7 +580,7 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
             <div className="flex items-start gap-2.5 rounded-xl border border-sun bg-sun-soft px-3.5 py-2.5 text-[13px] text-sun-ink">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" />
               <span>
-                Klip {missing.map(({ i }) => clipNumber(i)).join(', ')} belum punya gambar. Buat gambarnya dulu di Storyboard sebelum ekspor.
+                Klip {missing.map(({ i }) => clipNumber(i)).join(', ')} belum punya gambar. Buat gambarnya dulu di Produksi sebelum ekspor.
               </span>
             </div>
           )}
@@ -555,9 +625,9 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
                     )}
                   >
                     <span className="text-xs font-bold text-ink">{p.name}</span>
-                    <span className="text-[10px] text-muted">{project.aspectRatio}</span>
+                    <span className="text-[11px] text-muted">{project.aspectRatio}</span>
                     {p.badge && (
-                      <span className="rounded bg-sand px-1 text-[9px] font-semibold text-accent-dark">
+                      <span className="rounded bg-sand px-1.5 py-0.5 text-[11px] font-semibold text-accent-dark">
                         {p.badge}
                       </span>
                     )}
@@ -575,8 +645,8 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
 
           <label className="flex flex-col gap-1.5">
             <span className="text-sm font-semibold">Nama file</span>
-            <div className="flex h-[46px] overflow-hidden rounded-xl border border-line-2">
-              <input value={opts.fileName} onChange={(e) => set({ fileName: e.target.value })} className="flex-1 px-3.5 text-[15px] outline-none" />
+            <div className="flex h-[46px] overflow-hidden rounded-xl border border-line-2 focus-within:border-ink focus-within:ring-2 focus-within:ring-accent/35">
+              <input value={opts.fileName} onChange={(e) => set({ fileName: e.target.value })} className="flex-1 bg-transparent px-3.5 text-[15px] outline-none" />
               <span className="flex items-center border-l border-line-2 bg-sand px-3.5 font-mono text-sm text-ink-2">.mp4</span>
             </div>
           </label>
@@ -643,7 +713,12 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
                   <span className="text-sm font-semibold">{t.title}</span>
                   <span className="text-[13px] text-muted">{t.desc}</span>
                 </div>
-                <Switch on={!!opts[t.key] && !t.disabled} onChange={(v) => !t.disabled && set({ [t.key]: v })} label={t.title} />
+                <Switch
+                  on={!!opts[t.key] && !t.disabled}
+                  disabled={t.disabled}
+                  onChange={(v) => !t.disabled && set({ [t.key]: v })}
+                  label={t.title}
+                />
               </div>
             ))}
           </div>
@@ -678,43 +753,6 @@ export function ExportDialog({ open, onClose }: { open: boolean; onClose: () => 
               <span className="text-xs text-ink-2">Biaya</span>
               <span className="text-base font-semibold text-ok-ink">0 kredit</span>
             </div>
-          </div>
-          {job && (running || job.status === 'failed') && (
-            <div className="flex flex-col gap-1.5">
-              <div className="flex justify-between text-[13px]">
-                <span className={job.status === 'failed' ? 'text-bad-ink' : 'text-ink-2'}>
-                  {job.status === 'failed' ? job.error : (job.message ?? 'Menyiapkan…')}
-                </span>
-                {running && <span className="font-mono">{Math.round(job.progress * 100)}%</span>}
-              </div>
-              {running && <Progress value={job.progress} />}
-            </div>
-          )}
-          <div className="flex items-center gap-2.5">
-            <span className="flex-1 text-[13px] text-muted">
-              {running && 'Kamu boleh menutup dialog ini, ekspor tetap berjalan.'}
-            </span>
-            {running ? (
-              <Button variant="danger" onClick={() => job && void window.api.generate.cancel(job.id)}>
-                Batalkan
-              </Button>
-            ) : (
-              <>
-                <Button onClick={onClose}>Batal</Button>
-                <Button
-                  variant="secondary"
-                  icon={<Archive className="size-4" />}
-                  loading={packaging}
-                  title="Ekspor seluruh aset (video jika ada, subtitle SRT, lembar tokoh/lokasi/prop, manifest & checksum) dalam arsip ZIP siap kirim."
-                  onClick={() => void handleExportPackage()}
-                >
-                  Paket (.zip)
-                </Button>
-              </>
-            )}
-            <Button variant="primary" size="lg" icon={<Download className="size-[18px]" />} loading={running} disabled={missing.length > 0} onClick={() => void start()}>
-              {running ? 'Mengekspor…' : 'Mulai ekspor'}
-            </Button>
           </div>
         </>
       )}

@@ -2,20 +2,50 @@ import { useEffect, useState } from 'react'
 import { AudioLines, Captions, Download, FolderOpen, Trash2 } from 'lucide-react'
 import type { AppSettings, WhisperStatus } from '@shared/types'
 import { Badge, Button, Progress, Switch, confirmDialog } from '../components/ui'
+import { errorText } from '../lib/format'
+import { useApp } from '../store/app'
 
 const mb = (n: number): string => `${Math.round(n / 1_000_000).toLocaleString('id-ID')} MB`
 
 /** Settings for the local Whisper Small model that times caption words against the real voice. */
 export function WhisperSection({ settings, onSettings }: { settings: AppSettings; onSettings: (s: AppSettings) => void }) {
+  const { toast } = useApp()
   const [status, setStatus] = useState<WhisperStatus | null>(null)
+  const [pendingAction, setPendingAction] = useState<'download' | 'cancel' | 'remove' | null>(null)
+  const [savingAuto, setSavingAuto] = useState(false)
 
   useEffect(() => {
-    void window.api.whisper.status().then(setStatus)
+    void window.api.whisper
+      .status()
+      .then(setStatus)
+      .catch((e) => toast('error', errorText(e)))
     return window.api.on.whisper(setStatus)
   }, [])
 
   if (!status) return null
   const busy = status.state === 'downloading' || status.state === 'verifying'
+
+  const startDownload = async (): Promise<void> => {
+    setPendingAction('download')
+    try {
+      await window.api.whisper.download()
+    } catch (e) {
+      toast('error', `Gagal mengunduh model Whisper: ${errorText(e)}`)
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
+  const cancelDownload = async (): Promise<void> => {
+    setPendingAction('cancel')
+    try {
+      await window.api.whisper.cancel()
+    } catch (e) {
+      toast('error', `Gagal membatalkan unduhan: ${errorText(e)}`)
+    } finally {
+      setPendingAction(null)
+    }
+  }
 
   const remove = async (): Promise<void> => {
     const ok = await confirmDialog({
@@ -24,7 +54,26 @@ export function WhisperSection({ settings, onSettings }: { settings: AppSettings
       confirm: 'Hapus model',
       danger: true
     })
-    if (ok) await window.api.whisper.remove()
+    if (!ok) return
+    setPendingAction('remove')
+    try {
+      await window.api.whisper.remove()
+    } catch (e) {
+      toast('error', `Gagal menghapus model Whisper: ${errorText(e)}`)
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
+  const toggleWhisperAuto = async (v: boolean): Promise<void> => {
+    setSavingAuto(true)
+    try {
+      onSettings(await window.api.settings.set({ whisperAuto: v }))
+    } catch (e) {
+      toast('error', errorText(e))
+    } finally {
+      setSavingAuto(false)
+    }
   }
 
   return (
@@ -75,19 +124,35 @@ export function WhisperSection({ settings, onSettings }: { settings: AppSettings
         <div className="flex flex-wrap gap-2">
           {status.state === 'ready' ? (
             <>
-              <Button icon={<FolderOpen className="size-4" />} onClick={() => void window.api.whisper.openFolder()}>
+              <Button icon={<FolderOpen className="size-4" />} disabled={pendingAction !== null} onClick={() => void window.api.whisper.openFolder()}>
                 Buka folder
               </Button>
-              <Button variant="danger" icon={<Trash2 className="size-4" />} onClick={() => void remove()}>
+              <Button
+                variant="danger"
+                icon={<Trash2 className="size-4" />}
+                loading={pendingAction === 'remove'}
+                disabled={pendingAction !== null}
+                onClick={() => void remove()}
+              >
                 Hapus model
               </Button>
             </>
           ) : busy ? (
-            <Button disabled={status.state === 'verifying'} onClick={() => void window.api.whisper.cancel()}>
+            <Button
+              loading={pendingAction === 'cancel'}
+              disabled={status.state === 'verifying' || pendingAction !== null}
+              onClick={() => void cancelDownload()}
+            >
               Batal
             </Button>
           ) : (
-            <Button variant="accent" icon={<Download className="size-4" />} onClick={() => void window.api.whisper.download()}>
+            <Button
+              variant="accent"
+              icon={<Download className="size-4" />}
+              loading={pendingAction === 'download'}
+              disabled={pendingAction !== null}
+              onClick={() => void startDownload()}
+            >
               {status.received > 0 ? `Lanjutkan unduhan (${mb(status.total - status.received)} lagi)` : `Unduh model (${mb(status.total)})`}
             </Button>
           )}
@@ -98,7 +163,12 @@ export function WhisperSection({ settings, onSettings }: { settings: AppSettings
             <p className="text-sm font-semibold">Sinkronkan otomatis</p>
             <p className="text-[13px] text-muted">Setiap kali suara narasi Gemini dibuat, caption langsung disamakan dengan suaranya.</p>
           </div>
-          <Switch on={settings.whisperAuto} onChange={async (v) => onSettings(await window.api.settings.set({ whisperAuto: v }))} label="Sinkronkan caption otomatis" />
+          <Switch
+            on={settings.whisperAuto}
+            disabled={savingAuto}
+            onChange={(v) => void toggleWhisperAuto(v)}
+            label="Sinkronkan caption otomatis"
+          />
         </div>
       </section>
     </>

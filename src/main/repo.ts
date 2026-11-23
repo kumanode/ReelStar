@@ -25,6 +25,7 @@ import type {
   JobStatus,
   Location,
   LocationProfile,
+  LockWord,
   MergeAssetInput,
   NewProjectInput,
   Project,
@@ -38,7 +39,7 @@ import type {
 } from '@shared/types'
 import { buildLockWords } from '@shared/lock'
 import { isDefaultCostume, isNarratorName, visualSourceOf } from '@shared/script'
-import { detectGender, FEMALE_GEMINI_VOICES, MALE_GEMINI_VOICES, geminiVoiceGender } from '@shared/models'
+import { detectCharacterGender, detectGender, FEMALE_GEMINI_VOICES, MALE_GEMINI_VOICES, geminiVoiceGender } from '@shared/models'
 import { resolveActive } from '@shared/providers'
 import { defaultDialogueType } from '@shared/validation'
 import { getDb } from './db'
@@ -53,6 +54,29 @@ export const DEFAULT_EDITOR: EditorSettings = {
   musicVolumeDb: -18,
   duckMusic: true,
   overlays: []
+}
+
+let mainRev = 0
+// Tracks the revision when main-process patches last mutated each DB column of a clip, so stale renderer autosaves cannot clobber them.
+const clipPatchRevs = new Map<string, Map<string, number>>()
+
+export function currentRevision(): number {
+  return mainRev
+}
+
+function recordClipColumnRevs(clipId: string, dbCols: string[]): void {
+  if (!dbCols.length) return
+  mainRev++
+  let colMap = clipPatchRevs.get(clipId)
+  if (!colMap) {
+    colMap = new Map<string, number>()
+    clipPatchRevs.set(clipId, colMap)
+  }
+  for (const col of dbCols) colMap.set(col, mainRev)
+}
+
+function clearClipPatchRevs(clipIds: string[]): void {
+  for (const id of clipIds) clipPatchRevs.delete(id)
 }
 
 /**
@@ -380,7 +404,39 @@ export function updateEpisode(id: string, patch: Partial<Episode>): Episode {
 }
 
 export function removeEpisode(id: string): void {
-  getDb().prepare('DELETE FROM episodes WHERE id = ?').run(id)
+  const db = getDb()
+  const ep = db.prepare('SELECT project_id FROM episodes WHERE id = ?').get(id) as { project_id: string } | undefined
+  if (!ep) return
+  const projectId = ep.project_id
+  const clipIds = (db.prepare('SELECT id FROM clips WHERE project_id = ? AND episode_id = ?').all(projectId, id) as { id: string }[]).map((c) => c.id)
+  const scope = `project_id = ? AND (episode_id = ? OR clip_id IN (SELECT id FROM clips WHERE project_id = ? AND episode_id = ?))`
+  const paths = (
+    db.prepare(`SELECT local_path FROM assets WHERE ${scope}`).all(projectId, id, projectId, id) as { local_path: string | null }[]
+  )
+    .map((a) => a.local_path)
+    .filter((p): p is string => !!p)
+
+  db.transaction(() => {
+    db.prepare(`DELETE FROM assets WHERE ${scope}`).run(projectId, id, projectId, id)
+    db.prepare(`DELETE FROM jobs WHERE ${scope}`).run(projectId, id, projectId, id)
+    db.prepare('DELETE FROM episodes WHERE id = ?').run(id)
+    if (getStoredSetting(`last_episode:${projectId}`) === id) {
+      db.prepare('DELETE FROM settings WHERE key = ?').run(`last_episode:${projectId}`)
+    }
+    touchProject(projectId)
+  })()
+
+  clearClipPatchRevs(clipIds)
+
+  // Files go only after the rows are gone: a failed transaction must not leave assets pointing at deleted files.
+  for (const rel of paths) {
+    try {
+      const fullPath = assetAbsPath(projectId, rel)
+      if (existsSync(fullPath)) rmSync(fullPath, { force: true })
+    } catch {
+      // A file that cannot be removed only wastes disk space; the episode is already gone.
+    }
+  }
 }
 
 /**
@@ -389,6 +445,7 @@ export function removeEpisode(id: string): void {
  */
 export function removeAllEpisodes(projectId: string): void {
   const db = getDb()
+  const clipIds = (db.prepare('SELECT id FROM clips WHERE project_id = ?').all(projectId) as { id: string }[]).map((c) => c.id)
   const scope = `project_id = ? AND (episode_id IS NOT NULL OR clip_id IS NOT NULL)`
   const paths = (db.prepare(`SELECT local_path FROM assets WHERE ${scope}`).all(projectId) as { local_path: string | null }[])
     .map((a) => a.local_path)
@@ -402,6 +459,8 @@ export function removeAllEpisodes(projectId: string): void {
     db.prepare('DELETE FROM settings WHERE key = ?').run(`last_episode:${projectId}`)
     touchProject(projectId)
   })()
+
+  clearClipPatchRevs(clipIds)
 
   // Files go only after the rows are gone: a failed transaction must not leave assets pointing at deleted files.
   for (const rel of paths) {
@@ -607,7 +666,8 @@ export function getBundle(id: string, episodeId?: string): ProjectBundle {
       db
         .prepare("SELECT * FROM jobs WHERE project_id = ? AND (status IN ('queued','running') OR updated_at > ?) ORDER BY created_at")
         .all(id, Date.now() - 10 * 60 * 1000) as Row[]
-    ).map(toJob)
+    ).map(toJob),
+    rev: mainRev
   }
 }
 
@@ -627,12 +687,49 @@ export function setStoryPlan(id: string, plan: StoryPlan): void {
   getDb().prepare('UPDATE projects SET story_plan_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(plan), Date.now(), id)
 }
 
-/** Saves the editable parts of a project. Asset links stay owned by the main process. */
+const SNAPSHOT_CLIP_DB_COL_TO_PARAM: Record<string, string> = {
+  episode_id: 'episodeId',
+  sort: 'sort',
+  title: 'title',
+  story: 'story',
+  visual_prompt: 'visualPrompt',
+  narration: 'narration',
+  duration_ms: 'durationMs',
+  character_ids: 'characterIds',
+  motion_type: 'motionType',
+  camera_preset: 'cameraPreset',
+  motion_strength: 'motionStrength',
+  video_prompt: 'videoPrompt',
+  transition: 'transition',
+  video_camera: 'videoCamera',
+  video_strength: 'videoStrength',
+  transition_ms: 'transitionMs',
+  voice_gain_db: 'voiceGainDb',
+  media_in_ms: 'mediaInMs',
+  voice_in_ms: 'voiceInMs',
+  voice_out_ms: 'voiceOutMs',
+  voice_start_ms: 'voiceStartMs',
+  filter: 'filter',
+  speaker_id: 'speakerId',
+  emotion: 'emotion',
+  costume_ids: 'costumeIds',
+  location_id: 'locationId',
+  prop_ids: 'propIds',
+  framing: 'framing',
+  source_excerpt: 'sourceExcerpt',
+  shot_detail_json: 'shotDetailJson',
+  continue_from_previous: 'continueFromPrevious',
+  reference_asset_ids_json: 'referenceAssetIdsJson'
+}
+
+/** Saves the editable parts of a project. Asset links stay owned by the main process on UPDATE,
+ *  and are only restored on INSERT when Undo brings back a deleted clip or character. */
 export function saveSnapshot(snap: ProjectSnapshot): number {
   const db = getDb()
   const now = Date.now()
   const p = snap.project
   const epId = snap.episodeId
+  const baseRev = snap.baseRev
   db.transaction(() => {
     db.prepare(
       `UPDATE projects SET title = @title, synopsis = @synopsis, story_plan_json = @storyPlan, duration_sec = @durationSec, target_episode_count = @targetEpisodeCount, series_guidelines = @seriesGuidelines, prompt_templates_json = @promptTemplates, series_lock_json = @seriesLock, language = @language,
@@ -665,8 +762,8 @@ export function saveSnapshot(snap: ProjectSnapshot): number {
       `DELETE FROM characters WHERE project_id = ? AND id NOT IN (${charIds.map(() => '?').join(',') || "''"})`
     ).run(p.id, ...charIds)
     const upChar = db.prepare(
-      `INSERT INTO characters (id, project_id, name, description, sort, tts_voice, tts_provider, voice_style, aliases_json, profile_json)
-       VALUES (@id, @projectId, @name, @description, @sort, @ttsVoice, @ttsProvider, @voiceStyle, @aliasesJson, @profileJson)
+      `INSERT INTO characters (id, project_id, name, description, sheet_asset_id, sort, tts_voice, tts_provider, voice_style, aliases_json, profile_json)
+       VALUES (@id, @projectId, @name, @description, @sheetAssetId, @sort, @ttsVoice, @ttsProvider, @voiceStyle, @aliasesJson, @profileJson)
        ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, sort = excluded.sort,
          tts_voice = excluded.tts_voice, tts_provider = excluded.tts_provider, voice_style = excluded.voice_style, aliases_json = excluded.aliases_json,
          profile_json = excluded.profile_json`
@@ -675,6 +772,7 @@ export function saveSnapshot(snap: ProjectSnapshot): number {
       upChar.run({
         ...c,
         projectId: p.id,
+        sheetAssetId: c.sheetAssetId ?? null,
         ttsVoice: c.ttsVoice ?? null,
         ttsProvider: c.ttsProvider ?? null,
         voiceStyle: c.voiceStyle ?? '',
@@ -683,71 +781,114 @@ export function saveSnapshot(snap: ProjectSnapshot): number {
       })
     }
 
-    const clipIds = snap.clips.map((c) => c.id)
+    // Restore cascaded costume variants when Undo brings back a deleted character without overwriting live rows.
+    if (snap.derivatives?.length) {
+      const charIdSet = new Set(charIds)
+      const restoreDeriv = db.prepare(
+        `INSERT OR IGNORE INTO character_derivatives (id, project_id, character_id, name, prompt_change, costume_keyphrase, sheet_asset_id, sort)
+         VALUES (@id, @projectId, @characterId, @name, @promptChange, @costumeKeyphrase, @sheetAssetId, @sort)`
+      )
+      for (const d of snap.derivatives) {
+        if (!charIdSet.has(d.characterId)) continue
+        restoreDeriv.run({
+          id: d.id,
+          projectId: p.id,
+          characterId: d.characterId,
+          name: d.name,
+          promptChange: d.promptChange ?? '',
+          costumeKeyphrase: d.costumeKeyphrase ?? '',
+          sheetAssetId: d.sheetAssetId ?? null,
+          sort: d.sort ?? 0
+        })
+      }
+    }
+
     if (epId) {
+      const clipIds = snap.clips.map((c) => c.id)
       db.prepare(`DELETE FROM clips WHERE project_id = ? AND episode_id = ? AND id NOT IN (${clipIds.map(() => '?').join(',') || "''"})`).run(
         p.id,
         epId,
         ...clipIds
       )
-    } else {
-      db.prepare(`DELETE FROM clips WHERE project_id = ? AND id NOT IN (${clipIds.map(() => '?').join(',') || "''"})`).run(
-        p.id,
-        ...clipIds
+      const upClip = db.prepare(
+        `INSERT INTO clips (id, project_id, episode_id, sort, title, story, visual_prompt, visual_source, narration, duration_ms, character_ids, motion_type,
+           camera_preset, motion_strength, video_prompt, transition, image_asset_id, video_asset_id, audio_asset_id, video_camera, video_strength, transition_ms, voice_gain_db,
+           media_in_ms, voice_in_ms, voice_out_ms, voice_start_ms, filter, speaker_id, emotion, costume_ids, location_id, prop_ids, framing, source_excerpt,
+           shot_detail_json, continue_from_previous, reference_asset_ids_json)
+         VALUES (@id, @projectId, @episodeId, @sort, @title, @story, @visualPrompt, @visualSource, @narration, @durationMs, @characterIds, @motionType,
+           @cameraPreset, @motionStrength, @videoPrompt, @transition, @imageAssetId, @videoAssetId, @audioAssetId, @videoCamera, @videoStrength, @transitionMs, @voiceGainDb,
+           @mediaInMs, @voiceInMs, @voiceOutMs, @voiceStartMs, @filter, @speakerId, @emotion, @costumeIds, @locationId, @propIds, @framing, @sourceExcerpt,
+           @shotDetailJson, @continueFromPrevious, @referenceAssetIdsJson)
+         ON CONFLICT(id) DO UPDATE SET episode_id = excluded.episode_id, sort = excluded.sort, title = excluded.title, story = excluded.story, visual_prompt = excluded.visual_prompt,
+           narration = excluded.narration, duration_ms = excluded.duration_ms, character_ids = excluded.character_ids,
+           motion_type = excluded.motion_type, camera_preset = excluded.camera_preset, motion_strength = excluded.motion_strength,
+           video_prompt = excluded.video_prompt, transition = excluded.transition, video_camera = excluded.video_camera,
+           video_strength = excluded.video_strength, transition_ms = excluded.transition_ms, voice_gain_db = excluded.voice_gain_db,
+           media_in_ms = excluded.media_in_ms, voice_in_ms = excluded.voice_in_ms, voice_out_ms = excluded.voice_out_ms,
+           voice_start_ms = excluded.voice_start_ms, filter = excluded.filter, speaker_id = excluded.speaker_id,
+           emotion = excluded.emotion, costume_ids = excluded.costume_ids, location_id = excluded.location_id, prop_ids = excluded.prop_ids,
+           framing = excluded.framing, source_excerpt = excluded.source_excerpt, shot_detail_json = excluded.shot_detail_json,
+           continue_from_previous = excluded.continue_from_previous, reference_asset_ids_json = excluded.reference_asset_ids_json`
       )
+      for (const c of snap.clips) {
+        const params: Record<string, unknown> = {
+          ...c,
+          projectId: p.id,
+          episodeId: c.episodeId || epId,
+          visualSource: c.visualSource ?? null,
+          imageAssetId: c.imageAssetId ?? null,
+          videoAssetId: c.videoAssetId ?? null,
+          audioAssetId: c.audioAssetId ?? null,
+          characterIds: JSON.stringify(c.characterIds || []),
+          videoCamera: c.videoCamera ?? 'static',
+          videoStrength: c.videoStrength ?? 'halus',
+          transitionMs: c.transitionMs ?? null,
+          voiceGainDb: c.voiceGainDb ?? 0,
+          mediaInMs: Math.round(c.mediaInMs ?? 0),
+          voiceInMs: Math.round(c.voiceInMs ?? 0),
+          voiceOutMs: c.voiceOutMs == null ? null : Math.round(c.voiceOutMs),
+          voiceStartMs: Math.round(c.voiceStartMs ?? 0),
+          filter: c.filter ?? 'normal',
+          speakerId: c.speakerId ?? null,
+          emotion: c.emotion ?? '',
+          costumeIds: JSON.stringify(c.costumeIds || {}),
+          locationId: c.locationId ?? null,
+          propIds: JSON.stringify(c.propIds || []),
+          framing: c.framing ?? '',
+          sourceExcerpt: c.sourceExcerpt ?? '',
+          shotDetailJson: JSON.stringify(c.shotDetail || {}),
+          continueFromPrevious: c.continueFromPrevious ? 1 : 0,
+          referenceAssetIdsJson: JSON.stringify(c.referenceAssetIds ?? [])
+        }
+        if (baseRev != null) {
+          const colRevs = clipPatchRevs.get(c.id)
+          if (colRevs) {
+            const protectedCols = [...colRevs.entries()]
+              .filter(([col, colRev]) => colRev > baseRev && col in SNAPSHOT_CLIP_DB_COL_TO_PARAM)
+              .map(([col]) => col)
+            if (protectedCols.length > 0) {
+              const existing = db.prepare('SELECT * FROM clips WHERE id = ?').get(c.id) as Row | undefined
+              if (existing) {
+                // Keep newer main-process mutations for columns that changed after the renderer's baseRev.
+                for (const col of protectedCols) {
+                  params[SNAPSHOT_CLIP_DB_COL_TO_PARAM[col]] = existing[col]
+                }
+              }
+            }
+          }
+        }
+        upClip.run(params)
+      }
     }
-    const upClip = db.prepare(
-      `INSERT INTO clips (id, project_id, episode_id, sort, title, story, visual_prompt, narration, duration_ms, character_ids, motion_type,
-         camera_preset, motion_strength, video_prompt, transition, video_camera, video_strength, transition_ms, voice_gain_db,
-         media_in_ms, voice_in_ms, voice_out_ms, voice_start_ms, filter, speaker_id, emotion, costume_ids, location_id, prop_ids, framing, source_excerpt,
-         shot_detail_json, continue_from_previous, reference_asset_ids_json)
-       VALUES (@id, @projectId, @episodeId, @sort, @title, @story, @visualPrompt, @narration, @durationMs, @characterIds, @motionType,
-         @cameraPreset, @motionStrength, @videoPrompt, @transition, @videoCamera, @videoStrength, @transitionMs, @voiceGainDb,
-         @mediaInMs, @voiceInMs, @voiceOutMs, @voiceStartMs, @filter, @speakerId, @emotion, @costumeIds, @locationId, @propIds, @framing, @sourceExcerpt,
-         @shotDetailJson, @continueFromPrevious, @referenceAssetIdsJson)
-       ON CONFLICT(id) DO UPDATE SET episode_id = excluded.episode_id, sort = excluded.sort, title = excluded.title, story = excluded.story, visual_prompt = excluded.visual_prompt,
-         narration = excluded.narration, duration_ms = excluded.duration_ms, character_ids = excluded.character_ids,
-         motion_type = excluded.motion_type, camera_preset = excluded.camera_preset, motion_strength = excluded.motion_strength,
-         video_prompt = excluded.video_prompt, transition = excluded.transition, video_camera = excluded.video_camera,
-         video_strength = excluded.video_strength, transition_ms = excluded.transition_ms, voice_gain_db = excluded.voice_gain_db,
-         media_in_ms = excluded.media_in_ms, voice_in_ms = excluded.voice_in_ms, voice_out_ms = excluded.voice_out_ms,
-         voice_start_ms = excluded.voice_start_ms, filter = excluded.filter, speaker_id = excluded.speaker_id,
-         emotion = excluded.emotion, costume_ids = excluded.costume_ids, location_id = excluded.location_id, prop_ids = excluded.prop_ids,
-         framing = excluded.framing, source_excerpt = excluded.source_excerpt, shot_detail_json = excluded.shot_detail_json,
-         continue_from_previous = excluded.continue_from_previous, reference_asset_ids_json = excluded.reference_asset_ids_json`
-    )
-    for (const c of snap.clips)
-      upClip.run({
-        ...c,
-        projectId: p.id,
-        episodeId: c.episodeId || epId,
-        characterIds: JSON.stringify(c.characterIds || []),
-        videoCamera: c.videoCamera ?? 'static',
-        videoStrength: c.videoStrength ?? 'halus',
-        transitionMs: c.transitionMs ?? null,
-        voiceGainDb: c.voiceGainDb ?? 0,
-        mediaInMs: Math.round(c.mediaInMs ?? 0),
-        voiceInMs: Math.round(c.voiceInMs ?? 0),
-        voiceOutMs: c.voiceOutMs == null ? null : Math.round(c.voiceOutMs),
-        voiceStartMs: Math.round(c.voiceStartMs ?? 0),
-        filter: c.filter ?? 'normal',
-        speakerId: c.speakerId ?? null,
-        emotion: c.emotion ?? '',
-        costumeIds: JSON.stringify(c.costumeIds || {}),
-        locationId: c.locationId ?? null,
-        propIds: JSON.stringify(c.propIds || []),
-        framing: c.framing ?? '',
-        sourceExcerpt: c.sourceExcerpt ?? '',
-        shotDetailJson: JSON.stringify(c.shotDetail || {}),
-        continueFromPrevious: c.continueFromPrevious ? 1 : 0,
-        referenceAssetIdsJson: JSON.stringify(c.referenceAssetIds ?? [])
-      })
   })()
   return now
 }
 
 export function removeProject(id: string): void {
-  getDb().prepare('DELETE FROM projects WHERE id = ?').run(id)
+  const db = getDb()
+  const clipIds = (db.prepare('SELECT id FROM clips WHERE project_id = ?').all(id) as { id: string }[]).map((c) => c.id)
+  db.prepare('DELETE FROM projects WHERE id = ?').run(id)
+  clearClipPatchRevs(clipIds)
   const dir = join(projectsRoot(), id)
   if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
 }
@@ -772,6 +913,9 @@ export function duplicateProject(id: string): ProjectSummary {
   const allDerivatives = (db.prepare('SELECT * FROM character_derivatives WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toCharacterDerivative)
   const allLocations = (db.prepare('SELECT * FROM locations WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toLocation)
   const allProps = (db.prepare('SELECT * FROM props WHERE project_id = ? ORDER BY sort').all(id) as Row[]).map(toProp)
+  const allScriptVersions = allEpisodes.flatMap((ep) =>
+    (db.prepare('SELECT * FROM script_versions WHERE episode_id = ? ORDER BY created_at ASC').all(ep.id) as Row[]).map(toScriptVersion)
+  )
 
   const copyEditor = (editor: EditorSettings | null): EditorSettings | null => {
     if (!editor) return null
@@ -788,24 +932,46 @@ export function duplicateProject(id: string): ProjectSummary {
     }
   }
 
+  const copyLockWords = (locks: LockWord[] | null | undefined): LockWord[] =>
+    (locks ?? []).map((lw) => ({
+      ...lw,
+      id: randomUUID(),
+      sourceId: lw.sourceId ? (mapId(lw.sourceId) ?? lw.sourceId) : undefined
+    }))
+
+  const copyDraft = (draft: EpisodeScriptDraft | null | undefined): EpisodeScriptDraft | null => {
+    if (!draft) return null
+    return {
+      ...draft,
+      shots: (draft.shots ?? []).map((s) =>
+        s.referenceAssetIds?.length
+          ? { ...s, referenceAssetIds: s.referenceAssetIds.map((rid) => mapId(rid)).filter((x): x is string => !!x) }
+          : s
+      )
+    }
+  }
+
   db.transaction(() => {
     const projectEditor = copyEditor({ ...DEFAULT_EDITOR, ...JSON.parse(p.editor_json || '{}') })
+    const seriesLock: LockWord[] = p.series_lock_json ? JSON.parse(p.series_lock_json) : []
     db.prepare(
       `INSERT INTO projects (id, title, synopsis, story_plan_json, duration_sec, target_episode_count, series_guidelines, prompt_templates_json, series_lock_json, language, aspect_ratio, style_id, tts_provider, tts_voice,
          image_model, video_model, video_resolution, status, step, cover_asset_id, editor_json, source_text, source_kind, dialog_audio, created_at, updated_at)
-       SELECT @newId, @title, synopsis, story_plan_json, duration_sec, target_episode_count, series_guidelines, prompt_templates_json, series_lock_json, language, aspect_ratio, style_id, tts_provider, tts_voice,
+       SELECT @newId, @title, synopsis, story_plan_json, duration_sec, target_episode_count, series_guidelines, prompt_templates_json, @seriesLockJson, language, aspect_ratio, style_id, tts_provider, tts_voice,
          image_model, video_model, video_resolution, status, step, @cover, @editorJson, source_text, source_kind, dialog_audio, @now, @now
        FROM projects WHERE id = @id`
     ).run({
       newId,
       id,
       title: `${p.title} (salinan)`,
+      seriesLockJson: JSON.stringify(copyLockWords(seriesLock)),
       cover: mapId(p.cover_asset_id),
       editorJson: JSON.stringify(projectEditor),
       now
     })
 
     for (const ep of allEpisodes) {
+      const copiedDraft = copyDraft(ep.scriptDraft)
       db.prepare(
         `INSERT INTO episodes (id, project_id, episode_num, title, summary, hook, story_beats_json, cliffhanger, next_teaser,
            source_text, source_kind, script_draft_json, lock_words_json, status, duration_sec, sort, editor_json, created_at, updated_at)
@@ -822,8 +988,8 @@ export function duplicateProject(id: string): ProjectSummary {
         ep.nextTeaser,
         ep.sourceText,
         ep.sourceKind,
-        null,
-        JSON.stringify(ep.lockWords || []),
+        copiedDraft ? JSON.stringify(copiedDraft) : null,
+        JSON.stringify(copyLockWords(ep.lockWords)),
         ep.status,
         ep.durationSec,
         ep.sort,
@@ -831,6 +997,13 @@ export function duplicateProject(id: string): ProjectSummary {
         now,
         now
       )
+    }
+
+    for (const sv of allScriptVersions) {
+      db.prepare(
+        `INSERT INTO script_versions (id, episode_id, draft_json, note, created_at)
+         VALUES (?, ?, ?, ?, ?)`
+      ).run(randomUUID(), mapId(sv.episodeId), JSON.stringify(copyDraft(sv.draft)), sv.note, sv.createdAt)
     }
 
     for (const c of allCharacters) {
@@ -901,6 +1074,12 @@ export function duplicateProject(id: string): ProjectSummary {
     }
 
     for (const a of allAssets) {
+      const meta: AssetMeta = { ...a.meta }
+      if (typeof meta.videoAssetId === 'string' && meta.videoAssetId) {
+        meta.videoAssetId = mapId(meta.videoAssetId) ?? meta.videoAssetId
+      }
+      // Drop basisHash because remapped entity UUIDs would otherwise falsely mark duplicated assets stale.
+      delete meta.basisHash
       db.prepare(
         `INSERT INTO assets (id, project_id, clip_id, character_id, derivative_id, location_id, prop_id, episode_id, kind, provider, model, prompt, remote_id, remote_url, local_path,
            duration_ms, width, height, meta_json, created_at)
@@ -924,7 +1103,7 @@ export function duplicateProject(id: string): ProjectSummary {
         a.durationMs,
         a.width,
         a.height,
-        JSON.stringify(a.meta),
+        JSON.stringify(meta),
         a.createdAt
       )
     }
@@ -997,7 +1176,7 @@ export function duplicateProject(id: string): ProjectSummary {
         ci.detail,
         ci.status,
         ci.tier,
-        mapId(ci.plantedEpisodeId) || newId,
+        mapId(ci.plantedEpisodeId) || (allEpisodes[0] ? mapId(allEpisodes[0].id) : '') || '',
         mapId(ci.payoffEpisodeId),
         now
       )
@@ -1167,7 +1346,8 @@ function placeholderGender(description: string): Gender | null {
 function voiceCaster(projectId: string): (gender: Gender) => { voice: string | null; provider: string | null } {
   const db = getDb()
   const proj = db.prepare('SELECT tts_voice, tts_provider FROM projects WHERE id = ?').get(projectId) as Row | undefined
-  const provider = (proj?.tts_provider as string | undefined) || 'gemini'
+  const activeTts = resolveActive(getSettings(), 'tts').provider.id
+  const provider = activeTts || (proj?.tts_provider as string | undefined) || 'gemini'
   if (provider !== 'gemini') return () => ({ voice: null, provider: null })
   const used = new Set<string>([
     String(proj?.tts_voice || 'Charon'),
@@ -1269,6 +1449,11 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
 
   db.transaction(() => {
     const problems: string[] = []
+    // Tracks character proposals converted into costume variants of an existing character,
+    // and derivative proposals merged into an existing variant, so shot references resolve cleanly.
+    const convertedCharDerivatives = new Map<string, { characterId: string; derivativeId: string }>()
+    const mergedDerivatives = new Map<string, CharacterDerivative>()
+
     // 1. Process proposed newAssets
     for (const p of draft.newAssets ?? []) {
       const pName = p.name.trim()
@@ -1316,6 +1501,11 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
           if (targetChar && !targetChar.aliases.some((a) => a.toLowerCase() === pName.toLowerCase())) {
             updateCharacter(targetChar.id, { aliases: [...targetChar.aliases, pName] })
           }
+        } else if (p.kind === 'derivative') {
+          const targetDeriv = derivativesOf(projectId).find(
+            (d) => d.id === p.target || d.name.toLowerCase() === p.target!.trim().toLowerCase()
+          )
+          if (targetDeriv) mergedDerivatives.set(pName.toLowerCase(), targetDeriv)
         } else if (p.kind === 'location') {
           const targetLoc = locationsOf(projectId).find((l) => l.id === p.target || l.name.toLowerCase() === p.target!.toLowerCase())
           if (targetLoc && !targetLoc.aliases.some((a) => a.toLowerCase() === pName.toLowerCase())) {
@@ -1334,14 +1524,18 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
         if (!targetChar) problems.push(`Usulan kostum "${pName}" belum punya karakter tujuan yang terdaftar`)
         if (targetChar) {
           const derivs = derivativesOf(projectId).filter((d) => d.characterId === targetChar.id)
-          if (!derivs.some((d) => d.name.toLowerCase() === pName.toLowerCase())) {
-            createDerivative({
+          let deriv = derivs.find((d) => d.name.toLowerCase() === pName.toLowerCase())
+          if (!deriv) {
+            deriv = createDerivative({
               projectId,
               characterId: targetChar.id,
               name: pName,
               promptChange: p.description || '',
               costumeKeyphrase: (p.description || pName).slice(0, 120)
             })
+          }
+          if (p.kind === 'character') {
+            convertedCharDerivatives.set(pName.toLowerCase(), { characterId: targetChar.id, derivativeId: deriv.id })
           }
         }
       }
@@ -1354,7 +1548,10 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
 
     const findChar = (name: string): Character | undefined => {
       const q = name.trim().toLowerCase()
-      return allChars.find((c) => c.name.toLowerCase() === q || c.aliases.some((a) => a.toLowerCase() === q))
+      const direct = allChars.find((c) => c.name.toLowerCase() === q || c.aliases.some((a) => a.toLowerCase() === q))
+      if (direct) return direct
+      const converted = convertedCharDerivatives.get(q)
+      return converted ? allChars.find((c) => c.id === converted.characterId) : undefined
     }
     const findLoc = (name: string): Location | undefined => {
       const q = name.trim().toLowerCase()
@@ -1367,7 +1564,10 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
 
     const findCostume = (charId: string, name: string): CharacterDerivative | undefined => {
       const q = name.trim().toLowerCase()
-      return derivativesOf(projectId).find((d) => d.characterId === charId && d.name.toLowerCase() === q)
+      const direct = derivativesOf(projectId).find((d) => d.characterId === charId && d.name.toLowerCase() === q)
+      if (direct) return direct
+      const merged = mergedDerivatives.get(q)
+      return merged && merged.characterId === charId ? merged : undefined
     }
     const speakerOf = (shot: DraftShot): string | null => (shot.speaker?.trim() && !isNarratorName(shot.speaker) ? shot.speaker.trim() : null)
 
@@ -1424,13 +1624,19 @@ export function confirmEpisodeScriptRepo(projectId: string, episodeId: string, d
     let prevLocId: string | null = null
     for (const [idx, shot] of (draft.shots ?? []).entries()) {
       const clipId = randomUUID()
-      const charIds = (shot.characters ?? []).map((cn) => findChar(cn)?.id).filter((id): id is string => !!id)
+      const charIds = Array.from(
+        new Set((shot.characters ?? []).map((cn) => findChar(cn)?.id).filter((id): id is string => !!id))
+      )
       const speaker = speakerOf(shot)
       const speakerId = speaker ? findChar(speaker)?.id ?? null : null
       const locId = shot.location ? findLoc(shot.location)?.id ?? null : null
       const propIds = (shot.props ?? []).map((pn) => findProp(pn)?.id).filter((id): id is string => !!id)
 
       const costumeMap: Record<string, string> = {}
+      for (const cn of shot.characters ?? []) {
+        const converted = convertedCharDerivatives.get(cn.trim().toLowerCase())
+        if (converted) costumeMap[converted.characterId] = converted.derivativeId
+      }
       for (const [charName, varName] of Object.entries(shot.costumes ?? {})) {
         const c = findChar(charName)
         const deriv = c && !isDefaultCostume(varName) ? findCostume(c.id, varName) : undefined
@@ -1616,6 +1822,9 @@ const CLIP_COLS: Partial<Record<keyof Clip, string>> = {
   audioAssetId: 'audio_asset_id',
   durationMs: 'duration_ms',
   motionType: 'motion_type',
+  cameraPreset: 'camera_preset',
+  motionStrength: 'motion_strength',
+  transition: 'transition',
   videoCamera: 'video_camera',
   videoStrength: 'video_strength',
   mediaInMs: 'media_in_ms',
@@ -1638,7 +1847,8 @@ const CLIP_COLS: Partial<Record<keyof Clip, string>> = {
 export function patchClip(id: string, patch: Partial<Clip>): void {
   const entries = Object.entries(patch).filter(([k]) => k in CLIP_COLS)
   if (!entries.length) return
-  const sets = entries.map(([k]) => `${CLIP_COLS[k as keyof Clip]} = ?`).join(', ')
+  const dbCols = entries.map(([k]) => CLIP_COLS[k as keyof Clip]!)
+  const sets = dbCols.map((col) => `${col} = ?`).join(', ')
   getDb()
     .prepare(`UPDATE clips SET ${sets} WHERE id = ?`)
     // costumeIds, propIds, shotDetail are stored as JSON text; boolean as 0/1.
@@ -1651,6 +1861,7 @@ export function patchClip(id: string, patch: Partial<Clip>): void {
       }),
       id
     )
+  recordClipColumnRevs(id, dbCols)
 }
 
 /** Puts a new clip right after another one (used when the editor splits a clip). */
@@ -1695,9 +1906,11 @@ export function patchClipText(id: string, patch: Partial<Pick<Clip, 'title' | 's
   const cols: Record<string, string> = { title: 'title', story: 'story', narration: 'narration', visualSource: 'visual_source', transition: 'transition' }
   const entries = Object.entries(patch).filter(([k]) => k in cols)
   if (!entries.length) return
+  const dbCols = entries.map(([k]) => cols[k])
   getDb()
-    .prepare(`UPDATE clips SET ${entries.map(([k]) => `${cols[k]} = ?`).join(', ')} WHERE id = ?`)
+    .prepare(`UPDATE clips SET ${dbCols.map((col) => `${col} = ?`).join(', ')} WHERE id = ?`)
     .run(...entries.map(([, v]) => v), id)
+  recordClipColumnRevs(id, dbCols)
 }
 
 // ---------- lorebook: characters, derivatives, locations, props ----------
@@ -1715,6 +1928,22 @@ export function createCharacter(input: {
   const db = getDb()
   const id = randomUUID()
   const sort = (db.prepare('SELECT COUNT(*) AS n FROM characters WHERE project_id = ?').get(input.projectId) as Row).n as number
+  let ttsVoice = input.ttsVoice ?? null
+  let ttsProvider = input.ttsProvider ?? null
+  // Auto-cast a matching female/male Gemini voice when no explicit voice was supplied and gender is known.
+  if (input.ttsVoice === undefined) {
+    const detected = detectCharacterGender({
+      name: input.name,
+      description: input.description ?? '',
+      aliases: input.aliases ?? [],
+      profile: input.profile
+    })
+    if (detected === 'female' || detected === 'male') {
+      const cast = voiceCaster(input.projectId)(detected)
+      ttsVoice = cast.voice
+      ttsProvider = (cast.provider as Character['ttsProvider']) ?? null
+    }
+  }
   db.prepare(
     `INSERT INTO characters (id, project_id, name, description, sort, tts_voice, tts_provider, voice_style, aliases_json, profile_json)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -1724,8 +1953,8 @@ export function createCharacter(input: {
     input.name.trim(),
     input.description?.trim() ?? '',
     sort,
-    input.ttsVoice ?? null,
-    input.ttsProvider ?? null,
+    ttsVoice,
+    ttsProvider,
     input.voiceStyle?.trim() ?? '',
     JSON.stringify(input.aliases ?? []),
     JSON.stringify(input.profile ?? {})
@@ -1765,6 +1994,33 @@ export function updateCharacter(id: string, patch: Partial<Character>): Characte
   if (patch.profile !== undefined) {
     cols.push('profile_json = ?')
     vals.push(JSON.stringify(patch.profile))
+  }
+  // If gender details were enriched/updated on a character with no assigned voice yet, auto-cast one.
+  if (
+    patch.ttsVoice === undefined &&
+    (patch.profile !== undefined || patch.description !== undefined || patch.name !== undefined)
+  ) {
+    const cur = getCharacter(id)
+    if (!cur.ttsVoice) {
+      const merged = {
+        name: patch.name ?? cur.name,
+        description: patch.description ?? cur.description,
+        aliases: patch.aliases ?? cur.aliases,
+        profile: patch.profile ?? cur.profile
+      }
+      const detected = detectCharacterGender(merged)
+      if (detected === 'female' || detected === 'male') {
+        const cast = voiceCaster(cur.projectId)(detected)
+        if (cast.voice) {
+          cols.push('tts_voice = ?')
+          vals.push(cast.voice)
+          if (patch.ttsProvider === undefined) {
+            cols.push('tts_provider = ?')
+            vals.push(cast.provider)
+          }
+        }
+      }
+    }
   }
   if (patch.sort !== undefined) {
     cols.push('sort = ?')
@@ -1918,11 +2174,11 @@ export function updateLocation(id: string, patch: Partial<Location>): Location {
 
   if (patch.name !== undefined) {
     cols.push('name = ?')
-    vals.push(patch.name.trim())
+    vals.push(patch.name)
   }
   if (patch.description !== undefined) {
     cols.push('description = ?')
-    vals.push(patch.description.trim())
+    vals.push(patch.description)
   }
   if (patch.aliases !== undefined) {
     cols.push('aliases_json = ?')
@@ -1999,11 +2255,11 @@ export function updateProp(id: string, patch: Partial<Prop>): Prop {
 
   if (patch.name !== undefined) {
     cols.push('name = ?')
-    vals.push(patch.name.trim())
+    vals.push(patch.name)
   }
   if (patch.description !== undefined) {
     cols.push('description = ?')
-    vals.push(patch.description.trim())
+    vals.push(patch.description)
   }
   if (patch.aliases !== undefined) {
     cols.push('aliases_json = ?')
@@ -2588,13 +2844,29 @@ export function activeProjectJob(projectId: string, kind: JobKind, episodeId?: s
   return r ? toJob(r) : null
 }
 
-export function activeJobFor(target: { clipId?: string; characterId?: string }, kind: JobKind): Job | null {
-  const r = getDb()
-    .prepare(
-      `SELECT * FROM jobs WHERE kind = ? AND status IN ('queued','running') AND ${target.clipId ? 'clip_id' : 'character_id'} = ? LIMIT 1`
-    )
-    .get(kind, target.clipId ?? target.characterId) as Row | undefined
-  return r ? toJob(r) : null
+export function activeJobFor(
+  target: { clipId?: string; characterId?: string; derivativeId?: string; locationId?: string; propId?: string },
+  kind: JobKind
+): Job | null {
+  const rows = getDb()
+    .prepare(`SELECT * FROM jobs WHERE kind = ? AND status IN ('queued','running')`)
+    .all(kind) as Row[]
+  for (const r of rows) {
+    const j = toJob(r)
+    if (target.clipId) {
+      if (j.clipId === target.clipId) return j
+    } else if (target.derivativeId) {
+      if (j.derivativeId === target.derivativeId) return j
+    } else if (target.locationId) {
+      if (j.locationId === target.locationId) return j
+    } else if (target.propId) {
+      if (j.propId === target.propId) return j
+    } else if (target.characterId) {
+      // Base character sheet jobs carry no derivativeId; ignore costume variant jobs sharing character_id.
+      if (j.characterId === target.characterId && !j.derivativeId) return j
+    }
+  }
+  return null
 }
 
 // ---------- continuity items ----------

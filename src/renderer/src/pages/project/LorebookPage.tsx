@@ -20,9 +20,12 @@ import {
   Clock,
   Flame,
   AlertTriangle,
-  Wand2
+  Wand2,
+  FileSearch,
+  Images
 } from 'lucide-react'
 import type {
+  AssetUsageSummary,
   Character,
   Location,
   Prop,
@@ -43,7 +46,7 @@ import {
   getLocationSheetStatus,
   getPropSheetStatus
 } from '@shared/validation'
-import { geminiVoiceGender } from '@shared/models'
+import { detectCharacterGender, geminiVoiceGender, resolveClipTtsVoice } from '@shared/models'
 import { Badge, Button, Field, IconButton, Menu, Modal, Segmented, confirmDialog, cx, inputCls } from '../../components/ui'
 import { GeneratingOverlay } from '../../components/ClipVisual'
 import { AutoTextarea } from '../../components/AutoTextarea'
@@ -61,9 +64,118 @@ type LorebookTab = 'cast' | 'world' | 'rules'
 type WorldFilter = 'all' | 'location' | 'prop'
 type RulesSubTab = 'lock' | 'continuity' | 'guidelines'
 
+const LOCK_SOURCE_LABEL: Record<LockWord['source'], string> = {
+  character: 'Karakter',
+  costume: 'Kostum',
+  location: 'Lokasi',
+  prop: 'Prop',
+  manual: 'Manual'
+}
+
+/**
+ * Local draft state for async-persisted Lorebook entities (locations & props) so rapid typing and
+ * trailing spaces never get overwritten by in-flight IPC responses.
+ */
+function useDebouncedDraft<T extends Record<string, string>>(
+  entityId: string | undefined,
+  source: T | null,
+  onCommit: (id: string, dirty: Partial<T>) => Promise<void>,
+  delayMs = 300
+) {
+  const [draft, setDraft] = useState<T | null>(source)
+  const entityIdRef = useRef<string | undefined>(entityId)
+  const pendingRef = useRef<Partial<T> | null>(null)
+  const pendingIdRef = useRef<string | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const inFlightRef = useRef(0)
+  const inFlightPromiseRef = useRef<Promise<void>>(Promise.resolve())
+  const editingRef = useRef(false)
+  const commitRef = useRef(onCommit)
+  commitRef.current = onCommit
+
+  const flushNow = (): Promise<void> => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+    const id = pendingIdRef.current
+    const patch = pendingRef.current
+    if (!id || !patch) return inFlightPromiseRef.current
+    pendingIdRef.current = null
+    pendingRef.current = null
+    inFlightRef.current += 1
+    const p = commitRef.current(id, patch).finally(() => {
+      inFlightRef.current = Math.max(0, inFlightRef.current - 1)
+    })
+    inFlightPromiseRef.current = p
+    return p
+  }
+
+  // Flush the previous entity's pending edits immediately before switching selection.
+  useEffect(() => {
+    if (entityIdRef.current !== entityId) {
+      void flushNow()
+      entityIdRef.current = entityId
+      editingRef.current = false
+      setDraft(source)
+    }
+  }, [entityId])
+
+  useEffect(() => {
+    return () => {
+      void flushNow()
+    }
+  }, [])
+
+  // Sync external updates (e.g. AI Enrich or refreshLorebook) only when not actively editing.
+  const sourceKey = source ? JSON.stringify(source) : ''
+  useEffect(() => {
+    if (!entityId || !source) {
+      setDraft(null)
+      return
+    }
+    if (!editingRef.current && !pendingRef.current && inFlightRef.current === 0) {
+      setDraft(source)
+    }
+  }, [entityId, sourceKey])
+
+  const setField = <K extends keyof T>(key: K, value: T[K]): void => {
+    if (!entityId) return
+    setDraft((prev) => (prev ? { ...prev, [key]: value } : source ? { ...source, [key]: value } : null))
+    pendingIdRef.current = entityId
+    const nextPending: Partial<T> = Object.assign({}, pendingRef.current ?? undefined)
+    nextPending[key] = value
+    pendingRef.current = nextPending
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => {
+      void flushNow()
+    }, delayMs)
+  }
+
+  const onFocus = (): void => {
+    editingRef.current = true
+  }
+
+  const onBlur = (): void => {
+    editingRef.current = false
+    void flushNow()
+  }
+
+  const activeDraft = (entityIdRef.current === entityId ? draft : source) ?? source
+
+  return {
+    draft: activeDraft,
+    setField,
+    onFocus,
+    onBlur,
+    flushNow
+  }
+}
+
 export function LorebookPage() {
   const {
     project,
+    episode,
     characters,
     derivatives,
     locations,
@@ -150,12 +262,21 @@ export function LorebookPage() {
   const [newContDetail, setNewContDetail] = useState('')
   const [newContPlantedEp, setNewContPlantedEp] = useState('')
 
+  useEffect(() => {
+    if (newContPlantedEp && episodes.some((e) => e.id === newContPlantedEp)) return
+    setNewContPlantedEp(episode?.id ?? episodes[0]?.id ?? '')
+  }, [episodes, episode?.id, newContPlantedEp])
+
   const handleCreateContinuity = async () => {
     if (!newContName.trim()) {
       toast('info', 'Nama benang cerita tidak boleh kosong.')
       return
     }
-    const epId = newContPlantedEp || episodes[0]?.id || ''
+    const epId =
+      (newContPlantedEp && episodes.some((e) => e.id === newContPlantedEp) ? newContPlantedEp : '') ||
+      episode?.id ||
+      episodes[0]?.id ||
+      ''
     try {
       await addContinuityItem({
         kind: newContKind,
@@ -178,7 +299,7 @@ export function LorebookPage() {
     try {
       await updateContinuityItem(item.id, {
         status: newStatus,
-        payoffEpisodeId: newStatus === 'paid' ? (payoffEpId ?? episodes[0]?.id ?? null) : null
+        payoffEpisodeId: newStatus === 'paid' ? (payoffEpId ?? episode?.id ?? episodes[episodes.length - 1]?.id ?? null) : null
       })
       toast('success', newStatus === 'paid' ? 'Benang cerita ditandai lunas.' : newStatus === 'dropped' ? 'Benang cerita diabaikan.' : 'Benang cerita dibuka kembali.')
     } catch (err) {
@@ -221,7 +342,7 @@ export function LorebookPage() {
     }
     setEnrichingTarget(key)
     try {
-      await flush()
+      await Promise.all([flush(), locDraft.flushNow(), propDraft.flushNow()])
       const res = await window.api.lorebook.enrich(project.id, target)
       const freshBundle = await window.api.projects.get(project.id)
       useProject.getState().load(freshBundle)
@@ -296,6 +417,8 @@ export function LorebookPage() {
 
   const handleAcceptCandidates = async (input: AcceptLorebookCandidatesInput) => {
     try {
+      // Flush pending project/character edits before main merges accepted candidates into SQLite.
+      await flush()
       const res = await window.api.lorebook.acceptCandidates(input)
       await refreshLorebook()
       toast(
@@ -363,9 +486,157 @@ export function LorebookPage() {
   const selectedLocation = locations.find((l) => l.id === selectedId)
   const selectedProp = props.find((p) => p.id === selectedId)
 
+  const locDraftSource = useMemo(
+    () =>
+      selectedLocation
+        ? {
+            name: selectedLocation.name,
+            description: selectedLocation.description,
+            timeOfDayLighting: selectedLocation.profile?.timeOfDayLighting ?? '',
+            architecturalStyle: selectedLocation.profile?.architecturalStyle ?? '',
+            spatialLayout: selectedLocation.profile?.spatialLayout ?? '',
+            colorPalette: selectedLocation.profile?.colorPalette ?? '',
+            keyFeatures: selectedLocation.profile?.keyFeatures ?? ''
+          }
+        : null,
+    [selectedLocation]
+  )
+
+  const locDraft = useDebouncedDraft(selectedLocation?.id, locDraftSource, async (id, dirty) => {
+    const patch: Partial<Location> = {}
+    if (dirty.name !== undefined) patch.name = dirty.name
+    if (dirty.description !== undefined) patch.description = dirty.description
+    const profileKeys = [
+      'timeOfDayLighting',
+      'architecturalStyle',
+      'spatialLayout',
+      'colorPalette',
+      'keyFeatures'
+    ] as const
+    if (profileKeys.some((k) => dirty[k] !== undefined)) {
+      const currentLoc = useProject.getState().locations.find((l) => l.id === id)
+      const nextProfile = { ...(currentLoc?.profile ?? {}) }
+      for (const k of profileKeys) {
+        if (dirty[k] !== undefined) nextProfile[k] = dirty[k]
+      }
+      patch.profile = nextProfile
+    }
+    if (Object.keys(patch).length > 0) await updateLocation(id, patch)
+  })
+
+  const propDraftSource = useMemo(
+    () =>
+      selectedProp
+        ? {
+            name: selectedProp.name,
+            description: selectedProp.description,
+            category: selectedProp.profile?.category ?? '',
+            sizeScale: selectedProp.profile?.sizeScale ?? '',
+            shape: selectedProp.profile?.shape ?? '',
+            material: selectedProp.profile?.material ?? '',
+            appearance: selectedProp.profile?.appearance ?? '',
+            distinctiveDetails: selectedProp.profile?.distinctiveDetails ?? '',
+            significance: selectedProp.profile?.significance ?? ''
+          }
+        : null,
+    [selectedProp]
+  )
+
+  const propDraft = useDebouncedDraft(selectedProp?.id, propDraftSource, async (id, dirty) => {
+    const patch: Partial<Prop> = {}
+    if (dirty.name !== undefined) patch.name = dirty.name
+    if (dirty.description !== undefined) patch.description = dirty.description
+    const profileKeys = [
+      'category',
+      'sizeScale',
+      'shape',
+      'material',
+      'appearance',
+      'distinctiveDetails',
+      'significance'
+    ] as const
+    if (profileKeys.some((k) => dirty[k] !== undefined)) {
+      const currentProp = useProject.getState().props.find((pr) => pr.id === id)
+      const nextProfile = { ...(currentProp?.profile ?? {}) }
+      for (const k of profileKeys) {
+        if (dirty[k] !== undefined) nextProfile[k] = dirty[k]
+      }
+      patch.profile = nextProfile
+    }
+    if (Object.keys(patch).length > 0) await updateProp(id, patch)
+  })
+
+  // Cross-episode usage cache queried from SQLite so counts and warnings cover every episode, not just the active one.
+  const [usageCache, setUsageCache] = useState<Record<string, AssetUsageSummary>>({})
+
+  const selectedEntityRef = useMemo<{ kind: 'character' | 'location' | 'prop'; id: string } | null>(() => {
+    if (activeTab === 'cast' && selectedCharacter) return { kind: 'character', id: selectedCharacter.id }
+    if (activeTab === 'world' && selectedLocation) return { kind: 'location', id: selectedLocation.id }
+    if (activeTab === 'world' && selectedProp) return { kind: 'prop', id: selectedProp.id }
+    return null
+  }, [activeTab, selectedCharacter?.id, selectedLocation?.id, selectedProp?.id])
+
+  useEffect(() => {
+    if (!project?.id || !selectedEntityRef) return
+    let active = true
+    const { kind, id } = selectedEntityRef
+    void window.api.lorebook
+      .assetUsage(project.id, kind, id)
+      .then((summary) => {
+        if (active) setUsageCache((prev) => ({ ...prev, [`${kind}:${id}`]: summary }))
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [project?.id, selectedEntityRef?.kind, selectedEntityRef?.id, episodes.length, clips.length])
+
+  const tabUsageTargetsKey = useMemo(() => {
+    if (activeTab === 'cast') return characters.map((c) => `character:${c.id}`).join(',')
+    if (activeTab === 'world') {
+      return [...locations.map((l) => `location:${l.id}`), ...props.map((p) => `prop:${p.id}`)].join(',')
+    }
+    return ''
+  }, [activeTab, characters, locations, props])
+
+  useEffect(() => {
+    if (!project?.id || !tabUsageTargetsKey) return
+    let active = true
+    const entries = tabUsageTargetsKey.split(',').map((token) => {
+      const idx = token.indexOf(':')
+      return { kind: token.slice(0, idx) as 'character' | 'location' | 'prop', id: token.slice(idx + 1) }
+    })
+    void Promise.all(
+      entries.map(async ({ kind, id }) => {
+        try {
+          const summary = await window.api.lorebook.assetUsage(project.id, kind, id)
+          return [`${kind}:${id}`, summary] as const
+        } catch {
+          return null
+        }
+      })
+    ).then((results) => {
+      if (!active) return
+      const next: Record<string, AssetUsageSummary> = {}
+      for (const r of results) {
+        if (r) next[r[0]] = r[1]
+      }
+      if (Object.keys(next).length > 0) {
+        setUsageCache((prev) => ({ ...prev, ...next }))
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [project?.id, tabUsageTargetsKey, episodes.length, clips.length])
+
   const hasSelection =
     (activeTab === 'cast' && !!selectedCharacter) ||
     (activeTab === 'world' && (!!selectedLocation || !!selectedProp))
+
+  const cardGridCls = hasSelection
+    ? 'grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3'
+    : 'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
 
   // Filtered lists by search query
   const filteredCharacters = useMemo(() => {
@@ -468,32 +739,61 @@ export function LorebookPage() {
   }
 
   const handleAddLocation = async () => {
-    const nextNum = locations.length + 1
-    const loc = await addLocation({
-      name: `Lokasi ${nextNum}`,
-      description: ''
-    })
-    setSelectedId(loc.id)
+    try {
+      const nextNum = locations.length + 1
+      const loc = await addLocation({
+        name: `Lokasi ${nextNum}`,
+        description: ''
+      })
+      setSelectedId(loc.id)
+    } catch (err) {
+      toast('error', `Gagal menambahkan lokasi: ${errorText(err)}`)
+    }
   }
 
   const handleAddProp = async () => {
-    const nextNum = props.length + 1
-    const pr = await addProp({
-      name: `Prop ${nextNum}`,
-      description: ''
-    })
-    setSelectedId(pr.id)
+    try {
+      const nextNum = props.length + 1
+      const pr = await addProp({
+        name: `Prop ${nextNum}`,
+        description: ''
+      })
+      setSelectedId(pr.id)
+    } catch (err) {
+      toast('error', `Gagal menambahkan prop: ${errorText(err)}`)
+    }
   }
 
-  // Deletion handlers with impact warning
+  const getCrossEpisodeUsage = async (
+    kind: 'character' | 'location' | 'prop',
+    entityId: string
+  ): Promise<{ totalCount: number; episodeCount: number }> => {
+    try {
+      await flush()
+      const summary = await window.api.lorebook.assetUsage(project.id, kind, entityId)
+      setUsageCache((prev) => ({ ...prev, [`${kind}:${entityId}`]: summary }))
+      return { totalCount: summary.totalCount, episodeCount: summary.episodes.length }
+    } catch {
+      const cached = usageCache[`${kind}:${entityId}`]
+      if (cached) return { totalCount: cached.totalCount, episodeCount: cached.episodes.length }
+      const fallback =
+        kind === 'character'
+          ? characterUsageMap.get(entityId)
+          : kind === 'location'
+            ? locationUsageMap.get(entityId)
+            : propUsageMap.get(entityId)
+      return { totalCount: fallback?.total ?? 0, episodeCount: fallback?.episodes.size ?? 0 }
+    }
+  }
+
+  // Deletion handlers with cross-episode impact warning
   const handleDeleteCharacter = async (char: Character) => {
-    const usage = characterUsageMap.get(char.id)
-    const usedCount = usage?.total ?? 0
+    const { totalCount: usedCount, episodeCount: usedEps } = await getCrossEpisodeUsage('character', char.id)
     const ok = await confirmDialog({
       title: `Hapus karakter "${char.name}"?`,
       body:
         usedCount > 0
-          ? `Karakter ini masih dirujuk di ${usedCount} shot pada ${usage?.episodes.size} episode. Rujukan tidak akan ditulis ulang; klip yang merujuk karakter ini akan terblokir saat generate. Kamu bisa menggabungkannya ke karakter lain sebagai alternatif.`
+          ? `Karakter ini masih dirujuk di ${usedCount} shot pada ${usedEps} episode. Rujukan tidak akan ditulis ulang; klip yang merujuk karakter ini akan terblokir saat generate. Kamu bisa menggabungkannya ke karakter lain sebagai alternatif.`
           : `Karakter "${char.name}" beserta seluruh varian kostumnya akan dihapus permanen.`,
       confirm: 'Hapus karakter',
       cancel: 'Batal',
@@ -506,13 +806,12 @@ export function LorebookPage() {
   }
 
   const handleDeleteLocation = async (loc: Location) => {
-    const usage = locationUsageMap.get(loc.id)
-    const usedCount = usage?.total ?? 0
+    const { totalCount: usedCount, episodeCount: usedEps } = await getCrossEpisodeUsage('location', loc.id)
     const ok = await confirmDialog({
       title: `Hapus lokasi "${loc.name}"?`,
       body:
         usedCount > 0
-          ? `Lokasi ini masih dirujuk di ${usedCount} shot. Klip yang merujuk lokasi ini akan terblokir saat generate.`
+          ? `Lokasi ini masih dirujuk di ${usedCount} shot pada ${usedEps} episode. Klip yang merujuk lokasi ini akan terblokir saat generate.`
           : `Lokasi "${loc.name}" akan dihapus permanen.`,
       confirm: 'Hapus lokasi',
       danger: true
@@ -524,13 +823,12 @@ export function LorebookPage() {
   }
 
   const handleDeleteProp = async (pr: Prop) => {
-    const usage = propUsageMap.get(pr.id)
-    const usedCount = usage?.total ?? 0
+    const { totalCount: usedCount, episodeCount: usedEps } = await getCrossEpisodeUsage('prop', pr.id)
     const ok = await confirmDialog({
       title: `Hapus prop "${pr.name}"?`,
       body:
         usedCount > 0
-          ? `Prop ini masih dirujuk di ${usedCount} shot. Klip yang merujuk prop ini akan terblokir saat generate.`
+          ? `Prop ini masih dirujuk di ${usedCount} shot pada ${usedEps} episode. Klip yang merujuk prop ini akan terblokir saat generate.`
           : `Prop "${pr.name}" akan dihapus permanen.`,
       confirm: 'Hapus prop',
       danger: true
@@ -567,7 +865,7 @@ export function LorebookPage() {
 
   const handleGenerateLocationSheet = async (locId: string) => {
     try {
-      await flush()
+      await Promise.all([flush(), locDraft.flushNow()])
       const job = await window.api.lorebook.generateLocationSheet(locId)
       upsertJob(job)
       toast('info', 'Pembuatan lembar lokasi dimulai')
@@ -590,7 +888,7 @@ export function LorebookPage() {
 
   const handleGeneratePropSheet = async (propId: string) => {
     try {
-      await flush()
+      await Promise.all([flush(), propDraft.flushNow()])
       const job = await window.api.lorebook.generatePropSheet(propId)
       upsertJob(job)
       toast('info', 'Pembuatan lembar prop dimulai')
@@ -613,14 +911,34 @@ export function LorebookPage() {
 
   // Costume variant helpers
   const handleAddVariant = async (charId: string) => {
-    const charDerivs = derivatives.filter((d) => d.characterId === charId)
-    const nextNum = charDerivs.length + 1
-    const d = await addDerivative({
-      characterId: charId,
-      name: `Kostum ${nextNum}`,
-      promptChange: 'Pakaian alternatif...'
+    try {
+      const charDerivs = derivatives.filter((d) => d.characterId === charId)
+      const nextNum = charDerivs.length + 1
+      const d = await addDerivative({
+        characterId: charId,
+        name: `Kostum ${nextNum}`,
+        promptChange: 'Pakaian alternatif...'
+      })
+      toast('info', `Varian "${d.name}" ditambahkan`)
+    } catch (err) {
+      toast('error', `Gagal menambahkan varian: ${errorText(err)}`)
+    }
+  }
+
+  const handleDeleteVariant = async (variant: { id: string; name: string }) => {
+    const ok = await confirmDialog({
+      title: `Hapus varian "${variant.name}"?`,
+      body: 'Varian kostum beserta lembar referensinya akan dihapus permanen.',
+      confirm: 'Hapus varian',
+      danger: true
     })
-    toast('info', `Varian "${d.name}" ditambahkan`)
+    if (!ok) return
+    try {
+      await removeDerivative(variant.id)
+      toast('info', `Varian "${variant.name}" telah dihapus`)
+    } catch (err) {
+      toast('error', `Gagal menghapus varian: ${errorText(err)}`)
+    }
   }
 
   const handleGenerateDerivativeSheet = async (derivId: string) => {
@@ -710,6 +1028,7 @@ export function LorebookPage() {
             <Search className="pointer-events-none absolute left-2.5 size-3.5 text-muted" />
             <input
               value={searchQuery}
+              aria-label="Cari di Lorebook"
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={
                 activeTab === 'rules'
@@ -718,7 +1037,7 @@ export function LorebookPage() {
                     ? 'Cari pemeran atau alias...'
                     : 'Cari lokasi, prop, atau alias...'
               }
-              className="h-8 w-56 rounded-lg border border-line-2 bg-paper pl-8 pr-2.5 text-xs text-ink outline-none transition-colors focus:border-ink"
+              className="h-8 w-56 rounded-lg border border-line-2 bg-paper pl-8 pr-2.5 text-xs text-ink outline-none placeholder:text-muted transition-colors focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
             />
           </div>
         </div>
@@ -730,7 +1049,7 @@ export function LorebookPage() {
                 variant="secondary"
                 size="sm"
                 loading={extracting}
-                icon={<Sparkles className="size-3.5 text-accent" />}
+                icon={<FileSearch className="size-3.5 text-accent" />}
                 onClick={handleExtractLorebook}
                 title="Ekstrak otomatis karakter, varian pakaian, lokasi, dan prop dari teks cerita atau premis"
               >
@@ -764,7 +1083,7 @@ export function LorebookPage() {
               <Button
                 variant="secondary"
                 size="sm"
-                icon={<Sparkles className="size-3.5" />}
+                icon={<Images className="size-3.5" />}
                 onClick={() => setBatchModalOpen(true)}
               >
                 Buat semua lembar
@@ -772,25 +1091,14 @@ export function LorebookPage() {
             </>
           )}
 
-          {activeTab === 'rules' && rulesSubTab === 'continuity' && (
-            <Button
-              variant="primary"
-              size="sm"
-              icon={<Plus className="size-3.5" />}
-              onClick={() => setContinuityModalOpen(true)}
-            >
-              Tambah Benang Cerita
-            </Button>
-          )}
-
           <Button
             variant="secondary"
             size="sm"
             icon={<ArrowRight className="size-3.5" />}
-            onClick={() => {
+            onClick={async () => {
               const next = episodes.find((e) => e.status === 'draft' || e.status === 'planned') ?? episodes[0]
               if (next) {
-                void switchEpisode(next.id)
+                await switchEpisode(next.id)
                 setActiveView('episode')
                 setProjectActiveTab('production')
               } else {
@@ -822,23 +1130,46 @@ export function LorebookPage() {
       {/* Main Content Area: Split View (Grid on Left, Details on Right) */}
       <div className="flex min-h-0 flex-1">
         {/* Left: Card Grid */}
-        <div className="scroll-thin flex-1 overflow-y-auto p-6">
+        <div className="scroll-thin min-w-0 flex-1 overflow-y-auto p-6">
           {/* Tab 1: Pemeran (Characters) */}
-          {activeTab === 'cast' && (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {activeTab === 'cast' && filteredCharacters.length === 0 && (
+            <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-line-2 bg-surface/60 px-6 py-12 text-center">
+              <Users className="size-8 text-muted/60" />
+              <p className="mt-2 font-display text-sm font-bold text-ink">
+                {searchQuery.trim() ? 'Pemeran tidak ditemukan' : 'Belum ada pemeran'}
+              </p>
+              <p className="mt-1 max-w-sm text-xs text-muted">
+                {searchQuery.trim()
+                  ? 'Coba kata kunci lain atau hapus pencarianmu.'
+                  : 'Tambahkan pemeran secara manual lewat tombol di kanan atas, atau klik "Ekstrak dari Cerita" untuk mendeteksi otomatis.'}
+              </p>
+            </div>
+          )}
+          {activeTab === 'cast' && filteredCharacters.length > 0 && (
+            <div className={cardGridCls}>
               {filteredCharacters.map((char) => {
                 const sheet = char.sheetAssetId ? assets[char.sheetAssetId] : null
                 const isSelected = selectedId === char.id
                 const charDerivs = derivatives.filter((d) => d.characterId === char.id)
-                const usage = characterUsageMap.get(char.id)
-                const usedInEps = usage?.episodes.size ?? 0
+                const cachedUsage = usageCache[`character:${char.id}`]
+                const localUsage = characterUsageMap.get(char.id)
+                const usedInEps = cachedUsage ? cachedUsage.episodes.length : (localUsage?.episodes.size ?? 0)
+                const usedTotal = cachedUsage ? cachedUsage.totalCount : (localUsage?.total ?? 0)
 
                 return (
                   <div
                     key={char.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setSelectedId(char.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        setSelectedId(char.id)
+                      }
+                    }}
                     className={cx(
-                      'group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-surface transition-all',
+                      'group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-surface transition-all focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2',
                       isSelected ? 'border-ink bg-sun-soft/25 shadow-ink' : 'border-line hover:border-ink-2 hover:shadow-xs'
                     )}
                   >
@@ -854,7 +1185,7 @@ export function LorebookPage() {
                       )}
                       <div className="absolute top-2 right-2 flex items-center gap-1">
                         {project && getCharacterSheetStatus(char, project, assets, activeImageModel).status === 'stale' && (
-                          <Badge tone="warn" className="text-[10px]">
+                          <Badge tone="warn" className="text-[11px]">
                             Basi
                           </Badge>
                         )}
@@ -862,6 +1193,8 @@ export function LorebookPage() {
                           trigger={(open) => (
                             <button
                               type="button"
+                              aria-label={`Opsi untuk ${char.name}`}
+                              title="Opsi"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 open()
@@ -903,7 +1236,7 @@ export function LorebookPage() {
                         </span>
                         {char.aliases?.[0] && (
                           <span className="max-w-[100px] truncate rounded bg-sand px-1.5 py-0.5 text-[11px] text-muted">
-                            aka {char.aliases[0]}
+                            alias {char.aliases[0]}
                           </span>
                         )}
                       </div>
@@ -913,7 +1246,7 @@ export function LorebookPage() {
                           {charDerivs.length} varian
                         </span>
                         <span className="rounded bg-sand px-1.5 py-0.5 font-medium">
-                          {usedInEps} episode ({usage?.total ?? 0} shot)
+                          {usedInEps} episode ({usedTotal} shot)
                         </span>
                       </div>
                     </div>
@@ -958,18 +1291,29 @@ export function LorebookPage() {
                   <MapPin className="size-3.5" /> Lokasi ({filteredLocations.length})
                 </h4>
               )}
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <div className={cardGridCls}>
               {filteredLocations.map((loc) => {
                 const sheet = loc.sheetAssetId ? assets[loc.sheetAssetId] : null
                 const isSelected = selectedId === loc.id
-                const usage = locationUsageMap.get(loc.id)
+                const cachedUsage = usageCache[`location:${loc.id}`]
+                const localUsage = locationUsageMap.get(loc.id)
+                const locEps = cachedUsage ? cachedUsage.episodes.length : (localUsage?.episodes.size ?? 0)
+                const locTotal = cachedUsage ? cachedUsage.totalCount : (localUsage?.total ?? 0)
 
                 return (
                   <div
                     key={loc.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setSelectedId(loc.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        setSelectedId(loc.id)
+                      }
+                    }}
                     className={cx(
-                      'group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-surface transition-all',
+                      'group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-surface transition-all focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2',
                       isSelected ? 'border-ink bg-sun-soft/25 shadow-ink' : 'border-line hover:border-ink-2 hover:shadow-xs'
                     )}
                   >
@@ -984,7 +1328,7 @@ export function LorebookPage() {
                       )}
                       <div className="absolute top-2 right-2 flex items-center gap-1">
                         {project && getLocationSheetStatus(loc, project, assets, activeImageModel).status === 'stale' && (
-                          <Badge tone="warn" className="text-[10px]">
+                          <Badge tone="warn" className="text-[11px]">
                             Basi
                           </Badge>
                         )}
@@ -992,6 +1336,8 @@ export function LorebookPage() {
                           trigger={(open) => (
                             <button
                               type="button"
+                              aria-label={`Opsi untuk ${loc.name}`}
+                              title="Opsi"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 open()
@@ -1031,7 +1377,7 @@ export function LorebookPage() {
                       </span>
                       <div className="flex items-center gap-1.5 text-[11px] text-muted">
                         <span className="rounded bg-sand px-1.5 py-0.5 font-medium">
-                          {usage?.episodes.size ?? 0} episode ({usage?.total ?? 0} shot)
+                          {locEps} episode ({locTotal} shot)
                         </span>
                       </div>
                     </div>
@@ -1050,18 +1396,29 @@ export function LorebookPage() {
                   <Package className="size-3.5" /> Prop ({filteredProps.length})
                 </h4>
               )}
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <div className={cardGridCls}>
               {filteredProps.map((pr) => {
                 const sheet = pr.sheetAssetId ? assets[pr.sheetAssetId] : null
                 const isSelected = selectedId === pr.id
-                const usage = propUsageMap.get(pr.id)
+                const cachedUsage = usageCache[`prop:${pr.id}`]
+                const localUsage = propUsageMap.get(pr.id)
+                const propEps = cachedUsage ? cachedUsage.episodes.length : (localUsage?.episodes.size ?? 0)
+                const propTotal = cachedUsage ? cachedUsage.totalCount : (localUsage?.total ?? 0)
 
                 return (
                   <div
                     key={pr.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setSelectedId(pr.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        setSelectedId(pr.id)
+                      }
+                    }}
                     className={cx(
-                      'group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-surface transition-all',
+                      'group relative flex cursor-pointer flex-col overflow-hidden rounded-2xl border bg-surface transition-all focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2',
                       isSelected ? 'border-ink bg-sun-soft/25 shadow-ink' : 'border-line hover:border-ink-2 hover:shadow-xs'
                     )}
                   >
@@ -1076,7 +1433,7 @@ export function LorebookPage() {
                       )}
                       <div className="absolute top-2 right-2 flex items-center gap-1">
                         {project && getPropSheetStatus(pr, project, assets, activeImageModel).status === 'stale' && (
-                          <Badge tone="warn" className="text-[10px]">
+                          <Badge tone="warn" className="text-[11px]">
                             Basi
                           </Badge>
                         )}
@@ -1084,6 +1441,8 @@ export function LorebookPage() {
                           trigger={(open) => (
                             <button
                               type="button"
+                              aria-label={`Opsi untuk ${pr.name}`}
+                              title="Opsi"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 open()
@@ -1123,7 +1482,7 @@ export function LorebookPage() {
                       </span>
                       <div className="flex items-center gap-1.5 text-[11px] text-muted">
                         <span className="rounded bg-sand px-1.5 py-0.5 font-medium">
-                          {usage?.episodes.size ?? 0} episode ({usage?.total ?? 0} shot)
+                          {propEps} episode ({propTotal} shot)
                         </span>
                       </div>
                     </div>
@@ -1156,7 +1515,7 @@ export function LorebookPage() {
             <div className="mb-4 flex flex-wrap items-center gap-1.5">
               {(
                 [
-                  { id: 'lock', label: 'Kunci Serial (Lock Words)' },
+                  { id: 'lock', label: 'Kunci Kontinuitas' },
                   { id: 'continuity', label: `Kontinuitas (${continuityItems.length})` },
                   { id: 'guidelines', label: 'Arahan & Template Prompt' }
                 ] as { id: RulesSubTab; label: string }[]
@@ -1198,7 +1557,7 @@ export function LorebookPage() {
                 placeholder="Contoh: Serial drama vertikal tempo cepat. Tokoh utama selalu tenang dan dingin. Hindari dialog terlalu panjang..."
                 minRows={6}
                 maxHeight={260}
-                className="w-full rounded-xl border border-line bg-paper p-3 text-xs leading-relaxed text-ink outline-none focus:border-ink"
+                className="w-full rounded-xl border border-line bg-paper p-3 text-xs leading-relaxed text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
               />
             </div>
           )}
@@ -1210,10 +1569,10 @@ export function LorebookPage() {
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <h3 className="font-display text-base font-bold text-ink">
-                      Kunci Kontinuitas Serial (Lock Words)
+                      Kunci Kontinuitas Serial
                     </h3>
                     <p className="mt-1 text-xs text-muted leading-relaxed">
-                      Frasa identitas yang ditempel <strong>apa adanya (verbatim)</strong> ke setiap prompt gambar dan video agar konsistensi visual tokoh, kostum, lokasi, dan prop terjaga di seluruh episode. Frasa otomatis bisa dinonaktifkan, dan frasa kustom manual bisa ditambahkan.
+                      Frasa identitas yang ditempel <strong>apa adanya</strong> ke setiap prompt gambar dan video agar konsistensi visual tokoh, kostum, lokasi, dan prop terjaga di seluruh episode. Frasa otomatis bisa dinonaktifkan, dan frasa kustom manual bisa ditambahkan.
                     </p>
                   </div>
                   <Button
@@ -1232,15 +1591,17 @@ export function LorebookPage() {
                   <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <input
                       value={newLockLabel}
+                      aria-label="Label kunci manual"
                       onChange={(e) => setNewLockLabel(e.target.value)}
                       placeholder="Label (mis. Tahi lalat bawah mata kiri)"
-                      className="h-8 rounded-lg border border-line-2 bg-surface px-3 text-xs text-ink outline-none focus:border-ink"
+                      className="h-8 rounded-lg border border-line-2 bg-surface px-3 text-xs text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                     />
                     <input
                       value={newLockText}
+                      aria-label="Teks kunci manual"
                       onChange={(e) => setNewLockText(e.target.value)}
-                      placeholder="Teks Verbatim (mis. Small dark beauty mark below left eye)"
-                      className="h-8 rounded-lg border border-line-2 bg-surface px-3 text-xs text-ink outline-none focus:border-ink sm:col-span-2"
+                      placeholder="Teks kunci (mis. Tahi lalat kecil gelap di bawah mata kiri)"
+                      className="h-8 rounded-lg border border-line-2 bg-surface px-3 text-xs text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35 sm:col-span-2"
                     />
                   </div>
                   <div className="mt-3 flex justify-end">
@@ -1285,6 +1646,7 @@ export function LorebookPage() {
                       <div className="flex items-start gap-3">
                         <input
                           type="checkbox"
+                          aria-label={`Aktifkan kunci ${lock.label}`}
                           checked={lock.enabled}
                           onChange={() => handleToggleLock(lock.id)}
                           className="mt-0.5 size-4 rounded border-line text-ink focus:ring-0"
@@ -1292,8 +1654,8 @@ export function LorebookPage() {
                         <div className="space-y-1">
                           <div className="flex items-center gap-2">
                             <span className="font-display text-xs font-bold">{lock.label}</span>
-                            <span className="rounded bg-sand px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted">
-                              {lock.source}
+                            <span className="rounded bg-sand px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wider text-muted">
+                              {LOCK_SOURCE_LABEL[lock.source] ?? lock.source}
                             </span>
                           </div>
                           <p className="rounded bg-sand/60 px-2 py-1 font-mono text-xs text-ink/90">
@@ -1329,7 +1691,7 @@ export function LorebookPage() {
                       Benang Cerita & Kontinuitas Antar-Episode
                     </h3>
                     <p className="mt-1 text-xs text-muted leading-relaxed">
-                      Lacak petunjuk awal (foreshadow), barang kunci (prop), aturan dunia, dan dinamika hubungan yang ditanam di episode tertentu agar dibayar dan diselesaikan tepat waktu tanpa ada plot hole.
+                      Lacak petunjuk awal, barang kunci, aturan dunia, dan dinamika hubungan yang ditanam di episode tertentu agar dibayar dan diselesaikan tepat waktu tanpa celah cerita.
                     </p>
                   </div>
                   <Button
@@ -1367,7 +1729,7 @@ export function LorebookPage() {
                     <p className="mt-1 text-xs text-muted">
                       {searchQuery
                         ? 'Tidak ada hasil yang cocok dengan pencarianmu.'
-                        : 'Catat petunjuk awal atau rahasia cerita yang ditanam agar Script Doctor mengingatkanmu membayarnya.'}
+                        : 'Catat petunjuk awal atau rahasia cerita yang ditanam agar pemeriksa naskah mengingatkanmu membayarnya.'}
                     </p>
                     <Button
                       variant="secondary"
@@ -1400,7 +1762,7 @@ export function LorebookPage() {
                         className={cx(
                           'flex flex-col gap-3 rounded-2xl border p-4.5 transition-colors',
                           isHotAlert
-                            ? 'border-amber-500/40 bg-amber-500/5'
+                            ? 'border-sun bg-sun-soft/40'
                             : item.status === 'open'
                             ? 'border-line bg-surface'
                             : 'border-line/60 bg-surface/50 opacity-80'
@@ -1414,12 +1776,12 @@ export function LorebookPage() {
                               </span>
                               <Badge tone={item.tier === 'hot' ? 'bad' : 'draft'}>
                                 {item.tier === 'hot' ? (
-                                  <span className="flex items-center gap-1 font-semibold text-bad">
-                                    <Flame className="size-3" /> HOT
+                                  <span className="flex items-center gap-1 font-semibold text-bad-ink">
+                                    <Flame className="size-3" /> Mendesak
                                   </span>
                                 ) : (
                                   <span className="flex items-center gap-1 text-muted">
-                                    <Clock className="size-3" /> COLD
+                                    <Clock className="size-3" /> Jangka Panjang
                                   </span>
                                 )}
                               </Badge>
@@ -1457,7 +1819,7 @@ export function LorebookPage() {
                                 </strong>
                               </span>
                               {item.status === 'open' && ageInEpisodes > 0 && (
-                                <span className={isHotAlert ? 'font-semibold text-amber-600' : ''}>
+                                <span className={isHotAlert ? 'font-semibold text-sun-ink' : ''}>
                                   • {ageInEpisodes} episode lalu
                                 </span>
                               )}
@@ -1472,10 +1834,10 @@ export function LorebookPage() {
                             </div>
 
                             {isHotAlert && (
-                              <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600">
+                              <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-sun-soft px-3 py-1.5 text-xs text-sun-ink">
                                 <AlertTriangle className="size-3.5 shrink-0" />
                                 <span>
-                                  Perhatian: Benang cerita HOT ini sudah terbuka lebih dari 3 episode tanpa dibayar!
+                                  Perhatian: Benang cerita mendesak ini sudah terbuka lebih dari 3 episode tanpa dibayar!
                                 </span>
                               </div>
                             )}
@@ -1487,7 +1849,7 @@ export function LorebookPage() {
                                 <Button
                                   variant="secondary"
                                   size="sm"
-                                  icon={<CheckCircle2 className="size-3.5 text-good" />}
+                                  icon={<CheckCircle2 className="size-3.5 text-ok-ink" />}
                                   onClick={() => handleToggleContinuityStatus(item, 'paid')}
                                   title="Tandai telah dibayar / diselesaikan"
                                 >
@@ -1630,30 +1992,42 @@ export function LorebookPage() {
               </Field>
 
               {/* Voice Selector */}
-              <Field label="Suara TTS Khusus" hint="Digunakan saat mode audio narator atau dialog TTS aktif.">
-                <Select
-                  label="Suara TTS"
-                  size="sm"
-                  value={selectedCharacter.ttsVoice || ''}
-                  onChange={(v) =>
-                    updateCharacter(selectedCharacter.id, {
-                      ttsVoice: v || null,
-                      ttsProvider: v ? ttsProject?.ttsProvider ?? null : null
-                    })
-                  }
-                  options={[
-                    { value: '', label: `Bawaan narator (${ttsProject?.ttsVoice || 'Utama'})` },
-                    ...voices.map((v) => {
-                      const gen = geminiVoiceGender(v.id)
-                      const genTag = gen === 'female' ? 'Perempuan' : gen === 'male' ? 'Laki-laki' : ''
-                      return {
-                        value: v.id,
-                        label: genTag ? `${v.name} (${genTag})` : v.name,
-                        hint: v.description || undefined
+              <Field label="Suara TTS Khusus" hint="Kosongkan untuk otomatis mengikuti kelamin pemeran (Gemini) atau narator utama.">
+                {(() => {
+                  const detectedGender = detectCharacterGender(selectedCharacter)
+                  const autoVoice = ttsProject
+                    ? resolveClipTtsVoice({ speakerId: selectedCharacter.id }, characters, ttsProject)
+                    : ''
+                  const autoLabel =
+                    ttsProject?.ttsProvider === 'gemini' && (detectedGender === 'female' || detectedGender === 'male')
+                      ? `Otomatis (${detectedGender === 'female' ? 'Perempuan' : 'Laki-laki'} · ${autoVoice})`
+                      : `Bawaan narator (${ttsProject?.ttsVoice || 'Utama'})`
+                  return (
+                    <Select
+                      label="Suara TTS"
+                      size="sm"
+                      value={selectedCharacter.ttsVoice || ''}
+                      onChange={(v) =>
+                        updateCharacter(selectedCharacter.id, {
+                          ttsVoice: v || null,
+                          ttsProvider: v ? ttsProject?.ttsProvider ?? null : null
+                        })
                       }
-                    })
-                  ]}
-                />
+                      options={[
+                        { value: '', label: autoLabel },
+                        ...voices.map((v) => {
+                          const gen = v.gender ?? geminiVoiceGender(v.id)
+                          const genTag = gen === 'female' ? 'Perempuan' : gen === 'male' ? 'Laki-laki' : ''
+                          return {
+                            value: v.id,
+                            label: genTag ? `${v.name} (${genTag})` : v.name,
+                            hint: v.description || undefined
+                          }
+                        })
+                      ]}
+                    />
+                  )
+                })()}
               </Field>
 
               {/* Aliases */}
@@ -1691,7 +2065,7 @@ export function LorebookPage() {
                         ;(e.target as HTMLInputElement).value = ''
                       }
                     }}
-                    className="h-6 w-36 rounded border border-line-2 bg-paper px-2 text-xs text-ink outline-none focus:border-ink"
+                    className="h-6 w-36 rounded border border-line-2 bg-paper px-2 text-xs text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                   />
                 </div>
               </div>
@@ -1700,8 +2074,8 @@ export function LorebookPage() {
               <div className="flex flex-col gap-3 rounded-xl border border-line bg-paper/60 p-3.5">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <span className="font-display text-xs font-bold text-ink">Character Bible (Profil Mendalam)</span>
-                    <Badge tone="info" className="text-[10px]">
+                    <span className="font-display text-xs font-bold text-ink">Profil Lengkap Karakter</span>
+                    <Badge tone="info" className="text-[11px]">
                       Konsistensi Shot &amp; Prompt
                     </Badge>
                   </div>
@@ -1953,7 +2327,7 @@ export function LorebookPage() {
                             <input
                               defaultValue={variant.name}
                               onBlur={(e) => void updateDerivative(variant.id, { name: e.target.value })}
-                              className="font-bold text-ink bg-transparent border-b border-transparent hover:border-line focus:border-ink outline-none transition-colors"
+                              className="rounded font-bold text-ink bg-transparent border-b border-transparent hover:border-line focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35 outline-none transition-colors"
                             />
                             <div className="flex items-center gap-1">
                               {isStale && (
@@ -1963,9 +2337,10 @@ export function LorebookPage() {
                               )}
                               <button
                                 type="button"
-                                onClick={() => void removeDerivative(variant.id)}
-                                className="rounded p-1 text-muted transition-colors hover:bg-bad-soft hover:text-bad-ink"
+                                onClick={() => void handleDeleteVariant(variant)}
+                                className="flex size-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-bad-soft hover:text-bad-ink"
                                 title="Hapus varian kostum"
+                                aria-label={`Hapus varian kostum ${variant.name}`}
                               >
                                 <Trash2 className="size-3.5" />
                               </button>
@@ -1973,12 +2348,12 @@ export function LorebookPage() {
                           </div>
 
                           <div className="flex flex-col gap-1">
-                            <label className="text-[11px] font-semibold text-accent">Frasa Kunci Kostum</label>
+                            <label className="text-[11px] font-semibold text-accent-ink">Frasa Kunci Kostum</label>
                             <input
                               defaultValue={variant.costumeKeyphrase ?? ''}
                               onBlur={(e) => void updateDerivative(variant.id, { costumeKeyphrase: e.target.value })}
                               placeholder="Misal: gaun merah pesta malam, setelan jas hitam"
-                              className="w-full rounded-lg border border-line-2/70 bg-surface px-2.5 py-1 text-xs text-ink outline-none transition-colors focus:border-ink"
+                              className="w-full rounded-lg border border-line-2/70 bg-surface px-2.5 py-1 text-xs text-ink outline-none placeholder:text-muted transition-colors focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                             />
                           </div>
 
@@ -1988,7 +2363,7 @@ export function LorebookPage() {
                             placeholder="Deskripsi perubahan pakaian atau gaya..."
                             minRows={1}
                             maxHeight={120}
-                            className="w-full rounded-lg border border-line-2/70 bg-surface p-2 text-xs text-ink outline-none transition-colors focus:border-ink"
+                            className="w-full rounded-lg border border-line-2/70 bg-surface p-2 text-xs text-ink outline-none placeholder:text-muted transition-colors focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                           />
 
                           <div className="flex items-center gap-2 pt-1">
@@ -2052,31 +2427,34 @@ export function LorebookPage() {
               <div className="flex flex-col gap-2 border-t border-line pt-4 text-xs">
                 <span className="font-semibold text-ink">Dipakai di Episode:</span>
                 {(() => {
-                  const usage = characterUsageMap.get(selectedCharacter.id)
-                  if (!usage || usage.total === 0) {
+                  const cached = usageCache[`character:${selectedCharacter.id}`]
+                  const rows = cached
+                    ? cached.episodes
+                    : Array.from(characterUsageMap.get(selectedCharacter.id)?.episodes.entries() ?? []).map(([epId, count]) => {
+                        const ep = episodes.find((e) => e.id === epId)
+                        return { episodeId: epId, episodeNum: ep?.episodeNum ?? 0, title: ep?.title ?? 'Episode', count }
+                      })
+                  if (rows.length === 0) {
                     return <span className="text-muted">Belum dipakai di episode mana pun.</span>
                   }
                   return (
                     <div className="flex flex-col gap-1">
-                      {Array.from(usage.episodes.entries()).map(([epId, count]) => {
-                        const ep = episodes.find((e) => e.id === epId)
-                        return (
-                          <button
-                            key={epId}
-                            type="button"
-                            onClick={() => {
-                              void switchEpisode(epId)
-                              setActiveView('episode')
-                            }}
-                            className="flex items-center justify-between rounded-lg p-2 text-left hover:bg-sand"
-                          >
-                            <span className="font-medium text-ink">
-                              Ep {ep?.episodeNum ?? '?'}: {ep?.title ?? 'Episode'}
-                            </span>
-                            <span className="text-muted">{count} shot ▸</span>
-                          </button>
-                        )
-                      })}
+                      {rows.map((row) => (
+                        <button
+                          key={row.episodeId}
+                          type="button"
+                          onClick={() => {
+                            void switchEpisode(row.episodeId)
+                            setActiveView('episode')
+                          }}
+                          className="flex items-center justify-between rounded-lg p-2 text-left hover:bg-sand"
+                        >
+                          <span className="font-medium text-ink">
+                            Ep {row.episodeNum || '?'}: {row.title}
+                          </span>
+                          <span className="text-muted">{row.count} shot ▸</span>
+                        </button>
+                      ))}
                     </div>
                   )
                 })()}
@@ -2146,16 +2524,20 @@ export function LorebookPage() {
 
               <Field label="Nama Lokasi">
                 <input
-                  value={selectedLocation.name}
-                  onChange={(e) => updateLocation(selectedLocation.id, { name: e.target.value })}
+                  value={locDraft.draft?.name ?? selectedLocation.name}
+                  onFocus={locDraft.onFocus}
+                  onBlur={locDraft.onBlur}
+                  onChange={(e) => locDraft.setField('name', e.target.value)}
                   className={cx(inputCls, 'h-10 text-sm')}
                 />
               </Field>
 
               <Field label="Deskripsi Suasana & Lingkungan">
                 <AutoTextarea
-                  value={selectedLocation.description}
-                  onChange={(e) => updateLocation(selectedLocation.id, { description: e.target.value })}
+                  value={locDraft.draft?.description ?? selectedLocation.description}
+                  onFocus={locDraft.onFocus}
+                  onBlur={locDraft.onBlur}
+                  onChange={(e) => locDraft.setField('description', e.target.value)}
                   placeholder="Arsitektur, pencahayaan, waktu (siang/malam), furnitur, suasana..."
                   minRows={2}
                   maxHeight={160}
@@ -2198,7 +2580,7 @@ export function LorebookPage() {
                         ;(e.target as HTMLInputElement).value = ''
                       }
                     }}
-                    className="h-6 w-36 rounded border border-line-2 bg-paper px-2 text-xs text-ink outline-none focus:border-ink"
+                    className="h-6 w-36 rounded border border-line-2 bg-paper px-2 text-xs text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                   />
                 </div>
               </div>
@@ -2245,12 +2627,10 @@ export function LorebookPage() {
 
                 <Field label="Waktu & Pencahayaan Khas" className="text-[11px]">
                   <input
-                    value={selectedLocation.profile?.timeOfDayLighting ?? ''}
-                    onChange={(e) => {
-                      updateLocation(selectedLocation.id, {
-                        profile: { ...(selectedLocation.profile ?? {}), timeOfDayLighting: e.target.value }
-                      })
-                    }}
+                    value={locDraft.draft?.timeOfDayLighting ?? selectedLocation.profile?.timeOfDayLighting ?? ''}
+                    onFocus={locDraft.onFocus}
+                    onBlur={locDraft.onBlur}
+                    onChange={(e) => locDraft.setField('timeOfDayLighting', e.target.value)}
                     placeholder="Contoh: Malam hari temaram, lampu neon basah"
                     className={cx(inputCls, 'h-8 text-xs')}
                   />
@@ -2258,12 +2638,10 @@ export function LorebookPage() {
 
                 <Field label="Gaya Arsitektur / Desain" className="text-[11px]">
                   <input
-                    value={selectedLocation.profile?.architecturalStyle ?? ''}
-                    onChange={(e) => {
-                      updateLocation(selectedLocation.id, {
-                        profile: { ...(selectedLocation.profile ?? {}), architecturalStyle: e.target.value }
-                      })
-                    }}
+                    value={locDraft.draft?.architecturalStyle ?? selectedLocation.profile?.architecturalStyle ?? ''}
+                    onFocus={locDraft.onFocus}
+                    onBlur={locDraft.onBlur}
+                    onChange={(e) => locDraft.setField('architecturalStyle', e.target.value)}
                     placeholder="Contoh: Modern minimalis mewah, lantai marmer"
                     className={cx(inputCls, 'h-8 text-xs')}
                   />
@@ -2271,12 +2649,10 @@ export function LorebookPage() {
 
                 <Field label="Tata Letak 4 Sisi / Geografi Ruang (Multi-POV)" className="text-[11px]">
                   <input
-                    value={selectedLocation.profile?.spatialLayout ?? ''}
-                    onChange={(e) => {
-                      updateLocation(selectedLocation.id, {
-                        profile: { ...(selectedLocation.profile ?? {}), spatialLayout: e.target.value }
-                      })
-                    }}
+                    value={locDraft.draft?.spatialLayout ?? selectedLocation.profile?.spatialLayout ?? ''}
+                    onFocus={locDraft.onFocus}
+                    onBlur={locDraft.onBlur}
+                    onChange={(e) => locDraft.setField('spatialLayout', e.target.value)}
                     placeholder="Contoh: Jendela tinggi dinding kiri, meja kayu panjang di tengah, pintu kaca di dinding belakang"
                     className={cx(inputCls, 'h-8 text-xs')}
                   />
@@ -2284,12 +2660,10 @@ export function LorebookPage() {
 
                 <Field label="Palet Warna & Material Dominan" className="text-[11px]">
                   <input
-                    value={selectedLocation.profile?.colorPalette ?? ''}
-                    onChange={(e) => {
-                      updateLocation(selectedLocation.id, {
-                        profile: { ...(selectedLocation.profile ?? {}), colorPalette: e.target.value }
-                      })
-                    }}
+                    value={locDraft.draft?.colorPalette ?? selectedLocation.profile?.colorPalette ?? ''}
+                    onFocus={locDraft.onFocus}
+                    onBlur={locDraft.onBlur}
+                    onChange={(e) => locDraft.setField('colorPalette', e.target.value)}
                     placeholder="Contoh: Kayu walnut gelap, dinding abu-abu hangat, aksen kuningan & kaca bening"
                     className={cx(inputCls, 'h-8 text-xs')}
                   />
@@ -2297,12 +2671,10 @@ export function LorebookPage() {
 
                 <Field label="Fitur Utama / Landmark Penting" className="text-[11px]">
                   <input
-                    value={selectedLocation.profile?.keyFeatures ?? ''}
-                    onChange={(e) => {
-                      updateLocation(selectedLocation.id, {
-                        profile: { ...(selectedLocation.profile ?? {}), keyFeatures: e.target.value }
-                      })
-                    }}
+                    value={locDraft.draft?.keyFeatures ?? selectedLocation.profile?.keyFeatures ?? ''}
+                    onFocus={locDraft.onFocus}
+                    onBlur={locDraft.onBlur}
+                    onChange={(e) => locDraft.setField('keyFeatures', e.target.value)}
                     placeholder="Contoh: Jendela kaca besar menghadap gedung pencakar langit"
                     className={cx(inputCls, 'h-8 text-xs')}
                   />
@@ -2313,31 +2685,34 @@ export function LorebookPage() {
               <div className="flex flex-col gap-2 border-t border-line pt-4 text-xs">
                 <span className="font-semibold text-ink">Dipakai di Episode:</span>
                 {(() => {
-                  const usage = locationUsageMap.get(selectedLocation.id)
-                  if (!usage || usage.total === 0) {
+                  const cached = usageCache[`location:${selectedLocation.id}`]
+                  const rows = cached
+                    ? cached.episodes
+                    : Array.from(locationUsageMap.get(selectedLocation.id)?.episodes.entries() ?? []).map(([epId, count]) => {
+                        const ep = episodes.find((e) => e.id === epId)
+                        return { episodeId: epId, episodeNum: ep?.episodeNum ?? 0, title: ep?.title ?? 'Episode', count }
+                      })
+                  if (rows.length === 0) {
                     return <span className="text-muted">Belum dipakai di episode mana pun.</span>
                   }
                   return (
                     <div className="flex flex-col gap-1">
-                      {Array.from(usage.episodes.entries()).map(([epId, count]) => {
-                        const ep = episodes.find((e) => e.id === epId)
-                        return (
-                          <button
-                            key={epId}
-                            type="button"
-                            onClick={() => {
-                              void switchEpisode(epId)
-                              setActiveView('episode')
-                            }}
-                            className="flex items-center justify-between rounded-lg p-2 text-left hover:bg-sand"
-                          >
-                            <span className="font-medium text-ink">
-                              Ep {ep?.episodeNum ?? '?'}: {ep?.title ?? 'Episode'}
-                            </span>
-                            <span className="text-muted">{count} shot ▸</span>
-                          </button>
-                        )
-                      })}
+                      {rows.map((row) => (
+                        <button
+                          key={row.episodeId}
+                          type="button"
+                          onClick={() => {
+                            void switchEpisode(row.episodeId)
+                            setActiveView('episode')
+                          }}
+                          className="flex items-center justify-between rounded-lg p-2 text-left hover:bg-sand"
+                        >
+                          <span className="font-medium text-ink">
+                            Ep {row.episodeNum || '?'}: {row.title}
+                          </span>
+                          <span className="text-muted">{row.count} shot ▸</span>
+                        </button>
+                      ))}
                     </div>
                   )
                 })()}
@@ -2407,16 +2782,20 @@ export function LorebookPage() {
 
               <Field label="Nama Prop">
                 <input
-                  value={selectedProp.name}
-                  onChange={(e) => updateProp(selectedProp.id, { name: e.target.value })}
+                  value={propDraft.draft?.name ?? selectedProp.name}
+                  onFocus={propDraft.onFocus}
+                  onBlur={propDraft.onBlur}
+                  onChange={(e) => propDraft.setField('name', e.target.value)}
                   className={cx(inputCls, 'h-10 text-sm')}
                 />
               </Field>
 
               <Field label="Deskripsi Bentuk & Bahan">
                 <AutoTextarea
-                  value={selectedProp.description}
-                  onChange={(e) => updateProp(selectedProp.id, { description: e.target.value })}
+                  value={propDraft.draft?.description ?? selectedProp.description}
+                  onFocus={propDraft.onFocus}
+                  onBlur={propDraft.onBlur}
+                  onChange={(e) => propDraft.setField('description', e.target.value)}
                   placeholder="Material, warna, ukiran, ukuran, kegunaan khusus..."
                   minRows={2}
                   maxHeight={160}
@@ -2459,7 +2838,7 @@ export function LorebookPage() {
                         ;(e.target as HTMLInputElement).value = ''
                       }
                     }}
-                    className="h-6 w-36 rounded border border-line-2 bg-paper px-2 text-xs text-ink outline-none focus:border-ink"
+                    className="h-6 w-36 rounded border border-line-2 bg-paper px-2 text-xs text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                   />
                 </div>
               </div>
@@ -2483,24 +2862,20 @@ export function LorebookPage() {
                 <div className="grid grid-cols-2 gap-2">
                   <Field label="Kategori Prop" className="text-[11px]">
                     <input
-                      value={selectedProp.profile?.category ?? ''}
-                      onChange={(e) => {
-                        updateProp(selectedProp.id, {
-                          profile: { ...(selectedProp.profile ?? {}), category: e.target.value }
-                        })
-                      }}
+                      value={propDraft.draft?.category ?? selectedProp.profile?.category ?? ''}
+                      onFocus={propDraft.onFocus}
+                      onBlur={propDraft.onBlur}
+                      onChange={(e) => propDraft.setField('category', e.target.value)}
                       placeholder="Dokumen, Elektronik, Perhiasan..."
                       className={cx(inputCls, 'h-8 text-xs')}
                     />
                   </Field>
                   <Field label="Ukuran / Skala Nyata" className="text-[11px]">
                     <input
-                      value={selectedProp.profile?.sizeScale ?? ''}
-                      onChange={(e) => {
-                        updateProp(selectedProp.id, {
-                          profile: { ...(selectedProp.profile ?? {}), sizeScale: e.target.value }
-                        })
-                      }}
+                      value={propDraft.draft?.sizeScale ?? selectedProp.profile?.sizeScale ?? ''}
+                      onFocus={propDraft.onFocus}
+                      onBlur={propDraft.onBlur}
+                      onChange={(e) => propDraft.setField('sizeScale', e.target.value)}
                       placeholder="Contoh: Ukuran A4, 14 inci, seukuran telapak"
                       className={cx(inputCls, 'h-8 text-xs')}
                     />
@@ -2510,24 +2885,20 @@ export function LorebookPage() {
                 <div className="grid grid-cols-2 gap-2">
                   <Field label="Bentuk & Proporsi" className="text-[11px]">
                     <input
-                      value={selectedProp.profile?.shape ?? ''}
-                      onChange={(e) => {
-                        updateProp(selectedProp.id, {
-                          profile: { ...(selectedProp.profile ?? {}), shape: e.target.value }
-                        })
-                      }}
+                      value={propDraft.draft?.shape ?? selectedProp.profile?.shape ?? ''}
+                      onFocus={propDraft.onFocus}
+                      onBlur={propDraft.onBlur}
+                      onChange={(e) => propDraft.setField('shape', e.target.value)}
                       placeholder="Contoh: Persegi panjang tipis berlipat"
                       className={cx(inputCls, 'h-8 text-xs')}
                     />
                   </Field>
                   <Field label="Material & Finishing" className="text-[11px]">
                     <input
-                      value={selectedProp.profile?.material ?? ''}
-                      onChange={(e) => {
-                        updateProp(selectedProp.id, {
-                          profile: { ...(selectedProp.profile ?? {}), material: e.target.value }
-                        })
-                      }}
+                      value={propDraft.draft?.material ?? selectedProp.profile?.material ?? ''}
+                      onFocus={propDraft.onFocus}
+                      onBlur={propDraft.onBlur}
+                      onChange={(e) => propDraft.setField('material', e.target.value)}
                       placeholder="Contoh: Kulit matte, aluminium perak, kertas"
                       className={cx(inputCls, 'h-8 text-xs')}
                     />
@@ -2536,12 +2907,10 @@ export function LorebookPage() {
 
                 <Field label="Tampilan Fisik & Warna Detail" className="text-[11px]">
                   <input
-                    value={selectedProp.profile?.appearance ?? ''}
-                    onChange={(e) => {
-                      updateProp(selectedProp.id, {
-                        profile: { ...(selectedProp.profile ?? {}), appearance: e.target.value }
-                      })
-                    }}
+                    value={propDraft.draft?.appearance ?? selectedProp.profile?.appearance ?? ''}
+                    onFocus={propDraft.onFocus}
+                    onBlur={propDraft.onBlur}
+                    onChange={(e) => propDraft.setField('appearance', e.target.value)}
                     placeholder="Warna dominan, tekstur permukaan, kondisi terbuka/tertutup..."
                     className={cx(inputCls, 'h-8 text-xs')}
                   />
@@ -2549,12 +2918,10 @@ export function LorebookPage() {
 
                 <Field label="Detail & Tanda Unik" className="text-[11px]">
                   <input
-                    value={selectedProp.profile?.distinctiveDetails ?? ''}
-                    onChange={(e) => {
-                      updateProp(selectedProp.id, {
-                        profile: { ...(selectedProp.profile ?? {}), distinctiveDetails: e.target.value }
-                      })
-                    }}
+                    value={propDraft.draft?.distinctiveDetails ?? selectedProp.profile?.distinctiveDetails ?? ''}
+                    onFocus={propDraft.onFocus}
+                    onBlur={propDraft.onBlur}
+                    onChange={(e) => propDraft.setField('distinctiveDetails', e.target.value)}
                     placeholder="Contoh: Klip logam perak, kertas laporan mencuat, goresan halus"
                     className={cx(inputCls, 'h-8 text-xs')}
                   />
@@ -2562,12 +2929,10 @@ export function LorebookPage() {
 
                 <Field label="Arti Penting / Fungsi Cerita" className="text-[11px]">
                   <input
-                    value={selectedProp.profile?.significance ?? ''}
-                    onChange={(e) => {
-                      updateProp(selectedProp.id, {
-                        profile: { ...(selectedProp.profile ?? {}), significance: e.target.value }
-                      })
-                    }}
+                    value={propDraft.draft?.significance ?? selectedProp.profile?.significance ?? ''}
+                    onFocus={propDraft.onFocus}
+                    onBlur={propDraft.onBlur}
+                    onChange={(e) => propDraft.setField('significance', e.target.value)}
                     placeholder="Kunci warisan keluarga, bukti pembunuhan..."
                     className={cx(inputCls, 'h-8 text-xs')}
                   />
@@ -2578,31 +2943,34 @@ export function LorebookPage() {
               <div className="flex flex-col gap-2 border-t border-line pt-4 text-xs">
                 <span className="font-semibold text-ink">Dipakai di Episode:</span>
                 {(() => {
-                  const usage = propUsageMap.get(selectedProp.id)
-                  if (!usage || usage.total === 0) {
+                  const cached = usageCache[`prop:${selectedProp.id}`]
+                  const rows = cached
+                    ? cached.episodes
+                    : Array.from(propUsageMap.get(selectedProp.id)?.episodes.entries() ?? []).map(([epId, count]) => {
+                        const ep = episodes.find((e) => e.id === epId)
+                        return { episodeId: epId, episodeNum: ep?.episodeNum ?? 0, title: ep?.title ?? 'Episode', count }
+                      })
+                  if (rows.length === 0) {
                     return <span className="text-muted">Belum dipakai di episode mana pun.</span>
                   }
                   return (
                     <div className="flex flex-col gap-1">
-                      {Array.from(usage.episodes.entries()).map(([epId, count]) => {
-                        const ep = episodes.find((e) => e.id === epId)
-                        return (
-                          <button
-                            key={epId}
-                            type="button"
-                            onClick={() => {
-                              void switchEpisode(epId)
-                              setActiveView('episode')
-                            }}
-                            className="flex items-center justify-between rounded-lg p-2 text-left hover:bg-sand"
-                          >
-                            <span className="font-medium text-ink">
-                              Ep {ep?.episodeNum ?? '?'}: {ep?.title ?? 'Episode'}
-                            </span>
-                            <span className="text-muted">{count} shot ▸</span>
-                          </button>
-                        )
-                      })}
+                      {rows.map((row) => (
+                        <button
+                          key={row.episodeId}
+                          type="button"
+                          onClick={() => {
+                            void switchEpisode(row.episodeId)
+                            setActiveView('episode')
+                          }}
+                          className="flex items-center justify-between rounded-lg p-2 text-left hover:bg-sand"
+                        >
+                          <span className="font-medium text-ink">
+                            Ep {row.episodeNum || '?'}: {row.title}
+                          </span>
+                          <span className="text-muted">{row.count} shot ▸</span>
+                        </button>
+                      ))}
                     </div>
                   )
                 })()}
@@ -2678,8 +3046,8 @@ export function LorebookPage() {
                 value={newContTier}
                 onChange={setNewContTier}
                 options={[
-                  { value: 'hot', label: 'HOT (Harus dibayar segera)' },
-                  { value: 'cold', label: 'COLD (Slow-burn / Jangka panjang)' }
+                  { value: 'hot', label: 'Mendesak (Harus dibayar segera)' },
+                  { value: 'cold', label: 'Jangka panjang (Slow-burn)' }
                 ]}
               />
             </Field>
@@ -2688,7 +3056,7 @@ export function LorebookPage() {
           <Field label="Ditanam di Episode">
             <Select<string>
               label="Episode"
-              value={newContPlantedEp || episodes[0]?.id || ''}
+              value={newContPlantedEp || episode?.id || episodes[0]?.id || ''}
               onChange={setNewContPlantedEp}
               options={episodes.map((e) => ({
                 value: e.id,

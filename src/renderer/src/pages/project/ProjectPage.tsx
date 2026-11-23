@@ -27,7 +27,15 @@ export function ProjectPage({ id }: { id: string }) {
       })
     return () => {
       alive = false
-      void useProject.getState().flush().then(unload)
+      // Only flush/unload if this project is still active; rapid A -> Home -> B navigation must not unload B.
+      if (useProject.getState().project?.id === id) {
+        void useProject
+          .getState()
+          .flush()
+          .then(() => {
+            if (useProject.getState().project?.id === id) unload()
+          })
+      }
     }
   }, [id])
 

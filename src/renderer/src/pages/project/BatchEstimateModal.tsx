@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Film, Image as ImageIcon, Layers, Scissors, Sparkles } from 'lucide-react'
 import type { BatchEstimateResult } from '@shared/types'
-import { Button, Modal } from '../../components/ui'
+import { Button, Modal, Spinner } from '../../components/ui'
 import { errorText } from '../../lib/format'
 import { useApp } from '../../store/app'
+import { useProject } from '../../store/project'
 
 interface BatchEstimateModalProps {
   open: boolean
@@ -48,15 +49,31 @@ export function BatchEstimateModal({
   const isImage = kind === 'image'
 
   useEffect(() => {
+    setIncludeStale(false)
+  }, [open, kind, episodeId])
+
+  useEffect(() => {
     if (!open) return
     let cancelled = false
     setLoading(true)
     setError(null)
 
-    window.api.generate
-      .batchEstimate(projectId, episodeId, kind, includeStale, isSelectedMode ? clipIds : undefined, isImage ? autoGenerateSheets : false)
+    useProject
+      .getState()
+      .flush()
+      .then(() => {
+        if (cancelled) return null
+        return window.api.generate.batchEstimate(
+          projectId,
+          episodeId,
+          kind,
+          includeStale,
+          isSelectedMode ? clipIds : undefined,
+          isImage ? autoGenerateSheets : false
+        )
+      })
       .then((res) => {
-        if (!cancelled) setResult(res)
+        if (!cancelled && res) setResult(res)
       })
       .catch((err) => {
         if (!cancelled) setError(errorText(err))
@@ -74,6 +91,7 @@ export function BatchEstimateModal({
     if (!result?.canRun) return
     setStarting(true)
     try {
+      await useProject.getState().flush()
       if (isImage) {
         await window.api.generate.missingImages(
           projectId,
@@ -127,15 +145,34 @@ export function BatchEstimateModal({
       }
       subtitle={
         isImage
-          ? 'Khusus pembuatan gambar — tidak menjalankan Video AI'
-          : 'Terpisah dari gambar — hanya memproses shot yang gambarnya sudah siap'
+          ? 'Khusus pembuatan gambar, tidak menjalankan Video AI'
+          : 'Terpisah dari gambar, hanya memproses shot yang gambarnya sudah siap'
       }
       width={540}
+      footer={
+        <div className="flex items-center justify-end gap-2.5">
+          <Button variant="ghost" onClick={onClose} disabled={starting}>
+            Batal
+          </Button>
+          <Button
+            variant="accent"
+            icon={<Sparkles className="size-4" />}
+            loading={starting}
+            disabled={loading || !result?.canRun || result.totalItems === 0}
+            onClick={() => void handleStart()}
+          >
+            {prereqSheets.length > 0
+              ? `Mulai Buat ${prereqSheets.length} Lembar + ${result?.totalItems ?? 0} ${isImage ? 'Gambar' : 'Video'}`
+              : `Mulai Buat ${result?.totalItems ?? 0} ${isImage ? 'Gambar' : 'Video'}`}
+          </Button>
+        </div>
+      }
     >
       <div className="flex flex-col gap-4">
         {loading ? (
-          <div className="flex items-center justify-center py-10 text-sm text-muted">
-            Menghitung perkiraan kredit dan memeriksa syarat…
+          <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted">
+            <Spinner className="size-4" />
+            <span>Menghitung perkiraan kredit dan memeriksa syarat…</span>
           </div>
         ) : error ? (
           <div className="rounded-xl border border-bad bg-bad-soft p-4 text-xs text-bad-ink">
@@ -279,14 +316,14 @@ export function BatchEstimateModal({
                   Perbaiki syarat di bawah dulu sebelum memulai generate massal.
                 </p>
 
-                <div className="mt-1 flex max-h-48 flex-col gap-1.5 overflow-y-auto pr-1">
+                <div className="scroll-thin mt-1 flex max-h-48 flex-col gap-1.5 overflow-y-auto pr-1">
                   {blockedItems.map((it) => (
                     <div
                       key={it.clipId}
                       className="flex flex-col gap-0.5 rounded-lg border border-bad/30 bg-surface/90 p-2 text-ink"
                     >
-                      <div className="flex items-center justify-between text-xs font-semibold">
-                        <span>
+                      <div className="flex items-center justify-between gap-2 text-xs font-semibold">
+                        <span className="min-w-0 truncate">
                           Shot {it.clipIndex} · {it.title}
                         </span>
                         {onSelectClip && (
@@ -296,7 +333,7 @@ export function BatchEstimateModal({
                               onSelectClip(it.clipId)
                               onClose()
                             }}
-                            className="text-[11px] font-semibold text-accent-dark underline hover:text-accent"
+                            className="shrink-0 text-[11px] font-semibold text-accent-dark underline hover:text-accent"
                           >
                             Periksa adegan →
                           </button>
@@ -332,22 +369,6 @@ export function BatchEstimateModal({
             )}
           </>
         ) : null}
-
-        {/* Modal actions */}
-        <div className="mt-2 flex items-center justify-end gap-2.5 border-t border-line pt-3">
-          <Button variant="ghost" onClick={onClose} disabled={starting}>
-            Batal
-          </Button>
-          <Button
-            variant="accent"
-            icon={<Sparkles className="size-4" />}
-            loading={starting}
-            disabled={loading || !result?.canRun || result.totalItems === 0}
-            onClick={() => void handleStart()}
-          >
-            Mulai Buat {result?.totalItems ?? 0} {isImage ? 'Gambar' : 'Video'}
-          </Button>
-        </div>
       </div>
     </Modal>
   )

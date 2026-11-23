@@ -25,9 +25,10 @@ function authHeader(cred?: string): string {
 function friendly(status: number, detail: string): ApiError {
   if (status === 401) return new ApiError('Kunci Higgsfield tidak valid. Tempel ulang hasil tombol "Copy API key" dari console Higgsfield di Pengaturan.', status)
   if (status === 403) return new ApiError('Kredit Higgsfield tidak cukup. Isi ulang di dashboard Higgsfield.', status)
+  if (status === 429) return new ApiError('Higgsfield sedang membatasi permintaan (rate limit). Mencoba lagi...', status, true)
   if (status === 400 && /concurrent/i.test(detail))
     return new ApiError('Terlalu banyak proses bersamaan di Higgsfield.', status, true)
-  if (status === 404 || status === 423 || status === 503)
+  if (status === 404 || status === 423)
     return new ApiError(`Model ini belum bisa dipakai akun Higgsfield kamu (${detail}).`, status)
   if (status >= 500) return new ApiError(`Server Higgsfield sedang bermasalah (${status}).`, status, true)
   return new ApiError(`Higgsfield menolak permintaan: ${detail}`, status)

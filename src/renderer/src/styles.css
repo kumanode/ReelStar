@@ -4,6 +4,7 @@
   --color-paper: #faf7f2;
   --color-surface: #ffffff;
   --color-sand: #f3efe8;
+  --color-sand-2: #ebe4d8;
   --color-ink: #1f1d1a;
   --color-ink-2: #57524a;
   --color-muted: #6b665e;
@@ -11,17 +12,26 @@
   --color-line-2: #d4cbbb;
   --color-line-3: #bfb5a4;
   --color-accent: #c93a1b;
+  --color-accent-hover: #9e2c13;
   --color-accent-dark: #9e2c13;
+  --color-accent-ink: #9e2c13;
   --color-accent-soft: #fff6f2;
   --color-sun: #ffc93c;
   --color-sun-soft: #fff1c7;
   --color-sun-ink: #6b4e00;
+  --color-on-sun: #1f1d1a;
+  --color-ok: #25572b;
   --color-ok-soft: #e1f0dd;
   --color-ok-ink: #25572b;
+  --color-info: #1e4a7a;
   --color-info-soft: #e3ecf8;
   --color-info-ink: #1e4a7a;
+  --color-bad: #b42318;
   --color-bad-soft: #fbe3e1;
   --color-bad-ink: #8a1f14;
+  --color-overlay-soft: #efeafa;
+  --color-overlay-ink: #4a3b78;
+  --color-overlay-border: #cfc3ea;
   --color-draft: #efeae2;
 
   --font-display: 'Bricolage Grotesque Variable', 'Segoe UI', sans-serif;
@@ -39,24 +49,34 @@ html.dark {
   --color-paper: #141311;
   --color-surface: #1e1c19;
   --color-sand: #282521;
+  --color-sand-2: #322e29;
   --color-ink: #f5f2eb;
-  --color-ink-2: #aba296;
-  --color-muted: #7a7368;
-  --color-line: #2f2a24;
-  --color-line-2: #403931;
-  --color-line-3: #5a5145;
-  --color-accent: #e24a24;
-  --color-accent-dark: #b83818;
+  --color-ink-2: #c2b9ac;
+  --color-muted: #a39b8e;
+  --color-line: #342f28;
+  --color-line-2: #524a40;
+  --color-line-3: #6b6154;
+  --color-accent: #cf3d1a;
+  --color-accent-hover: #ad3113;
+  --color-accent-dark: #ff8a6b;
+  --color-accent-ink: #ff8a6b;
   --color-accent-soft: #2d1914;
   --color-sun: #f6c035;
   --color-sun-soft: #32270e;
   --color-sun-ink: #fee085;
+  --color-on-sun: #1f1d1a;
+  --color-ok: #76df88;
   --color-ok-soft: #152a1a;
   --color-ok-ink: #76df88;
+  --color-info: #7eb7f5;
   --color-info-soft: #13253b;
   --color-info-ink: #7eb7f5;
+  --color-bad: #f87171;
   --color-bad-soft: #381614;
-  --color-bad-ink: #f87171;
+  --color-bad-ink: #fca5a5;
+  --color-overlay-soft: #282038;
+  --color-overlay-ink: #cfc2f5;
+  --color-overlay-border: #5b4986;
   --color-draft: #22201c;
 
   --shadow-ink: 2px 2px 0 #080706;
@@ -280,4 +300,20 @@ html.dark {
 }
 .rs-media-reveal {
   animation: rs-media-reveal 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rs-gen-shimmer,
+  .rs-gen-scanline,
+  .rs-gen-progress,
+  .rs-card-generating,
+  .rs-media-reveal,
+  .animate-pulse {
+    animation: none !important;
+  }
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+  }
 }

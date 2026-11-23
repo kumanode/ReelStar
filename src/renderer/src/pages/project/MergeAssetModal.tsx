@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, GitMerge, UserPlus } from 'lucide-react'
+import { AlertTriangle, GitMerge, MapPin, Package, UserPlus } from 'lucide-react'
 import type { AssetUsageSummary } from '@shared/types'
 import { Button, Modal, Segmented, Spinner, cx } from '../../components/ui'
 import { errorText } from '../../lib/format'
@@ -31,6 +31,11 @@ export function MergeAssetModal({
   const [loadingUsage, setLoadingUsage] = useState(false)
   const [usage, setUsage] = useState<AssetUsageSummary | null>(null)
   const [merging, setMerging] = useState(false)
+
+  useEffect(() => {
+    setTargetId('')
+    setAsVariant(false)
+  }, [open, kind, sourceId])
 
   // Fetch usage summary when opening
   useEffect(() => {
@@ -93,6 +98,7 @@ export function MergeAssetModal({
   }
 
   const kindLabel = kind === 'character' ? 'Karakter' : kind === 'location' ? 'Lokasi' : 'Prop'
+  const KindIcon = kind === 'character' ? UserPlus : kind === 'location' ? MapPin : Package
 
   return (
     <Modal
@@ -101,6 +107,22 @@ export function MergeAssetModal({
       title={`Gabungkan ${kindLabel} "${sourceName}"`}
       subtitle={`Arahkan semua rujukan ${kindLabel.toLowerCase()} ini ke aset lain yang dipertahankan.`}
       width={640}
+      footer={
+        <div className="flex items-center justify-end gap-2">
+          <Button onClick={onClose} disabled={merging}>
+            Batal
+          </Button>
+          <Button
+            variant="primary"
+            icon={<GitMerge className="size-4" />}
+            loading={merging}
+            disabled={!targetId || merging}
+            onClick={() => void handleMerge()}
+          >
+            Gabungkan
+          </Button>
+        </div>
+      }
     >
       <div className="flex flex-col gap-4 text-sm text-ink">
         {/* Character Merge Mode Switch */}
@@ -179,7 +201,7 @@ export function MergeAssetModal({
                     type="button"
                     onClick={() => setTargetId(cand.id)}
                     className={cx(
-                      'flex flex-col items-center gap-2 rounded-xl border p-2.5 text-center transition-all',
+                      'flex w-full min-w-0 flex-col items-center gap-2 rounded-xl border p-2.5 text-center transition-all',
                       isSelected
                         ? 'border-ink bg-sun-soft text-ink shadow-ink font-semibold'
                         : 'border-line bg-surface hover:border-ink-2 hover:bg-paper'
@@ -189,7 +211,7 @@ export function MergeAssetModal({
                       {sheet ? (
                         <img src={sheet.url} alt={cand.name} className="size-full object-cover" />
                       ) : (
-                        <UserPlus className="size-5 text-muted" />
+                        <KindIcon className="size-5 text-muted" />
                       )}
                     </div>
                     <span className="truncate text-xs font-semibold text-ink" title={cand.name}>
@@ -200,22 +222,6 @@ export function MergeAssetModal({
               })}
             </div>
           )}
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center justify-end gap-2 border-t border-line pt-3">
-          <Button onClick={onClose} disabled={merging}>
-            Batal
-          </Button>
-          <Button
-            variant="primary"
-            icon={<GitMerge className="size-4" />}
-            loading={merging}
-            disabled={!targetId || merging}
-            onClick={() => void handleMerge()}
-          >
-            Gabungkan
-          </Button>
         </div>
       </div>
     </Modal>

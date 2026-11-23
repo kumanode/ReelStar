@@ -309,7 +309,8 @@ export function resolveCaption(editor: {
 }): ResolvedCaption | null {
   const base = getCaptionStyle(editor.captionStyle)
   if (!base) return null
-  const fontInfo = getCaptionFont(editor.captionFont)
+  const presetFont = CAPTION_FONTS.find((f) => f.family.toLowerCase() === base.font.toLowerCase())
+  const fontInfo = editor.captionFont ? getCaptionFont(editor.captionFont) : (presetFont ?? getCaptionFont(undefined))
   const color = editor.captionColor ?? base.color
   const box = editor.captionBg === undefined ? base.box : (editor.captionBg?.color ?? null)
   const boxAlpha = editor.captionBg === undefined ? base.boxAlpha : (editor.captionBg?.opacity ?? 0)

@@ -39,11 +39,17 @@ export function Waveform({ url, className }: { url: string; className?: string }
       alive = false
     }
   }, [url])
-  if (!data.length) return null
+  if (!data.length) {
+    return (
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className={className} aria-hidden="true">
+        <line x1="0" y1="50" x2="100" y2="50" stroke="var(--color-muted)" strokeWidth="1" strokeOpacity="0.45" vectorEffect="non-scaling-stroke" />
+      </svg>
+    )
+  }
   const d = data.map((v, i) => `M${i + 0.5} ${50 - Math.max(3, v * 46)}V${50 + Math.max(3, v * 46)}`).join('')
   return (
     <svg viewBox={`0 0 ${data.length} 100`} preserveAspectRatio="none" className={className} aria-hidden="true">
-      <path d={d} stroke="#8C7F6C" strokeWidth="1.5" strokeLinecap="round" fill="none" vectorEffect="non-scaling-stroke" />
+      <path d={d} stroke="var(--color-muted)" strokeWidth="1.5" strokeLinecap="round" fill="none" vectorEffect="non-scaling-stroke" />
     </svg>
   )
 }

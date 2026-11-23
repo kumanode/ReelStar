@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ModelList, ModelSource } from '@shared/types'
 import { errorText } from './format'
 
@@ -10,31 +10,57 @@ export function useModels(source: ModelSource, enabled: boolean, scope = '') {
   const [list, setList] = useState<ModelList | null>(memory.get(key) ?? null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const reqSeqRef = useRef(0)
 
   const load = useCallback(
     async (refresh: boolean): Promise<ModelList | null> => {
       if (!enabled) return null
+      const seq = ++reqSeqRef.current
       setLoading(true)
       setError(null)
       try {
         const l = await window.api.models.list(source, refresh)
         memory.set(key, l)
-        setList(l)
+        if (seq === reqSeqRef.current) setList(l)
         return l
       } catch (e) {
-        setError(errorText(e))
+        if (seq === reqSeqRef.current) setError(errorText(e))
         return null
       } finally {
-        setLoading(false)
+        if (seq === reqSeqRef.current) setLoading(false)
       }
     },
     [source, enabled, key]
   )
 
   useEffect(() => {
+    let cancelled = false
+    const seq = ++reqSeqRef.current
     setList(memory.get(key) ?? null)
-    if (enabled) void load(false)
-  }, [key, enabled])
+    setError(null)
+    if (!enabled) {
+      setLoading(false)
+      return () => {
+        cancelled = true
+      }
+    }
+    setLoading(true)
+    void window.api.models
+      .list(source, false)
+      .then((l) => {
+        memory.set(key, l)
+        if (!cancelled && seq === reqSeqRef.current) setList(l)
+      })
+      .catch((e) => {
+        if (!cancelled && seq === reqSeqRef.current) setError(errorText(e))
+      })
+      .finally(() => {
+        if (!cancelled && seq === reqSeqRef.current) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [source, key, enabled])
 
   return {
     models: list?.models ?? [],

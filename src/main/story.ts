@@ -200,8 +200,16 @@ export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
   }
 
   let from = 0
+  let pendingReplaceClear = false
   if (mode === 'replace') {
-    clearEpisodesForReplan(projectId)
+    // Validate protectively before any LLM call, but defer deleting old episodes until window 0 succeeds.
+    const withClips = listEpisodes(projectId).filter((e) => clipsOf(projectId, e.id).length > 0)
+    if (withClips.length) {
+      throw new Error(
+        `Episode ${withClips.map((e) => e.episodeNum).join(', ')} sudah punya klip. Hapus episode itu dulu, atau pakai "Lanjutkan perencanaan" untuk menambah episode di belakang.`
+      )
+    }
+    pendingReplaceClear = true
   } else {
     const progress = getPlanProgress(projectId)
     const existingEps = listEpisodes(projectId)
@@ -272,7 +280,7 @@ export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
 
   for (const [wi, w] of windows.entries()) {
     const part = sourceText.slice(w.start, w.end)
-    const existing = listEpisodes(projectId)
+    const existing = pendingReplaceClear ? [] : listEpisodes(projectId)
     const prev = existing[existing.length - 1]
     const label = windows.length > 1 ? `bagian ${wi + 1} dari ${windows.length}` : 'teks sumber'
     emit.storyProgress({ projectId, message: `Merencanakan episode dari ${label}...` })
@@ -304,11 +312,16 @@ export async function planEpisodes(input: PlanEpisodesInput): Promise<Episode[]>
       }
     }
     if (problem) {
-      const done = listEpisodes(projectId).filter((e) => e.status !== 'draft').length
+      const done = pendingReplaceClear ? 0 : listEpisodes(projectId).filter((e) => e.status !== 'draft').length
       throw new Error(
         `Gagal merencanakan ${label} setelah ${PLAN_ATTEMPTS} percobaan (${problem}). ` +
           (done ? `${done} episode sebelumnya sudah tersimpan; tekan "Lanjutkan perencanaan" untuk mencoba lagi dari bagian ini.` : 'Coba lagi.')
       )
+    }
+
+    if (pendingReplaceClear) {
+      clearEpisodesForReplan(projectId)
+      pendingReplaceClear = false
     }
 
     for (const item of items) {
@@ -531,7 +544,13 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
     ? prs.map((p) => `- ${formatPropDetails(p)}${p.profile?.significance ? ` — ${p.profile.significance}` : ''}`).join('\n')
     : '(Belum ada prop terdaftar di Lorebook)'
 
-  const openContinuity = listContinuityItems(projectId).filter((ci) => ci.status === 'open')
+  // Only include open threads planted in earlier episodes so future spoilers never leak into an earlier script.
+  const openContinuity = listContinuityItems(projectId).filter((ci) => {
+    if (ci.status !== 'open') return false
+    if (epIdx < 0) return true
+    const plantedIdx = allEpisodes.findIndex((e) => e.id === ci.plantedEpisodeId)
+    return plantedIdx < 0 || plantedIdx < epIdx
+  })
   const continuitySummary = openContinuity.length
     ? openContinuity
         .map((ci) => {
@@ -602,14 +621,22 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
         str(s.voiceover) ||
         str(s.script)
       const rawSpeaker = str(s.speaker) || str(s.speakerName) || str(s.character_speaking)
+      const wasExplicitNarrator = Boolean(rawSpeaker && isNarratorName(rawSpeaker))
       const characters = Array.isArray(s.characters) ? s.characters.map(str).filter(Boolean) : []
-      let speaker = rawSpeaker && !isNarratorName(rawSpeaker) ? rawSpeaker : null
-      const rawDialogueType = s.shot_detail?.dialogue_type
-      // If dialogue text exists for an on-screen dialogue shot but speaker was omitted, assign first visible character.
-      if (text && !speaker && rawDialogueType === 'dialogue' && characters.length > 0) {
+      let speaker = rawSpeaker && !wasExplicitNarrator ? rawSpeaker : null
+      let rawDialogueType = s.shot_detail?.dialogue_type
+      if (wasExplicitNarrator) {
+        // Explicit "Narator" must stay narrator voice-over, never reassigned to an on-screen character.
+        speaker = null
+        rawDialogueType = 'narration'
+      } else if (text && !rawSpeaker && rawDialogueType === 'dialogue' && characters.length > 0) {
+        // If dialogue text exists for an on-screen dialogue shot but speaker was omitted, assign first visible character.
         speaker = characters[0]
       }
-      const shotDetail = cleanShotDetail(s.shot_detail, speaker, text)
+      const rawShotDetail = wasExplicitNarrator
+        ? { ...(s.shot_detail ?? {}), dialogue_type: rawDialogueType }
+        : s.shot_detail
+      const shotDetail = cleanShotDetail(rawShotDetail, speaker, text)
       const isVisibleDialogue = (shotDetail?.dialogueType ?? defaultDialogueType(speaker, text)) === 'dialogue'
       if (speaker && isVisibleDialogue && !characters.some((c) => c.toLowerCase() === speaker!.toLowerCase())) {
         characters.unshift(speaker)
@@ -712,8 +739,9 @@ export async function planEpisodeScript(projectId: string, episodeId: string): P
 }
 
 export async function confirmEpisodeScript(projectId: string, episodeId: string, draft: EpisodeScriptDraft): Promise<ProjectBundle> {
+  const bundle = confirmEpisodeScriptRepo(projectId, episodeId, draft)
   saveScriptVersion(episodeId, draft, 'Naskah dikonfirmasi')
-  return confirmEpisodeScriptRepo(projectId, episodeId, draft)
+  return bundle
 }
 
 /**
@@ -1940,6 +1968,16 @@ export async function extractLorebookFromStory(projectId: string): Promise<Loreb
   const source = sourceText || synopsisText || epSummaries
   if (!source) throw new Error('Tidak ada teks cerita, sinopsis, atau ringkasan episode untuk diekstrak ke Lorebook.')
 
+  // Keep per-chunk context compact: only pass a short episode title/number index (~1500 chars max) when chunking sourceText/synopsis.
+  let epIndex = ''
+  for (const e of episodes) {
+    const title = e.title?.trim() || `Episode ${e.episodeNum}`
+    const brief = e.summary?.trim() ? ` — ${e.summary.trim().slice(0, 90)}` : ''
+    const line = `- Ep ${e.episodeNum}: ${title}${brief}`
+    if (epIndex.length + line.length + 1 > 1500) break
+    epIndex = epIndex ? `${epIndex}\n${line}` : line
+  }
+
   emit.storyProgress({ projectId, message: 'Menganalisis cerita untuk mengekstrak Lorebook & profil karakter...' })
 
   const system = [
@@ -1978,7 +2016,7 @@ export async function extractLorebookFromStory(projectId: string): Promise<Loreb
       const basePrompt = [
         p.title ? `Series Title: ${p.title}` : '',
         synopsisText && source !== synopsisText ? `Series Synopsis: ${synopsisText}` : '',
-        epSummaries && source !== epSummaries ? `Planned Episodes:\n${epSummaries}` : '',
+        epIndex && source !== epSummaries ? `Planned Episodes:\n${epIndex}` : '',
         known.length ? `Already found in earlier parts (reuse these exact names when they appear again):\n${known.join(', ')}` : '',
         `Source Story Content (${label}):\n"""\n${slice}\n"""`
       ].filter(Boolean).join('\n\n')
@@ -2088,8 +2126,16 @@ export function mergeLorebookCandidates(into: LorebookExtractionResult, add: Lor
     // Variants follow their character's main name, so the review links them to one entry.
     const item = owner ? { ...d, characterName: owner.name } : d
     const same = into.derivatives.find((x) => nameKey(x.name) === nameKey(d.name) && ownerKeys.has(nameKey(x.characterName)))
-    if (same) Object.assign(same, fillEmptyFields(same, item), { tempId: same.tempId })
-    else into.derivatives.push(item)
+    if (same) {
+      Object.assign(same, fillEmptyFields(same, item), {
+        tempId: same.tempId,
+        ...(owner ? { characterName: owner.name } : {})
+      })
+    } else into.derivatives.push(item)
+  }
+  for (const d of into.derivatives) {
+    const owner = into.characters.find((c) => keysOf(c).includes(nameKey(d.characterName)))
+    if (owner) d.characterName = owner.name
   }
 }
 

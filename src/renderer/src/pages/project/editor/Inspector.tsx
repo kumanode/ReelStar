@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { resolveActive } from '@shared/providers'
 import { dialogVoiceNote, referenceLimit } from '@shared/validation'
-import { AudioLines, Check, Clapperboard, Copy, ExternalLink, Film, FolderOpen, Layers, Mic, Move, Music, Play, Sparkles, Type, Upload, Volume2, X } from 'lucide-react'
+import { AudioLines, Check, Clapperboard, Copy, ExternalLink, Film, FolderOpen, Image as ImageIcon, Layers, Mic, Move, Music, Play, Sparkles, Type, Upload, Volume2, X } from 'lucide-react'
 import { collectReferenceSheets, findSceneAnchorForClip, hasReferenceOverride } from '@shared/prompts'
 import {
   CAPTION_FONTS,
@@ -67,9 +67,22 @@ const VIDEO_CAMERA_OPTIONS = [
 ]
 
 const historyGestureHandlers = {
-  onPointerDown: () => useProject.getState().beginHistoryGesture(),
-  onPointerUp: () => useProject.getState().endHistoryGesture(),
-  onPointerCancel: () => useProject.getState().endHistoryGesture()
+  onPointerDown: (e: React.PointerEvent<HTMLInputElement>) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    let active = true
+    useProject.getState().beginHistoryGesture()
+    const finish = (): void => {
+      if (!active) return
+      active = false
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      window.removeEventListener('blur', finish)
+      useProject.getState().endHistoryGesture()
+    }
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    window.addEventListener('blur', finish)
+  }
 }
 
 function ClipTab({ clip, index }: { clip: Clip; index: number }) {
@@ -161,8 +174,8 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
   return (
     <>
       <ClipHeader clip={clip} index={index} />
-      <div className="flex items-center justify-between border-b border-line bg-sand-2/40 px-[18px] py-2">
-        <span className="text-xs font-medium text-ink-2">Aset gambar atau video</span>
+      <div className="flex items-center justify-between gap-2 border-b border-line bg-sand/50 px-[18px] py-2">
+        <span className="min-w-0 truncate text-xs font-medium text-ink-2">Aset gambar atau video</span>
         <Button
           size="sm"
           variant="secondary"
@@ -211,17 +224,18 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
                     {sheet?.url ? (
                       <img src={sheet.url} alt={ref.name} className="size-4 rounded-full object-cover" />
                     ) : (
-                      <span className="text-[10px]">📷</span>
+                      <ImageIcon className="size-3.5 text-muted" aria-hidden="true" />
                     )}
                     <span className="max-w-[100px] truncate font-medium text-ink">{ref.name}</span>
                     <button
                       type="button"
+                      aria-label={`Lepas referensi ${ref.name}`}
                       title="Lepas referensi"
                       onClick={() => {
                         const nextIds = refItems.map((r) => r.sheetAssetId).filter((id) => id !== ref.sheetAssetId)
                         updateClip(clip.id, { referenceAssetIds: nextIds.length ? nextIds : null })
                       }}
-                      className="text-muted hover:text-bad"
+                      className="text-muted hover:text-bad-ink"
                     >
                       <X className="size-3" />
                     </button>
@@ -232,20 +246,22 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
             <Button
               size="sm"
               variant="secondary"
-              icon={<Upload className="size-3" />}
+              icon={<Upload className="size-3.5" />}
               onClick={async () => {
                 try {
                   const asset = await window.api.assets.pickReference(project!.id, clip.id)
                   if (!asset) return
-                  const currentIds = refItems.map((r) => r.sheetAssetId)
-                  updateClip(clip.id, { referenceAssetIds: [...currentIds, asset.id] })
+                  const currentIds = hasReferenceOverride(clip) ? (clip.referenceAssetIds ?? []) : refItems.map((r) => r.sheetAssetId)
+                  if (!currentIds.includes(asset.id)) {
+                    updateClip(clip.id, { referenceAssetIds: [asset.id, ...currentIds] })
+                  }
                   toast('success', 'Referensi kustom ditambahkan ke klip.')
                 } catch (err) {
                   toast('error', `Gagal menambahkan referensi: ${errorText(err)}`)
                 }
               }}
             >
-              + Unggah
+              Unggah
             </Button>
           </div>
         </div>
@@ -273,28 +289,16 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
             <p className="text-[13px] text-ink-2">Video belum dibuat. Sampai video siap, pratinjau memakai gambar diam.</p>
           )}
           {clip.sort > 0 && (
-            <div className="flex items-center justify-between rounded-xl border border-line bg-paper px-3 py-2 text-xs">
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-line bg-paper px-3 py-2 text-xs">
               <div>
                 <span className="font-semibold text-ink">Sambung video dari shot sebelumnya</span>
                 <p className="text-[11px] text-muted">Generate awal video dari frame terakhir shot #{clip.sort}.</p>
               </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={Boolean(clip.continueFromPrevious)}
-                onClick={() => updateClip(clip.id, { continueFromPrevious: !clip.continueFromPrevious })}
-                className={cx(
-                  'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors',
-                  clip.continueFromPrevious ? 'bg-accent' : 'bg-line-2'
-                )}
-              >
-                <span
-                  className={cx(
-                    'inline-block size-4 transform rounded-full bg-white transition-transform',
-                    clip.continueFromPrevious ? 'translate-x-6' : 'translate-x-1'
-                  )}
-                />
-              </button>
+              <Switch
+                on={Boolean(clip.continueFromPrevious)}
+                onChange={(v) => updateClip(clip.id, { continueFromPrevious: v })}
+                label="Sambung video dari shot sebelumnya"
+              />
             </div>
           )}
           <div className="flex flex-wrap gap-2">
@@ -303,7 +307,7 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
               variant={video ? 'secondary' : 'accent'}
               icon={<Clapperboard className="size-4" />}
               loading={isRunning(videoJob)}
-              disabled={!image}
+              disabled={!image && !clip.continueFromPrevious}
               onClick={() => void run(() => window.api.generate.clipVideo(clip.id))}
             >
               {video ? 'Buat ulang video' : 'Buat video'}
@@ -432,6 +436,7 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
                     step={0.05}
                     value={customFraming.start.zoom}
                     onChange={(e) => updateCustomFraming({ zoom: Number(e.target.value) }, 'start')}
+                    aria-label="Zoom titik awal Ken Burns"
                     className="w-full accent-accent"
                   />
                   <div className="flex items-center justify-between">
@@ -446,6 +451,7 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
                     step={0.1}
                     value={customFraming.start.x}
                     onChange={(e) => updateCustomFraming({ x: Number(e.target.value) }, 'start')}
+                    aria-label="Posisi X titik awal Ken Burns"
                     className="w-full accent-accent"
                   />
                   <div className="flex items-center justify-between">
@@ -460,6 +466,7 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
                     step={0.1}
                     value={customFraming.start.y}
                     onChange={(e) => updateCustomFraming({ y: Number(e.target.value) }, 'start')}
+                    aria-label="Posisi Y titik awal Ken Burns"
                     className="w-full accent-accent"
                   />
                 </div>
@@ -477,6 +484,7 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
                     step={0.05}
                     value={customFraming.end.zoom}
                     onChange={(e) => updateCustomFraming({ zoom: Number(e.target.value) }, 'end')}
+                    aria-label="Zoom titik akhir Ken Burns"
                     className="w-full accent-accent"
                   />
                   <div className="flex items-center justify-between">
@@ -491,6 +499,7 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
                     step={0.1}
                     value={customFraming.end.x}
                     onChange={(e) => updateCustomFraming({ x: Number(e.target.value) }, 'end')}
+                    aria-label="Posisi X titik akhir Ken Burns"
                     className="w-full accent-accent"
                   />
                   <div className="flex items-center justify-between">
@@ -505,6 +514,7 @@ function ClipTab({ clip, index }: { clip: Clip; index: number }) {
                     step={0.1}
                     value={customFraming.end.y}
                     onChange={(e) => updateCustomFraming({ y: Number(e.target.value) }, 'end')}
+                    aria-label="Posisi Y titik akhir Ken Burns"
                     className="w-full accent-accent"
                   />
                 </div>
@@ -626,13 +636,11 @@ function DbSlider({ label, value, min, max, onChange }: { label: string; value: 
     <div className="flex items-center gap-3 text-[13px]">
       <input
         type="range"
+        {...historyGestureHandlers}
         min={min}
         max={max}
         step={1}
         value={value}
-        onPointerDown={() => useProject.getState().beginHistoryGesture()}
-        onPointerUp={() => useProject.getState().endHistoryGesture()}
-        onPointerCancel={() => useProject.getState().endHistoryGesture()}
         onChange={(e) => onChange(Number(e.target.value))}
         onDoubleClick={() => onChange(0)}
         aria-label={label}
@@ -655,8 +663,9 @@ function DbSlider({ label, value, min, max, onChange }: { label: string; value: 
           className="w-16 rounded border border-ink/30 bg-paper px-1 py-0.5 text-right font-mono text-xs text-ink"
         />
       ) : (
-        <span
-          className="w-16 cursor-pointer text-right font-mono text-ink hover:underline"
+        <button
+          type="button"
+          className="w-16 cursor-pointer rounded text-right font-mono text-ink hover:underline"
           title="Klik untuk ketik nilai langsung"
           onClick={() => {
             setDraft(String(value))
@@ -665,7 +674,7 @@ function DbSlider({ label, value, min, max, onChange }: { label: string; value: 
         >
           {value > 0 ? '+' : ''}
           {value} dB
-        </span>
+        </button>
       )}
       <button
         type="button"
@@ -781,6 +790,7 @@ type CaptionRange = { key: string; from: number; count: number }
 function CaptionTextEditor() {
   const selected = useCaptionUi((s) => s.selected)
   const select = useCaptionUi((s) => s.select)
+  const selectedAssetWords = useProject((s) => (selected ? s.assets[selected.key]?.meta.words : undefined))
   const { items, chunks } = useTimeline()
   const { toast } = useApp()
   const [text, setText] = useState('')
@@ -790,6 +800,8 @@ function CaptionTextEditor() {
   // Saves run one after another, each on the word list the previous one produced.
   const chain = useRef<Promise<void>>(Promise.resolve())
   const latest = useRef(new Map<string, WordTiming[]>())
+  const lastSyncedWordsJson = useRef(new Map<string, string>())
+  const selfSelectedRef = useRef<{ key: string; from: number } | null>(null)
 
   const save = (r: CaptionRange, value: string): void => {
     const tokens = value.split(/\s+/).filter(Boolean)
@@ -797,16 +809,29 @@ function CaptionTextEditor() {
     if (!tokens.length) return
     chain.current = chain.current.then(async () => {
       const words = latest.current.get(r.key) ?? useProject.getState().assets[r.key]?.meta.words ?? []
+      const nextWords = replaceCaptionWords(words, r.from, r.count, tokens.join(' '))
+      // Record expected JSON before awaiting because main emits the asset event before setWords resolves.
+      lastSyncedWordsJson.current.set(r.key, JSON.stringify(nextWords))
       setStatus('saving')
       try {
-        const fresh = await useProject.getState().editWords(r.key, replaceCaptionWords(words, r.from, r.count, tokens.join(' ')))
-        latest.current.set(r.key, fresh.meta.words ?? [])
+        const fresh = await useProject.getState().editWords(r.key, nextWords)
+        const freshWords = fresh.meta.words ?? []
+        latest.current.set(r.key, freshWords)
+        lastSyncedWordsJson.current.set(r.key, JSON.stringify(freshWords))
         // A chunk opened since then, later in the same clip, moves with the changed word count.
         const now = range.current
-        if (now && now !== r && now.key === r.key && now.from > r.from) now.from += tokens.length - r.count
+        if (now && now !== r && now.key === r.key && now.from > r.from) {
+          now.from += tokens.length - r.count
+          const curSel = useCaptionUi.getState().selected
+          if (curSel && curSel.key === now.key) {
+            selfSelectedRef.current = { key: now.key, from: now.from }
+            useCaptionUi.getState().select({ key: now.key, from: now.from })
+          }
+        }
         r.count = tokens.length
         setStatus('saved')
       } catch (e) {
+        lastSyncedWordsJson.current.set(r.key, JSON.stringify(words))
         toast('error', errorText(e))
         setStatus('idle')
       }
@@ -823,14 +848,52 @@ function CaptionTextEditor() {
 
   // A newly picked chunk takes over the editor; the editor's own saves never reset what is being typed.
   useEffect(() => {
+    if (
+      selected &&
+      selfSelectedRef.current &&
+      selfSelectedRef.current.key === selected.key &&
+      selfSelectedRef.current.from === selected.from
+    ) {
+      selfSelectedRef.current = null
+      return
+    }
     flush()
     latest.current.clear()
     const c = selected ? chunks.find((x) => x.source?.key === selected.key && x.source.from === selected.from) : undefined
     range.current = c?.source ? { ...c.source } : null
     setText(c ? c.words.map((w) => w.text).join(' ') : '')
+    if (selected) {
+      const currentWords = useProject.getState().assets[selected.key]?.meta.words ?? []
+      lastSyncedWordsJson.current.set(selected.key, JSON.stringify(currentWords))
+    }
     setStatus('idle')
-    return flush
   }, [selected?.key, selected?.from])
+
+  // Flush any pending edit when the caption editor unmounts.
+  useEffect(() => () => flush(), [])
+
+  // Sync local cache and input when the underlying asset words change externally (e.g. Undo/Redo or Whisper).
+  useEffect(() => {
+    if (!selected) return
+    const currentWords = selectedAssetWords ?? []
+    const json = JSON.stringify(currentWords)
+    if (lastSyncedWordsJson.current.get(selected.key) === json) return
+    if (pending.current) {
+      window.clearTimeout(pending.current.timer)
+      pending.current = null
+    }
+    lastSyncedWordsJson.current.set(selected.key, json)
+    latest.current.set(selected.key, currentWords)
+    const c = chunks.find((x) => x.source?.key === selected.key && x.source.from === selected.from)
+    if (c?.source) {
+      range.current = { ...c.source }
+      setText(c.words.map((w) => w.text).join(' '))
+    } else if (range.current && range.current.key === selected.key) {
+      const slice = currentWords.slice(range.current.from, range.current.from + range.current.count)
+      setText(slice.map((w) => w.text).join(' '))
+    }
+    setStatus('idle')
+  }, [selected?.key, selected?.from, selectedAssetWords, chunks])
 
   const r = range.current
   if (!selected || !r) return null
@@ -880,7 +943,7 @@ function CaptionTextEditor() {
 
 /** Whether caption words follow the real voice, and a way to fix the ones that are still estimates. */
 function CaptionTiming() {
-  const { project, clips, assets, jobs, flush } = useProject()
+  const { project, episode, clips, assets, jobs, flush } = useProject()
   const { toast, go } = useApp()
   const [whisper, setWhisper] = useState<boolean | null>(null)
   useEffect(() => {
@@ -898,7 +961,7 @@ function CaptionTiming() {
   const sync = async (mode: 'stale' | 'all' | 'force' = 'stale'): Promise<void> => {
     try {
       await flush()
-      await window.api.generate.syncCaptions(project.id, mode)
+      await window.api.generate.syncCaptions(project.id, mode, episode?.id)
     } catch (e) {
       toast('error', errorText(e))
     }
@@ -1096,7 +1159,7 @@ function CaptionTab() {
             return (
               <button key={s.id} type="button" aria-pressed={on} onClick={() => updateEditor({ captionStyle: s.id, captionColor: undefined, captionHighlight: undefined, captionBg: undefined })} className="flex flex-col gap-1 text-left">
                 <span
-                  className={cx('flex h-[52px] w-full items-center justify-center rounded-[10px] bg-[#E99A5B]', on ? 'border-2 border-accent' : 'border border-ink')}
+                  className={cx('flex h-[52px] w-full items-center justify-center rounded-[10px] bg-[#1a1816]', on ? 'border-2 border-accent' : 'border border-ink')}
                 >
                   <span
                     className="whitespace-nowrap rounded-md px-1.5 py-0.5 text-[12px]"
@@ -1202,7 +1265,7 @@ const MUSIC_SITES = [
 
 /** Writes a prompt for background music that suits this story, to use in Suno or another music AI. */
 function MusicPromptSection() {
-  const { project, updateEditor, flush } = useProject()
+  const { project, episode, updateEditor, flush } = useProject()
   const { toast } = useApp()
   const [busy, setBusy] = useState(false)
   const [generatingMusic, setGeneratingMusic] = useState(false)
@@ -1217,7 +1280,7 @@ function MusicPromptSection() {
     setBusy(true)
     try {
       await flush()
-      const r = await window.api.story.musicPrompt(project.id)
+      const r = await window.api.story.musicPrompt(project.id, episode?.id)
       updateEditor({ musicPrompt: r })
     } catch (e) {
       toast('error', errorText(e))
@@ -1267,6 +1330,7 @@ function MusicPromptSection() {
                   <button
                     key={sec}
                     type="button"
+                    aria-pressed={durationSec === sec}
                     onClick={() => setDurationSec(sec)}
                     className={cx(
                       'rounded px-2 py-0.5 text-[11px] font-medium transition-colors',
@@ -1344,7 +1408,7 @@ function MusicTab() {
       <MusicPromptSection />
       <Section title="Musik latar">
         {music ? (
-          <div className="flex items-center gap-2.5 rounded-xl border border-[#9CC596] bg-ok-soft px-3 py-2.5 text-[13px] text-ok-ink">
+          <div className="flex items-center gap-2.5 rounded-xl border border-ok/40 bg-ok-soft px-3 py-2.5 text-[13px] text-ok-ink">
             <Music className="size-4 shrink-0" />
             <span className="flex-1 truncate">{music.prompt}</span>
             <button type="button" aria-label="Lepas musik" onClick={() => updateEditor({ musicAssetId: null })} className="hover:text-ink">
@@ -1402,12 +1466,28 @@ function TransitionView({ id }: { id: string | null }) {
   return <TransitionPanel clip={clips[i]} next={clips[i + 1]} index={i} />
 }
 
-function SfxTab({ sfxId }: { sfxId: string | null }) {
+function SfxTab({ sfxId, onOpenSmartSfx }: { sfxId: string | null; onOpenSmartSfx?: () => void }) {
   const project = useProject((s) => s.project)
   const assets = useProject((s) => s.assets)
   const updateEditor = useProject((s) => s.updateEditor)
   const sfx = project?.editor.sfx?.find((item) => item.id === sfxId)
-  if (!project || !sfx) return <p className="p-5 text-sm text-muted">Pilih efek suara di timeline.</p>
+  if (!project || !sfx) {
+    return (
+      <div className="flex flex-col items-start gap-3 p-5">
+        <p className="text-sm text-muted">
+          Pilih efek suara di timeline untuk mengatur volume atau potongannya, atau tambahkan efek suara baru.
+        </p>
+        {onOpenSmartSfx && (
+          <Button size="sm" variant="accent" icon={<Sparkles className="size-4" />} onClick={onOpenSmartSfx}>
+            Tambah AI SFX Cerita
+          </Button>
+        )}
+        <p className="text-xs leading-relaxed text-muted">
+          Kamu juga bisa klik tombol <span className="font-semibold text-ink">+</span> di samping label track <span className="font-semibold text-ink">Efek</span> untuk memakai SFX bawaan gratis atau unggah file sendiri.
+        </p>
+      </div>
+    )
+  }
   const sourceDuration = assets[sfx.assetId]?.durationMs ?? ((sfx.inMs ?? 0) + sfx.durationMs)
   const maxIn = Math.max(0, sourceDuration - 100)
   const update = (patch: Partial<typeof sfx>): void => updateEditor({ sfx: project.editor.sfx?.map((item) => item.id === sfx.id ? { ...item, ...patch } : item) })
@@ -1431,8 +1511,9 @@ export function Inspector({
   clip,
   index,
   total,
-  transitionId
-  ,sfxId
+  transitionId,
+  sfxId,
+  onOpenSmartSfx
 }: {
   tab: InspectorTab
   clip: Clip | null
@@ -1440,12 +1521,13 @@ export function Inspector({
   total: number
   transitionId: string | null
   sfxId: string | null
+  onOpenSmartSfx?: () => void
 }) {
   return (
-    <aside className="scroll-thin flex min-h-0 flex-col overflow-y-auto border-l border-line bg-surface">
+    <aside className="scroll-thin flex h-full min-h-0 flex-1 flex-col overflow-y-auto bg-surface">
       {tab === 'klip' && (clip ? <ClipTab clip={clip} index={index} /> : <p className="p-5 text-sm text-muted">Pilih klip di timeline.</p>)}
       {tab === 'suara' && (clip ? <VoiceTab clip={clip} index={index} /> : <p className="p-5 text-sm text-muted">Pilih suara klip di timeline.</p>)}
-      {tab === 'sfx' && <SfxTab sfxId={sfxId} />}
+      {tab === 'sfx' && <SfxTab sfxId={sfxId} onOpenSmartSfx={onOpenSmartSfx} />}
       {tab === 'caption' && <CaptionTab />}
       {tab === 'overlay' && <OverlayPanel total={total} />}
       {tab === 'musik' && <MusicTab />}

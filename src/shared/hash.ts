@@ -25,6 +25,7 @@ export interface ClipImageBasisParams {
     aspectRatio: AspectRatio
     imageModel?: string | null
     seriesLock?: LockWord[]
+    seriesGuidelines?: string
   }
   clip: Clip
   characters: Character[]
@@ -46,7 +47,12 @@ export function computeClipImageBasisHash(params: ClipImageBasisParams): string 
   const lockWords = params.lockWords ?? project.seriesLock ?? []
   const activeImageModel = params.imageModel || project.imageModel || 'default'
   const compiledPrompt = compileClipPrompt({
-    project: { id: project.id, styleId: project.styleId, aspectRatio: project.aspectRatio },
+    project: {
+      id: project.id,
+      styleId: project.styleId,
+      aspectRatio: project.aspectRatio,
+      seriesGuidelines: project.seriesGuidelines
+    },
     clip,
     characters,
     derivatives,
@@ -96,6 +102,11 @@ export function computeClipVideoBasisHash(params: ClipVideoBasisParams): string 
   const compiledVideoPrompt = compileClipVideoPrompt(project, clip, characters, lockWords)
   const durationSec = seconds
 
+  const isOnScreenDialog =
+    Boolean(clip.speakerId) &&
+    project.dialogAudio === 'video' &&
+    (clip.shotDetail?.dialogueType ?? 'dialogue') === 'dialogue'
+
   return fnv1a(
     JSON.stringify([
       'video',
@@ -104,10 +115,14 @@ export function computeClipVideoBasisHash(params: ClipVideoBasisParams): string 
       durationSec,
       compiledVideoPrompt,
       project.dialogAudio || 'tts',
-      clip.speakerId && project.dialogAudio === 'video' ? clip.narration.trim() : null,
+      isOnScreenDialog ? clip.narration.trim() : null,
       Boolean(clip.continueFromPrevious)
     ])
   )
+}
+
+function styleHashKey(styleId: string, seriesGuidelines?: string): string {
+  return styleId === 'custom_style' ? `custom_style:${(seriesGuidelines || '').trim()}` : styleId
 }
 
 /**
@@ -129,13 +144,14 @@ export function computeCharacterSheetBasisHash(params: {
   styleId: string
   imageModel: string | null
   profile?: unknown
+  seriesGuidelines?: string
 }): string {
   return fnv1a(
     JSON.stringify([
       'character-sheet',
       params.name.trim(),
       params.description.trim(),
-      params.styleId,
+      styleHashKey(params.styleId, params.seriesGuidelines),
       params.imageModel || 'default',
       profileKey(params.profile)
     ])
@@ -148,16 +164,18 @@ export function computeDerivativeSheetBasisHash(params: {
   promptChange: string
   imageModel: string | null
   costumeKeyphrase?: string
+  styleId?: string
+  seriesGuidelines?: string
 }): string {
-  return fnv1a(
-    JSON.stringify([
-      'derivative-sheet',
-      params.baseSheetAssetId || null,
-      params.promptChange.trim(),
-      params.costumeKeyphrase ? params.costumeKeyphrase.trim() : '',
-      params.imageModel || 'default'
-    ])
-  )
+  const parts: unknown[] = [
+    'derivative-sheet',
+    params.baseSheetAssetId || null,
+    params.promptChange.trim(),
+    params.costumeKeyphrase ? params.costumeKeyphrase.trim() : '',
+    params.imageModel || 'default'
+  ]
+  if (params.styleId === 'custom_style') parts.push(styleHashKey(params.styleId, params.seriesGuidelines))
+  return fnv1a(JSON.stringify(parts))
 }
 
 /** Basis hash for a location environment sheet. */
@@ -167,13 +185,14 @@ export function computeLocationSheetBasisHash(params: {
   styleId: string
   imageModel: string | null
   profile?: unknown
+  seriesGuidelines?: string
 }): string {
   return fnv1a(
     JSON.stringify([
       'location-sheet',
       params.name.trim(),
       (params.description || '').trim(),
-      params.styleId,
+      styleHashKey(params.styleId, params.seriesGuidelines),
       params.imageModel || 'default',
       profileKey(params.profile)
     ])
@@ -187,13 +206,14 @@ export function computePropSheetBasisHash(params: {
   styleId: string
   imageModel: string | null
   profile?: unknown
+  seriesGuidelines?: string
 }): string {
   return fnv1a(
     JSON.stringify([
       'prop-sheet',
       params.name.trim(),
       (params.description || '').trim(),
-      params.styleId,
+      styleHashKey(params.styleId, params.seriesGuidelines),
       params.imageModel || 'default',
       profileKey(params.profile)
     ])

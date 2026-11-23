@@ -73,7 +73,10 @@ export function StyleMenu({ value, onChange }: { value: string; onChange: (id: s
             <span className="text-xs text-muted">Dipakai untuk semua gambar dan lembar karakter di proyek ini.</span>
           </div>
           <div className="flex-1" />
-          <span className="truncate text-right text-[13px] text-ink-2">
+          <span
+            title={`${shown.name} · cocok untuk ${shown.niche.toLowerCase()}`}
+            className="min-w-0 truncate text-right text-[13px] text-ink-2"
+          >
             <span className="font-semibold text-ink">{shown.name}</span> · cocok untuk {shown.niche.toLowerCase()}
           </span>
         </div>
@@ -98,7 +101,7 @@ export function StyleMenu({ value, onChange }: { value: string; onChange: (id: s
                 onClick={() => pick(s.id)}
                 onMouseEnter={() => setPeek(s.id)}
                 onFocus={() => setPeek(s.id)}
-                className="group flex flex-col gap-1.5 rounded-xl text-left outline-none"
+                className="group flex flex-col gap-1.5 rounded-xl text-left focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
               >
                 <span
                   className={cx(
@@ -107,7 +110,7 @@ export function StyleMenu({ value, onChange }: { value: string; onChange: (id: s
                   )}
                 >
                   <StyleSwatch styleId={s.id} className="size-full transition-transform duration-500 ease-out group-hover:scale-[1.07]" iconSize={24} />
-                  <span className="absolute left-1.5 top-1.5 rounded-full bg-ink/75 px-1.5 py-px text-[11px] font-semibold text-paper">
+                  <span className="absolute left-1.5 top-1.5 rounded-full bg-black/75 px-1.5 py-px text-[11px] font-semibold text-white">
                     {CATEGORY_LABEL[s.category]}
                   </span>
                   {on && (

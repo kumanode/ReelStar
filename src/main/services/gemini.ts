@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai'
-import { GEMINI_LIBRARY_VOICES, GEMINI_VOICES, geminiVoiceName, geminiVoiceTone } from '@shared/models'
+import { GEMINI_LIBRARY_VOICES, GEMINI_VOICES, geminiVoiceGender, geminiVoiceName, geminiVoiceTone, parseGenderText } from '@shared/models'
 import type { KeyTestResult, ModelOption, VoiceOption } from '@shared/types'
 import { getSecret, requireSecret } from '../secrets'
 import { getSettings, readCache, writeCache } from '../settings'
@@ -135,6 +135,7 @@ interface LibraryVoice {
   displayName?: string
   description?: string
   persona?: string | string[]
+  gender?: string
   language_code?: string
   languageCode?: string
 }
@@ -147,8 +148,8 @@ export async function listVoices(): Promise<VoiceOption[]> {
   const cached = readCache<VoiceOption[]>('voices:gemini')
   if (cached && Date.now() - cached.updatedAt < 24 * 60 * 60 * 1000 && cached.value.length) return cached.value
   const fallback = (): VoiceOption[] => [
-    ...GEMINI_LIBRARY_VOICES.map((v) => ({ id: v.id, name: v.name, description: v.tone })),
-    ...GEMINI_VOICES.map((v) => ({ id: v.id, name: v.id, description: v.tone }))
+    ...GEMINI_LIBRARY_VOICES.map((v) => ({ id: v.id, name: v.name, description: v.tone, gender: geminiVoiceGender(v.id) })),
+    ...GEMINI_VOICES.map((v) => ({ id: v.id, name: v.id, description: v.tone, gender: geminiVoiceGender(v.id) }))
   ]
   try {
     const out: VoiceOption[] = []
@@ -162,7 +163,14 @@ export async function listVoices(): Promise<VoiceOption[]> {
         const id = (v.id ?? v.name ?? '').replace(/^voices\//, '')
         if (!id) continue
         const persona = Array.isArray(v.persona) ? v.persona.join(', ') : v.persona
-        out.push({ id, name: v.display_name ?? v.displayName ?? geminiVoiceName(id), description: geminiVoiceTone(id) ?? persona ?? v.description?.slice(0, 80) ?? '' })
+        const parsedGender = parseGenderText(v.gender)
+        const gender = geminiVoiceGender(id) ?? (parsedGender === 'unknown' ? undefined : parsedGender)
+        out.push({
+          id,
+          name: v.display_name ?? v.displayName ?? geminiVoiceName(id),
+          description: geminiVoiceTone(id) ?? persona ?? v.description?.slice(0, 80) ?? '',
+          gender
+        })
       }
       page = body.next_page_token ?? body.nextPageToken ?? ''
       if (!page) break

@@ -1,15 +1,19 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, join, relative } from 'node:path'
+import { dirname, extname, join, relative } from 'node:path'
 import { promisify } from 'node:util'
 import { app } from 'electron'
+import { timelineChunks } from '@shared/captions'
+import { stripVoiceTags } from '@shared/speech'
+import { clipCaptionWords, voiceSpan } from '@shared/timeline'
+import type { Asset, Clip, WordTiming } from '@shared/types'
 import { assetAbsPath, dataDir } from './paths'
 import { getBundle, listContinuityItems } from './repo'
 import { getSettings } from './settings'
-import type { Clip } from '@shared/types'
 
 const execFileAsync = promisify(execFile)
+const UNKNOWN_AUDIO_MS = 10 * 60 * 1000
 
 function safeFilename(name: string): string {
   return (
@@ -20,34 +24,62 @@ function safeFilename(name: string): string {
   )
 }
 
-function srtTime(ms: number): string {
-  const pad = (n: number, w = 2) => String(Math.floor(n)).padStart(w, '0')
-  const totalSeconds = ms / 1000
-  const h = Math.floor(totalSeconds / 3600)
-  const m = Math.floor((totalSeconds % 3600) / 60)
-  const s = Math.floor(totalSeconds % 60)
-  const millis = Math.floor(ms % 1000)
-  return `${pad(h)}:${pad(m)}:${pad(s)},${pad(millis, 3)}`
+function uniqueName(dir: string, base: string, ext: string): string {
+  let candidate = `${base}${ext}`
+  let n = 2
+  while (existsSync(join(dir, candidate))) {
+    candidate = `${base}-${n}${ext}`
+    n++
+  }
+  return candidate
 }
 
-function buildClipsSrt(clips: Clip[]): string {
-  let elapsedMs = 0
-  const cues: string[] = []
-  let cueIndex = 1
+function srtTimeSec(sec: number): string {
+  const ms = Math.max(0, Math.round(sec * 1000))
+  const h = Math.floor(ms / 3600000)
+  const m = Math.floor((ms % 3600000) / 60000)
+  const s = Math.floor((ms % 60000) / 1000)
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms % 1000).padStart(3, '0')}`
+}
+
+function buildBundleSrt(clips: Clip[], assetMap: Map<string, Asset>): string {
+  let elapsedSec = 0
+  const items: { start: number; words: WordTiming[]; key?: string; offset?: number }[] = []
 
   for (const clip of clips) {
-    const text = (clip.narration || '').trim()
-    const startMs = elapsedMs
-    const endMs = elapsedMs + clip.durationMs
-    elapsedMs = endMs
-
-    if (text) {
-      cues.push(`${cueIndex}\n${srtTime(startMs)} --> ${srtTime(endMs)}\n${text}\n`)
-      cueIndex++
+    const startSec = elapsedSec
+    elapsedSec += clip.durationMs / 1000
+    const audio = clip.audioAssetId ? assetMap.get(clip.audioAssetId) : undefined
+    if (!audio) continue
+    const audioMs = audio.durationMs ?? UNKNOWN_AUDIO_MS
+    const words = audio.meta.words ?? []
+    if (words.length > 0) {
+      const shown = clipCaptionWords(clip, words, audioMs)
+      items.push({ start: startSec, words: shown.words, key: audio.id, offset: shown.offset })
+    } else {
+      const clean = stripVoiceTags(clip.narration || '')
+      const span = voiceSpan(clip, audioMs)
+      if (clean && span.playMs > 0) {
+        items.push({
+          start: startSec,
+          words: [{ text: clean, start: span.startMs / 1000, end: (span.startMs + span.playMs) / 1000 }],
+          key: audio.id
+        })
+      }
     }
   }
 
-  return cues.join('\n') + '\n'
+  const chunks = timelineChunks(items)
+  if (!chunks.length) return ''
+  return (
+    chunks
+      .map((c, i) => {
+        const next = chunks[i + 1]
+        const end = next ? Math.min(next.start, c.end + 0.6) : c.end + 0.6
+        return `${i + 1}\n${srtTimeSec(c.start)} --> ${srtTimeSec(end)}\n${c.words.map((w) => w.text).join(' ')}\n`
+      })
+      .join('\n') + '\n'
+  )
 }
 
 function computeSha256(filePath: string): string {
@@ -107,12 +139,26 @@ export async function exportDeliveryPackage(
     let candidateVideo = videoPath && existsSync(videoPath) ? videoPath : null
 
     if (!candidateVideo) {
-      // Look in default export directory for matching mp4
+      // Look in default export directory for matching mp4 (supports both raw title and slugified filename)
       try {
         const files = readdirSync(defaultDir)
-        const matchPrefix = safeFilename(project.title)
+        const safePrefix = safeFilename(project.title).toLowerCase()
+        const slugPrefix =
+          project.title
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-|-$/g, '') || 'video'
+        const epRe = episode
+          ? new RegExp(`(?:^|[\\s._-])ep(?:isode)?[\\s._-]*0*${episode.episodeNum}(?![0-9])`, 'i')
+          : null
         const matched = files
-          .filter((f) => f.endsWith('.mp4') && f.startsWith(matchPrefix))
+          .filter((f) => {
+            const lower = f.toLowerCase()
+            if (!lower.endsWith('.mp4')) return false
+            if (!lower.startsWith(safePrefix) && !lower.startsWith(slugPrefix)) return false
+            if (epRe && !epRe.test(lower)) return false
+            return true
+          })
           .map((f) => join(defaultDir, f))
           .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
         if (matched.length > 0) {
@@ -129,7 +175,7 @@ export async function exportDeliveryPackage(
     }
 
     // 2. Build Subtitles SRT
-    const srtContent = buildClipsSrt(clips)
+    const srtContent = buildBundleSrt(clips, assetMap)
     const srtFileName = `${safeFilename(project.title)}${epSuffix}.srt`
     writeFileSync(join(stagingDir, srtFileName), srtContent, 'utf8')
 
@@ -141,7 +187,8 @@ export async function exportDeliveryPackage(
       const coverAsset = assetMap.get(project.coverAssetId)!
       const abs = assetAbsPath(projectId, coverAsset.localPath)
       if (existsSync(abs)) {
-        copyFileSync(abs, join(thumbDir, 'cover.jpg'))
+        const ext = extname(abs).toLowerCase() || '.png'
+        copyFileSync(abs, join(thumbDir, uniqueName(thumbDir, 'cover', ext)))
       }
     }
 
@@ -150,7 +197,8 @@ export async function exportDeliveryPackage(
     for (const ta of thumbAssets) {
       const abs = assetAbsPath(projectId, ta.localPath)
       if (existsSync(abs)) {
-        copyFileSync(abs, join(thumbDir, `thumbnail-${thumbIndex}.jpg`))
+        const ext = extname(abs).toLowerCase() || '.png'
+        copyFileSync(abs, join(thumbDir, uniqueName(thumbDir, `thumbnail-${thumbIndex}`, ext)))
         thumbIndex++
       }
     }
@@ -159,11 +207,24 @@ export async function exportDeliveryPackage(
     const loreDir = join(stagingDir, 'lorebook')
     mkdirSync(loreDir, { recursive: true })
 
+    const charById = new Map(characters.map((ch) => [ch.id, ch]))
     for (const ch of characters) {
       if (ch.sheetAssetId && assetMap.has(ch.sheetAssetId)) {
         const abs = assetAbsPath(projectId, assetMap.get(ch.sheetAssetId)!.localPath)
         if (existsSync(abs)) {
-          copyFileSync(abs, join(loreDir, `character-${safeFilename(ch.name)}.jpg`))
+          const ext = extname(abs).toLowerCase() || '.png'
+          copyFileSync(abs, join(loreDir, uniqueName(loreDir, `character-${safeFilename(ch.name)}`, ext)))
+        }
+      }
+    }
+
+    for (const d of derivatives) {
+      if (d.sheetAssetId && assetMap.has(d.sheetAssetId)) {
+        const abs = assetAbsPath(projectId, assetMap.get(d.sheetAssetId)!.localPath)
+        if (existsSync(abs)) {
+          const charName = charById.get(d.characterId)?.name || 'character'
+          const ext = extname(abs).toLowerCase() || '.png'
+          copyFileSync(abs, join(loreDir, uniqueName(loreDir, `variant-${safeFilename(charName)}-${safeFilename(d.name)}`, ext)))
         }
       }
     }
@@ -172,7 +233,8 @@ export async function exportDeliveryPackage(
       if (loc.sheetAssetId && assetMap.has(loc.sheetAssetId)) {
         const abs = assetAbsPath(projectId, assetMap.get(loc.sheetAssetId)!.localPath)
         if (existsSync(abs)) {
-          copyFileSync(abs, join(loreDir, `location-${safeFilename(loc.name)}.jpg`))
+          const ext = extname(abs).toLowerCase() || '.png'
+          copyFileSync(abs, join(loreDir, uniqueName(loreDir, `location-${safeFilename(loc.name)}`, ext)))
         }
       }
     }
@@ -181,7 +243,8 @@ export async function exportDeliveryPackage(
       if (prop.sheetAssetId && assetMap.has(prop.sheetAssetId)) {
         const abs = assetAbsPath(projectId, assetMap.get(prop.sheetAssetId)!.localPath)
         if (existsSync(abs)) {
-          copyFileSync(abs, join(loreDir, `prop-${safeFilename(prop.name)}.jpg`))
+          const ext = extname(abs).toLowerCase() || '.png'
+          copyFileSync(abs, join(loreDir, uniqueName(loreDir, `prop-${safeFilename(prop.name)}`, ext)))
         }
       }
     }

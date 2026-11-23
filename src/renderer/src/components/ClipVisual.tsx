@@ -114,7 +114,7 @@ export function GeneratingOverlay({
             <span
               className={cx(
                 'mt-0.5 font-mono tabular-nums text-muted',
-                large ? 'text-xs' : 'text-[10px]'
+                large ? 'text-xs' : 'text-[11px]'
               )}
             >
               {sub}
@@ -193,7 +193,7 @@ export function ClipVisual({
           ) : (
             <ImageIcon className={large ? 'size-7' : 'size-4 opacity-70'} strokeWidth={1.6} />
           )}
-          <span className={cx('leading-tight', large ? 'text-sm' : 'text-[10px] font-medium')}>
+          <span className={cx('leading-tight', large ? 'text-sm' : 'text-[11px] font-medium')}>
             {failed ? 'Gagal dibuat' : 'Belum ada gambar'}
           </span>
         </div>

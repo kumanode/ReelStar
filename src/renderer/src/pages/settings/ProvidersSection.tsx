@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import {
   ExternalLink,
   Eye,
@@ -60,7 +60,12 @@ function KeyForm({
   const [url, setUrl] = useState(customUrl ?? '')
   const [revealed, setRevealed] = useState<string | null>(null)
   const [showTyped, setShowTyped] = useState(false)
-  const [busy, setBusy] = useState<'save' | 'test' | null>(null)
+  const [busy, setBusy] = useState<'save' | 'test' | 'clear' | null>(null)
+
+  useEffect(() => {
+    // Async key status load transitions preview from null to masked key; exit edit mode unless user already typed.
+    if (preview && !key) setEditing(false)
+  }, [preview])
 
   const showStored = !isCustom && !editing && !!preview
   const urlChanged = isCustom && url.trim() !== (customUrl ?? '').trim()
@@ -84,6 +89,7 @@ function KeyForm({
             : await window.api.settings.setKey(provider, key)
       toast(r.ok ? 'success' : 'error', `${name}: ${r.message}`)
       setKey('')
+      setRevealed(null)
       setEditing(false)
       onChanged()
       onSaved?.(r)
@@ -109,6 +115,8 @@ function KeyForm({
       const r = await window.api.settings.testKey(provider)
       toast(r.ok ? 'success' : 'error', `${name}: ${r.message}`)
       onChanged()
+    } catch (e) {
+      toast('error', errorText(e))
     } finally {
       setBusy(null)
     }
@@ -122,119 +130,171 @@ function KeyForm({
       danger: true
     })
     if (!ok) return
-    await window.api.settings.clearKey(provider)
-    setUrl(provider === 'flow2api' ? 'http://localhost:8000/v1' : '')
-    onChanged()
+    setBusy('clear')
+    try {
+      await window.api.settings.clearKey(provider)
+      setRevealed(null)
+      setUrl(provider === 'flow2api' ? 'http://localhost:8000/v1' : '')
+      onChanged()
+    } catch (e) {
+      toast('error', errorText(e))
+    } finally {
+      setBusy(null)
+    }
   }
 
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-end gap-2">
-        {isCustom && (
-          <Field label="Alamat endpoint (base URL)" className="flex-[1.3]">
-            <input
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              onKeyDown={onEnter}
-              placeholder={provider === 'flow2api' ? 'http://localhost:8000/v1' : 'http://localhost:11434/v1'}
-              spellCheck={false}
-              className={cx(inputCls, 'h-11 font-mono text-sm')}
-            />
-          </Field>
-        )}
-        <Field label={isCustom ? 'API key (opsional)' : label} className="flex-1">
-          <div className="relative">
-            {showStored ? (
-              <input
-                readOnly
-                value={revealed ?? preview ?? ''}
-                aria-label={`${label} tersimpan`}
-                className={cx(inputCls, 'h-11 cursor-default bg-paper pr-11 font-mono text-sm')}
-              />
-            ) : (
-              <input
-                type={showTyped ? 'text' : 'password'}
-                autoComplete="off"
-                spellCheck={false}
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-                onKeyDown={onEnter}
-                placeholder={
-                  isCustom ? (preview ? `Tersimpan (${preview}) · isi untuk mengganti` : 'Kosongkan untuk server lokal') : placeholder
-                }
-                className={cx(inputCls, 'h-11 pr-11')}
-              />
-            )}
-            {(showStored || key.length > 0) && (
-              <button
-                type="button"
-                aria-label={visible ? 'Sembunyikan kunci' : 'Tampilkan kunci'}
-                title={visible ? 'Sembunyikan kunci' : 'Tampilkan kunci'}
-                onClick={() => void toggleEye()}
-                className="absolute right-1.5 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-lg text-muted hover:bg-sand hover:text-ink"
-              >
-                {visible ? <EyeOff className="size-[17px]" /> : <Eye className="size-[17px]" />}
-              </button>
-            )}
-          </div>
-        </Field>
+  const keyField = (
+    <Field label={isCustom ? 'API key (opsional)' : label} className="min-w-0 flex-1">
+      <div className="relative">
         {showStored ? (
-          <Button
-            className="h-11"
-            onClick={() => {
-              setEditing(true)
-              setRevealed(null)
-            }}
-          >
-            Ganti
-          </Button>
+          <input
+            readOnly
+            value={revealed ?? preview ?? ''}
+            aria-label={`${label} tersimpan`}
+            className={cx(inputCls, 'h-11 cursor-default bg-paper pr-11 font-mono text-sm')}
+          />
         ) : (
-          <Button variant="accent" className="h-11" disabled={!canSave} loading={busy === 'save'} onClick={() => void save()}>
-            Simpan dan tes
-          </Button>
+          <input
+            type={showTyped ? 'text' : 'password'}
+            autoComplete="off"
+            spellCheck={false}
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            onKeyDown={onEnter}
+            placeholder={
+              isCustom ? (preview ? `Tersimpan (${preview}) · isi untuk mengganti` : 'Kosongkan untuk server lokal') : placeholder
+            }
+            className={cx(inputCls, 'h-11 pr-11')}
+          />
         )}
-        {!isCustom && editing && !!preview && (
-          <Button
-            variant="ghost"
-            className="h-11"
-            onClick={() => {
-              setEditing(false)
-              setKey('')
-            }}
-          >
-            Batal
-          </Button>
-        )}
-        {configured && (
-          <>
-            <Button className="h-11" loading={busy === 'test'} onClick={() => void test()}>
-              Tes
-            </Button>
-            <IconButton label={`Hapus ${name}`} size={44} className="text-bad-ink" onClick={() => void clear()}>
-              <Trash2 className="size-[18px]" />
-            </IconButton>
-          </>
-        )}
-      </div>
-      {unsaved && <p className="-mt-1 text-[13px] font-semibold text-accent-dark">Kunci belum tersimpan. Tekan Enter atau klik Simpan dan tes.</p>}
-      {hint && <p className="-mt-1 text-[13px] text-ink-2">{hint}</p>}
-      <div className="flex items-center gap-2 text-[13px] text-ink-2">
-        <span className={cx('flex-1', configured && status?.lastOk === false && 'text-bad-ink')}>
-          {configured && status?.lastMessage
-            ? `${status.lastMessage}${status.checkedAt && !status.unreadable ? ` · dicek ${relativeTime(status.checkedAt)}` : ''}`
-            : help}
-        </span>
-        {link && (
+        {(showStored || key.length > 0) && (
           <button
             type="button"
-            onClick={() => void window.api.app.openExternal(link)}
-            className="inline-flex shrink-0 items-center gap-1 font-semibold text-accent-dark hover:underline"
+            aria-label={visible ? 'Sembunyikan kunci' : 'Tampilkan kunci'}
+            title={visible ? 'Sembunyikan kunci' : 'Tampilkan kunci'}
+            onClick={() => void toggleEye()}
+            className="absolute right-1.5 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-lg text-muted hover:bg-sand hover:text-ink"
           >
-            <span>{linkLabel}</span>
-            <ExternalLink className="size-3.5" />
+            {visible ? <EyeOff className="size-[17px]" /> : <Eye className="size-[17px]" />}
           </button>
         )}
       </div>
+    </Field>
+  )
+
+  const actionButtons = (
+    <>
+      {showStored ? (
+        <Button
+          className="h-11"
+          disabled={busy !== null}
+          onClick={() => {
+            setEditing(true)
+            setRevealed(null)
+          }}
+        >
+          Ganti
+        </Button>
+      ) : (
+        <Button
+          variant="accent"
+          className="h-11"
+          disabled={!canSave || (busy !== null && busy !== 'save')}
+          loading={busy === 'save'}
+          onClick={() => void save()}
+        >
+          Simpan dan tes
+        </Button>
+      )}
+      {!isCustom && editing && !!preview && (
+        <Button
+          variant="ghost"
+          className="h-11"
+          disabled={busy !== null}
+          onClick={() => {
+            setEditing(false)
+            setKey('')
+          }}
+        >
+          Batal
+        </Button>
+      )}
+      {configured && (
+        <>
+          <Button
+            className="h-11"
+            loading={busy === 'test'}
+            disabled={busy !== null && busy !== 'test'}
+            onClick={() => void test()}
+          >
+            Tes
+          </Button>
+          <IconButton
+            label={`Hapus ${name}`}
+            size={44}
+            className="text-bad-ink"
+            disabled={busy !== null}
+            onClick={() => void clear()}
+          >
+            <Trash2 className="size-[18px]" />
+          </IconButton>
+        </>
+      )}
+    </>
+  )
+
+  const statusText =
+    configured && status?.lastMessage
+      ? `${status.lastMessage}${status.checkedAt && !status.unreadable ? ` · dicek ${relativeTime(status.checkedAt)}` : ''}`
+      : help
+
+  return (
+    <div className="flex min-w-0 flex-col gap-3">
+      {isCustom ? (
+        <div className="flex flex-col gap-2.5">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <Field label="Alamat endpoint (base URL)" className="min-w-0">
+              <input
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                onKeyDown={onEnter}
+                placeholder={provider === 'flow2api' ? 'http://localhost:8000/v1' : 'http://localhost:11434/v1'}
+                spellCheck={false}
+                className={cx(inputCls, 'h-11 font-mono text-sm')}
+              />
+            </Field>
+            {keyField}
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">{actionButtons}</div>
+        </div>
+      ) : (
+        <div className="flex min-w-0 items-end gap-2">
+          {keyField}
+          {actionButtons}
+        </div>
+      )}
+      {unsaved && <p className="-mt-1 text-[13px] font-semibold text-accent-dark">Kunci belum tersimpan. Tekan Enter atau klik Simpan dan tes.</p>}
+      {hint && <p className="-mt-1 text-[13px] text-ink-2">{hint}</p>}
+      {(statusText || link) && (
+        <div className="flex items-center gap-2 text-[13px] text-ink-2">
+          {statusText && (
+            <span className={cx('min-w-0 flex-1', configured && status?.lastOk === false && 'text-bad-ink')}>
+              {statusText}
+            </span>
+          )}
+          {!statusText && <div className="flex-1" />}
+          {link && (
+            <button
+              type="button"
+              onClick={() => void window.api.app.openExternal(link)}
+              className="inline-flex shrink-0 items-center gap-1 font-semibold text-accent-dark hover:underline"
+            >
+              <span>{linkLabel}</span>
+              <ExternalLink className="size-3.5" />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -315,7 +375,7 @@ export function ProvidersSection({ settings, keys, onChanged, onSettings }: Prop
                     name={p.name}
                     status={status}
                     customUrl={p.id === 'flow2api' ? settings.flow2apiBaseUrl : undefined}
-                    help={p.note ?? ''}
+                    help=""
                     link={p.docs?.link ?? null}
                     linkLabel={p.docs?.label ?? 'Dokumentasi'}
                     onChanged={onChanged}
@@ -330,9 +390,9 @@ export function ProvidersSection({ settings, keys, onChanged, onSettings }: Prop
 
       {/* Custom Providers (Tugas 55) */}
       <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-bold">Penyedia Custom (OpenAI / Flow2API)</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold">Penyedia Kustom (OpenAI / Flow2API)</h2>
             <p className="text-xs text-muted">
               Sambungkan model lokal (Ollama, vLLM, LM Studio) atau API pihak ketiga lainnya.
             </p>
@@ -346,14 +406,14 @@ export function ProvidersSection({ settings, keys, onChanged, onSettings }: Prop
               setModalOpen(true)
             }}
           >
-            Tambah Penyedia Custom
+            Tambah Penyedia Kustom
           </Button>
         </div>
 
         {(!settings.customProviders || settings.customProviders.length === 0) ? (
           <div className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-line bg-sand/30 py-8 text-center">
             <Server className="size-8 text-muted" />
-            <span className="text-sm font-semibold text-ink">Belum ada penyedia custom</span>
+            <span className="text-sm font-semibold text-ink">Belum ada penyedia kustom</span>
             <p className="max-w-sm text-xs text-muted">
               Kamu bisa menambahkan server lokal seperti Ollama atau proxy API kustom yang kompatibel dengan protokol OpenAI Chat atau Flow2API.
             </p>
@@ -375,24 +435,24 @@ export function ProvidersSection({ settings, keys, onChanged, onSettings }: Prop
             {settings.customProviders.map((cp) => {
               const status = statusOf(cp.id)
               return (
-                <div key={cp.id} className="flex flex-col justify-between rounded-xl border border-line bg-surface p-4 shadow-sm">
+                <div key={cp.id} className="flex min-w-0 flex-col justify-between rounded-xl border border-line bg-surface p-4 shadow-sm">
                   <div className="space-y-2">
                     <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="flex min-w-0 items-center gap-2.5">
                         <ProviderLogo id={cp.logo ?? 'custom'} size={32} />
                         <div className="min-w-0">
-                          <h4 className="truncate text-sm font-bold text-ink">{cp.name}</h4>
-                          <span className="text-[11px] font-mono text-muted truncate block">{cp.baseUrl}</span>
+                          <h4 title={cp.name} className="truncate text-sm font-bold text-ink">{cp.name}</h4>
+                          <span title={cp.baseUrl} className="block truncate font-mono text-[11px] text-muted">{cp.baseUrl}</span>
                         </div>
                       </div>
                       <StatusBadge status={status} />
                     </div>
                     <div className="flex flex-wrap gap-1.5 pt-1">
-                      <span className="rounded bg-sand px-1.5 py-0.5 font-mono text-[10px] text-ink-2">
+                      <span className="rounded bg-sand px-1.5 py-0.5 font-mono text-[11px] text-ink-2">
                         {cp.protocol}
                       </span>
                       {cp.keyOptional && (
-                        <span className="rounded bg-sand px-1.5 py-0.5 text-[10px] text-ink-2">
+                        <span className="rounded bg-sand px-1.5 py-0.5 text-[11px] text-ink-2">
                           Tanpa Kunci
                         </span>
                       )}
@@ -417,7 +477,7 @@ export function ProvidersSection({ settings, keys, onChanged, onSettings }: Prop
                         setModalOpen(true)
                       }}
                     >
-                      Edit
+                      Ubah
                     </Button>
                     <IconButton
                       label={`Hapus ${cp.name}`}

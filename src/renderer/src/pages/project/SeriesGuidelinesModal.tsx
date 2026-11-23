@@ -5,7 +5,7 @@ import {
   type PromptTemplateKey
 } from '@shared/types'
 import { AutoTextarea } from '../../components/AutoTextarea'
-import { Badge, Button, Modal, Segmented, cx } from '../../components/ui'
+import { Badge, Button, Modal, Segmented, confirmDialog, cx } from '../../components/ui'
 import { useApp } from '../../store/app'
 import { useProject } from '../../store/project'
 
@@ -15,6 +15,11 @@ interface SeriesGuidelinesModalProps {
 }
 
 type ModalTab = 'guidelines' | 'templates'
+
+// Script Doctor runs locally with deterministic rules and no LLM, so it has no customizable prompt.
+const CUSTOMIZABLE_TEMPLATE_KEYS = (Object.keys(DEFAULT_PROMPT_TEMPLATES) as PromptTemplateKey[]).filter(
+  (k) => k !== 'script_doctor'
+)
 
 export function SeriesGuidelinesModal({ open, onClose }: SeriesGuidelinesModalProps) {
   const { project, updateProject, flush } = useProject()
@@ -35,7 +40,7 @@ export function SeriesGuidelinesModal({ open, onClose }: SeriesGuidelinesModalPr
       setGuidelines(project.seriesGuidelines ?? '')
       setTemplates(project.promptTemplates ?? {})
     }
-  }, [open, project])
+  }, [open, project?.id])
 
   if (!project) return null
 
@@ -50,7 +55,14 @@ export function SeriesGuidelinesModal({ open, onClose }: SeriesGuidelinesModalPr
     toast('info', `Template "${defaultDef.name}" dikembalikan ke instruksi bawaan.`)
   }
 
-  const handleResetAllTemplates = () => {
+  const handleResetAllTemplates = async () => {
+    const ok = await confirmDialog({
+      title: 'Kembalikan semua template?',
+      body: 'Semua template prompt kustom akan dikembalikan ke instruksi bawaan. Perubahan baru tersimpan setelah kamu menekan Simpan.',
+      confirm: 'Kembalikan semua',
+      danger: true
+    })
+    if (!ok) return
     setTemplates({})
     toast('info', 'Semua template prompt dikembalikan ke bawaan.')
   }
@@ -82,10 +94,20 @@ export function SeriesGuidelinesModal({ open, onClose }: SeriesGuidelinesModalPr
       title="Arahan Serial & Kustomisasi Prompt AI"
       subtitle="Sesuaikan nada, aturan cerita, dan template prompt yang digunakan oleh AI untuk serial ini."
       width={780}
+      footer={
+        <div className="flex items-center justify-between gap-2">
+          <Button variant="secondary" size="sm" onClick={onClose} disabled={saving}>
+            Batal
+          </Button>
+          <Button variant="primary" size="sm" icon={<Check className="size-3.5" />} onClick={handleSave} loading={saving}>
+            {saving ? 'Menyimpan…' : 'Simpan arahan & template'}
+          </Button>
+        </div>
+      }
     >
       <div className="flex flex-col gap-4">
         {/* Navigation Tabs */}
-        <div className="flex items-center justify-between border-b border-line pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-3">
           <Segmented<ModalTab>
             value={activeTab}
             onChange={setActiveTab}
@@ -95,7 +117,7 @@ export function SeriesGuidelinesModal({ open, onClose }: SeriesGuidelinesModalPr
                 label: (
                   <span className="flex items-center gap-1.5">
                     <BookOpen className="size-3.5" />
-                    Arahan Serial (Series Guidelines)
+                    Arahan serial
                   </span>
                 )
               },
@@ -104,7 +126,7 @@ export function SeriesGuidelinesModal({ open, onClose }: SeriesGuidelinesModalPr
                 label: (
                   <span className="flex items-center gap-1.5">
                     <FileCode className="size-3.5" />
-                    Template Prompt AI ({Object.keys(DEFAULT_PROMPT_TEMPLATES).length})
+                    Template Prompt AI ({CUSTOMIZABLE_TEMPLATE_KEYS.length})
                   </span>
                 )
               }
@@ -116,7 +138,8 @@ export function SeriesGuidelinesModal({ open, onClose }: SeriesGuidelinesModalPr
               variant="ghost"
               size="sm"
               icon={<RotateCcw className="size-3.5" />}
-              onClick={handleResetAllTemplates}
+              onClick={() => void handleResetAllTemplates()}
+              disabled={Object.keys(templates).length === 0}
             >
               Reset Semua ke Bawaan
             </Button>
@@ -142,8 +165,9 @@ export function SeriesGuidelinesModal({ open, onClose }: SeriesGuidelinesModalPr
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-ink">Catatan Arahan Gaya & Dunia Cerita</label>
+              <label htmlFor="series-guidelines-input" className="text-xs font-semibold text-ink">Catatan Arahan Gaya &amp; Dunia Cerita</label>
               <AutoTextarea
+                id="series-guidelines-input"
                 value={guidelines}
                 onChange={(e) => setGuidelines(e.target.value)}
                 placeholder="Tuliskan aturan nada, gaya bahasa, pantangan adegan, atau karakteristik khusus serial ini..."
@@ -160,7 +184,7 @@ export function SeriesGuidelinesModal({ open, onClose }: SeriesGuidelinesModalPr
           <div className="flex flex-col gap-3 py-1">
             {/* Template selector pills */}
             <div className="flex flex-wrap gap-1.5 border-b border-line pb-2.5">
-              {(Object.keys(DEFAULT_PROMPT_TEMPLATES) as PromptTemplateKey[]).map((key) => {
+              {CUSTOMIZABLE_TEMPLATE_KEYS.map((key) => {
                 const def = DEFAULT_PROMPT_TEMPLATES[key]
                 const isCustom = Boolean(templates[key] && templates[key] !== def.template)
                 const isSelected = selectedTemplateKey === key
@@ -185,11 +209,11 @@ export function SeriesGuidelinesModal({ open, onClose }: SeriesGuidelinesModalPr
 
             {/* Template detail editor */}
             <div className="flex flex-col gap-2.5">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <h4 className="font-display text-sm font-bold text-ink flex items-center gap-2">
                     {activeTemplateDef.name}
-                    <Badge tone="info" className="text-[10px]">
+                    <Badge tone="info" className="text-[11px]">
                       {selectedTemplateKey}
                     </Badge>
                   </h4>
@@ -213,7 +237,7 @@ export function SeriesGuidelinesModal({ open, onClose }: SeriesGuidelinesModalPr
                   {activeTemplateDef.placeholders.map((ph: string) => (
                     <span
                       key={ph}
-                      className="rounded bg-sand px-1.5 py-0.5 font-mono text-[10px] text-accent-dark font-medium border border-line"
+                      className="rounded bg-sand px-1.5 py-0.5 font-mono text-[11px] text-accent-dark font-medium border border-line"
                     >
                       {`{${ph}}`}
                     </span>
@@ -223,8 +247,9 @@ export function SeriesGuidelinesModal({ open, onClose }: SeriesGuidelinesModalPr
 
               {/* System Prompt Textarea */}
               <div className="flex flex-col gap-1">
-                <label className="text-[11px] font-semibold text-ink-2">Instruksi Prompt</label>
+                <label htmlFor="series-prompt-template-input" className="text-[11px] font-semibold text-ink-2">Instruksi Prompt</label>
                 <AutoTextarea
+                  id="series-prompt-template-input"
                   value={currentPrompt}
                   onChange={(e) => {
                     const newPrompt = e.target.value
@@ -235,28 +260,12 @@ export function SeriesGuidelinesModal({ open, onClose }: SeriesGuidelinesModalPr
                   }}
                   minRows={10}
                   maxHeight={280}
-                  className="w-full rounded-xl border border-line bg-surface p-3 font-mono text-xs leading-relaxed text-ink outline-none transition-colors focus:border-ink"
+                  className="w-full rounded-xl border border-line bg-surface p-3 font-mono text-xs leading-relaxed text-ink outline-none transition-colors focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                 />
               </div>
             </div>
           </div>
         )}
-
-        {/* Modal Footer */}
-        <div className="flex items-center justify-between border-t border-line pt-3 mt-1">
-          <Button variant="secondary" size="sm" onClick={onClose} disabled={saving}>
-            Batal
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            icon={<Check className="size-3.5" />}
-            onClick={handleSave}
-            loading={saving}
-          >
-            {saving ? 'Menyimpan...' : 'Simpan Arahan & Template'}
-          </Button>
-        </div>
       </div>
     </Modal>
   )

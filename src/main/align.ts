@@ -83,7 +83,12 @@ export function alignWords(script: string[], heard: Heard[], total: number): Wor
     else j--
   }
 
-  const out: WordTiming[] = script.map((text, k) => (pair[k] >= 0 ? { text, start: heard[pair[k]].start, end: heard[pair[k]].end } : { text, start: -1, end: -1 }))
+  const out: WordTiming[] = script.map((text, k) => {
+    if (pair[k] < 0) return { text, start: -1, end: -1 }
+    const s = Math.min(total, Math.max(0, heard[pair[k]].start))
+    const e = Math.min(total, Math.max(s, heard[pair[k]].end))
+    return { text, start: s, end: e }
+  })
   // A weak match is likely one heard word standing for several script words ("1336" for "thirteen thirty six").
   const weak = script.map((_, k) => pair[k] >= 0 && similarity(a[k], b[pair[k]]) < 0.99)
 
@@ -101,17 +106,22 @@ export function alignWords(script: string[], heard: Heard[], total: number): Wor
     let start = before ? before.end : 0
     let end = after ? after.start : total
     const run = out.slice(from, k)
+    let sharedAfter = false
     // No room between neighbours: share a neighbour's own span instead, a weak match first.
     if (end - start < 0.08 * run.length) {
       if (after && weak[k]) {
         end = after.end
         run.push(after)
+        sharedAfter = true
       } else if (before) {
         start = before.start
         run.unshift(before)
       }
     }
-    end = Math.max(end, start + 0.08 * run.length)
+    // Never push interpolated words past the next matched word or audio duration.
+    const hardCap = sharedAfter ? Math.min(after!.end, total) : after ? Math.min(after.start, total) : total
+    end = Math.min(hardCap, Math.max(end, start + 0.08 * run.length))
+    start = Math.min(start, end)
     const weight = run.map((w) => Math.max(2, norm(w.text).length))
     const sum = weight.reduce((x, y) => x + y, 0)
     let t = start
@@ -125,7 +135,7 @@ export function alignWords(script: string[], heard: Heard[], total: number): Wor
   // Whisper sometimes gives a word no length (often the last one); let it run until the next word starts.
   out.forEach((w, x) => {
     if (w.end - w.start >= 0.08) return
-    const limit = x + 1 < n ? out[x + 1].start : Math.max(total, w.end)
+    const limit = x + 1 < n ? out[x + 1].start : total
     w.end = Math.max(w.end, Math.min(limit, w.start + 0.3))
   })
   return out

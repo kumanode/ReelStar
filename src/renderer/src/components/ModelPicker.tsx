@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { ArrowDownNarrowWide, ChevronDown, RefreshCw, Search, X } from 'lucide-react'
 import type { ModelOption } from '@shared/types'
 import { creditLabel, relativeTime, usdLabel } from '../lib/format'
+import { Popover } from './Popover'
 import { Spinner, cx } from './ui'
 
 function ctxLabel(n?: number | null): string | null {
@@ -40,7 +41,8 @@ export function ModelPicker({
   align = 'left',
   menuClassName,
   footerNote,
-  renderIcon
+  renderIcon,
+  ariaLabel
 }: {
   value: string
   models: ModelOption[]
@@ -64,16 +66,23 @@ export function ModelPicker({
   footerNote?: string
   /** A mark shown before each model name, e.g. its brand logo. */
   renderIcon?: (m: ModelOption) => ReactNode
+  /** Accessible name for the trigger button. */
+  ariaLabel?: string
 }) {
-  const [menu, setMenu] = useState<{ up: boolean; max: number }>({ up: false, max: 440 })
   const [open, setOpen] = useState(!!defaultOpen)
   const [query, setQuery] = useState('')
   const [tags, setTags] = useState<string[]>([])
   const [active, setActive] = useState(0)
   const [cheapFirst, setCheapFirst] = useState(false)
-  const root = useRef<HTMLDivElement>(null)
+  const listId = useId()
+  const trigger = useRef<HTMLButtonElement>(null)
   const list = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLInputElement>(null)
+
+  const popoverWidth = useMemo(() => {
+    const match = menuClassName?.match(/(?:min-)?w-\[(\d+)px\]/)
+    return match ? Number(match[1]) : undefined
+  }, [menuClassName])
 
   useEffect(() => {
     if (defaultOpen) setOpen(true)
@@ -81,20 +90,8 @@ export function ModelPicker({
 
   useEffect(() => {
     if (!open) return
-    // Open toward the side with more room, and never past the window edge.
-    const rect = root.current?.getBoundingClientRect()
-    if (rect) {
-      const below = window.innerHeight - rect.bottom - 14
-      const above = rect.top - 14
-      const up = below < 320 && above > below
-      setMenu({ up, max: Math.max(220, Math.min(440, up ? above : below)) })
-    }
-    const onDown = (e: MouseEvent): void => {
-      if (!root.current?.contains(e.target as Node)) setOpen(false)
-    }
-    window.addEventListener('mousedown', onDown)
-    setTimeout(() => input.current?.focus(), 0)
-    return () => window.removeEventListener('mousedown', onDown)
+    const id = requestAnimationFrame(() => input.current?.focus())
+    return () => cancelAnimationFrame(id)
   }, [open])
 
   const allTags = useMemo(() => {
@@ -145,30 +142,39 @@ export function ModelPicker({
       if (active < filtered.length) pick(filtered[active].id)
       else if (showCustom) pick(customId)
     } else if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
       setOpen(false)
+      trigger.current?.focus()
     }
   }
 
   const current = models.find((m) => m.id === value)
 
   return (
-    <div ref={root} className="relative">
+    <div className="relative">
       <button
+        ref={trigger}
         type="button"
         disabled={disabled}
+        aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? listId : undefined}
         onClick={() => setOpen(!open)}
         className={cx(
-          'flex h-12 w-full items-center gap-3 rounded-xl border bg-surface px-3.5 text-left transition-colors disabled:opacity-50',
-          open ? 'border-ink' : value ? 'border-line-2 hover:border-ink-2' : 'border-[1.5px] border-accent bg-accent-soft'
+          'flex h-12 w-full items-center gap-3 rounded-xl border px-3.5 text-left transition-colors disabled:opacity-50',
+          open || value ? 'bg-surface' : 'bg-accent-soft',
+          open ? 'border-ink' : value ? 'border-line-2 hover:border-ink-2' : 'border-[1.5px] border-accent'
         )}
       >
         {renderIcon && current && renderIcon(current)}
         <span className="flex min-w-0 flex-1 flex-col leading-tight">
           {value ? (
             <>
-              <span className="truncate text-[15px] font-semibold">{current?.name ?? value}</span>
+              <span className="truncate text-[15px] font-semibold" title={current?.name ?? value}>
+                {current?.name ?? value}
+              </span>
               {detail === 'description'
                 ? current?.description && <span className="truncate text-xs text-muted">{current.description}</span>
                 : current && current.name !== value && <span className="truncate font-mono text-xs text-muted">{value}</span>}
@@ -183,18 +189,21 @@ export function ModelPicker({
         {loading ? <Spinner className="size-4 text-muted" /> : <ChevronDown className={cx('size-4 shrink-0 transition-transform', open && 'rotate-180')} />}
       </button>
 
-      {open && (
-        <div
-          className={cx(
-            'absolute z-40 flex min-w-full flex-col overflow-hidden rounded-2xl border-[1.5px] border-ink bg-surface shadow-ink-lg',
-            align === 'right' ? 'right-0' : 'left-0',
-            menu.up ? 'bottom-full mb-1.5' : 'top-full mt-1.5',
-            menuClassName
-          )}
-          style={{ maxHeight: menu.max }}
-        >
+      <Popover
+        anchor={trigger}
+        open={open}
+        onClose={(why) => {
+          setOpen(false)
+          if (why === 'escape') trigger.current?.focus()
+        }}
+        width={popoverWidth}
+        align={align}
+        maxHeight={440}
+        label={ariaLabel ?? placeholder}
+        className={menuClassName}
+      >
           <div className="flex flex-col gap-2 border-b border-line p-2.5">
-            <label className="flex h-10 items-center gap-2 rounded-xl border border-line-2 bg-paper px-3 focus-within:border-ink">
+            <label className="flex h-10 items-center gap-2 rounded-xl border border-line-2 bg-paper px-3 transition-all focus-within:border-ink focus-within:ring-2 focus-within:ring-accent/35">
               <Search className="size-4 shrink-0 text-muted" />
               <input
                 ref={input}
@@ -205,11 +214,17 @@ export function ModelPicker({
                 aria-label="Cari model"
                 role="combobox"
                 aria-expanded="true"
-                aria-controls="model-list"
+                aria-controls={listId}
                 className="flex-1 bg-transparent text-sm outline-none"
               />
               {query && (
-                <button type="button" aria-label="Hapus pencarian" onClick={() => setQuery('')} className="text-muted hover:text-ink">
+                <button
+                  type="button"
+                  aria-label="Hapus pencarian"
+                  title="Hapus pencarian"
+                  onClick={() => setQuery('')}
+                  className="-mr-1 flex size-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-sand hover:text-ink"
+                >
                   <X className="size-4" />
                 </button>
               )}
@@ -251,7 +266,7 @@ export function ModelPicker({
             )}
           </div>
 
-          <div ref={list} id="model-list" role="listbox" className="scroll-thin min-h-0 flex-1 overflow-y-auto p-1.5">
+          <div ref={list} id={listId} role="listbox" className="scroll-thin min-h-0 flex-1 overflow-y-auto p-1.5">
             {error && <p className="m-1 rounded-xl bg-bad-soft px-3 py-2.5 text-[13px] text-bad-ink">{error}</p>}
             {!error && loading && !models.length && (
               <p className="flex items-center gap-2 px-3 py-4 text-sm text-ink-2">
@@ -341,14 +356,18 @@ export function ModelPicker({
               {fetchedAt ? ` · diperbarui ${relativeTime(fetchedAt)}` : ''}
             </span>
             {onRefresh && (
-              <button type="button" onClick={onRefresh} disabled={loading} className="inline-flex items-center gap-1 font-semibold text-ink-2 hover:text-ink disabled:opacity-50">
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={loading}
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 font-semibold text-ink-2 transition-colors hover:bg-sand hover:text-ink disabled:opacity-50"
+              >
                 <RefreshCw className={cx('size-3.5', loading && 'animate-[spin_0.8s_linear_infinite]')} />
                 Muat ulang
               </button>
             )}
           </div>
-        </div>
-      )}
+      </Popover>
     </div>
   )
 }

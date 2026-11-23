@@ -4,6 +4,8 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import ffmpegStatic from 'ffmpeg-static'
 import { WHISPER_TIMING, captionNeedsSync, estimateWordTimings } from '@shared/captions'
+import { computeClipTtsBasisHash } from '@shared/hash'
+import { resolveClipTtsVoice } from '@shared/models'
 import { estimateNarrationMs } from '@shared/script'
 import { spokenWords, stripVoiceTags } from '@shared/speech'
 import { withActiveTts } from '@shared/providers'
@@ -78,8 +80,7 @@ async function detectSilences(file: string, signal: AbortSignal): Promise<{ star
 }
 
 function voiceForClip(clip: Clip, chars: Character[], provider: Project['ttsProvider'], defaultVoice: string): string {
-  const c = clip.speakerId ? chars.find((ch) => ch.id === clip.speakerId && ch.ttsVoice && ch.ttsProvider === provider) : null
-  return c?.ttsVoice || defaultVoice
+  return resolveClipTtsVoice(clip, chars, { ttsProvider: provider, ttsVoice: defaultVoice })
 }
 
 /**
@@ -164,29 +165,40 @@ async function geminiTake(p: Project, voice: string, group: Clip[], tmp: string,
       gaps.push({ end, start })
     }
   }
-  const cuts = gaps ? cutsFromWords(gaps, silences) : chooseCuts(total, group.map((c) => stripVoiceTags(c.narration).length), silences)
+  const useWhisper = Boolean(timed && gaps)
+  const cuts = useWhisper && gaps ? cutsFromWords(gaps, silences, total) : chooseCuts(total, group.map((c) => stripVoiceTags(c.narration).length), silences)
   const bounds = [0, ...cuts, total]
   const out: Segment[] = []
   for (let k = 0; k < group.length; k++) {
     const start = bounds[k]
     const end = bounds[k + 1]
-    const len = end - start
+    const len = Math.max(0.05, end - start)
     const file = join(tmp, `seg-${randomUUID()}.wav`)
     await cut(take, start, end, file, ctx.signal)
     let words: WordTiming[]
-    if (timed) {
-      words = ranges[k].map((w) => ({ ...w, start: Math.min(len, Math.max(0, w.start - start)), end: Math.min(len, Math.max(0, w.end - start)) }))
+    if (useWhisper) {
+      words = ranges[k].map((w) => {
+        const ws = Math.min(len, Math.max(0, w.start - start))
+        const we = Math.min(len, Math.max(ws, w.end - start))
+        return { ...w, start: ws, end: we }
+      })
     } else {
-      // Spread the words over the spoken part only, not the pauses around it.
-      const lead = silences.find((s) => s.start <= start + 0.01 && s.end > start)?.end ?? start
-      const tail = silences.find((s) => s.start < end && s.end >= end - 0.01)?.start ?? end
-      words = estimateWordTimings(stripVoiceTags(group[k].narration), Math.max(0.3, tail - lead)).map((w) => ({
-        ...w,
-        start: w.start + (lead - start),
-        end: w.end + (lead - start)
-      }))
+      // Spread the words over the spoken part only, not the pauses around it; clamp so silences never push words past end.
+      const rawLead = silences.find((s) => s.start <= start + 0.01 && s.end > start)?.end ?? start
+      const rawTail = silences.find((s) => s.start < end && s.end >= end - 0.01)?.start ?? end
+      let lead = Math.min(end, Math.max(start, rawLead))
+      let tail = Math.min(end, Math.max(start, rawTail))
+      if (tail - lead < 0.2) {
+        lead = start
+        tail = end
+      }
+      words = estimateWordTimings(stripVoiceTags(group[k].narration), Math.max(0.05, tail - lead)).map((w) => {
+        const ws = Math.min(len, Math.max(0, w.start + (lead - start)))
+        const we = Math.min(len, Math.max(ws, w.end + (lead - start)))
+        return { ...w, start: ws, end: we }
+      })
     }
-    out.push({ clip: group[k], file, durationMs: Math.round(len * 1000), words, estimated: !timed, timedBy: timed ? WHISPER_TIMING : undefined })
+    out.push({ clip: group[k], file, durationMs: Math.round(len * 1000), words, estimated: !useWhisper, timedBy: useWhisper ? WHISPER_TIMING : undefined })
   }
   return out
 }
@@ -217,20 +229,37 @@ async function elevenTake(
     ranges.push({ first: words[0], last: words[words.length - 1], words })
   }
   const bounds = [0]
+  let prevBound = 0
   for (let k = 0; k < group.length - 1; k++) {
     const a = ranges[k].last?.end
     const b = ranges[k + 1].first?.start
-    bounds.push(a != null && b != null ? (a + b) / 2 : (total * (k + 1)) / group.length)
+    const rawBound = a != null && b != null ? (a + b) / 2 : (total * (k + 1)) / group.length
+    const minBound = prevBound + 0.05
+    const maxBound = total - 0.05 * (group.length - 1 - k)
+    const clamped =
+      minBound <= maxBound
+        ? Math.min(maxBound, Math.max(minBound, rawBound))
+        : prevBound + (total - prevBound) / (group.length - k)
+    bounds.push(clamped)
+    prevBound = clamped
   }
   bounds.push(total)
   const out: Segment[] = []
   for (let k = 0; k < group.length; k++) {
     const start = bounds[k]
-    const end = Math.max(start + 0.3, bounds[k + 1])
+    const end = Math.min(total, Math.max(start + 0.05, bounds[k + 1]))
+    const len = Math.max(0.05, end - start)
     const file = join(tmp, `seg-${randomUUID()}.wav`)
     await cut(take, start, end, file, ctx.signal)
-    const words = ranges[k].words.map((w) => ({ ...w, start: Math.max(0, w.start - start), end: Math.max(0, w.end - start) }))
-    out.push({ clip: group[k], file, durationMs: Math.round((end - start) * 1000), words, estimated: false })
+    const hasAlignedWords = ranges[k].words.length > 0
+    const words = hasAlignedWords
+      ? ranges[k].words.map((w) => {
+          const ws = Math.min(len, Math.max(0, w.start - start))
+          const we = Math.min(len, Math.max(ws, w.end - start))
+          return { ...w, start: ws, end: we }
+        })
+      : estimateWordTimings(stripVoiceTags(group[k].narration), len)
+    out.push({ clip: group[k], file, durationMs: Math.round(len * 1000), words, estimated: !hasAlignedWords })
   }
   return out
 }
@@ -240,6 +269,7 @@ function store(p: Project, s: Segment, voice: string, takeId: string, bytes: Buf
   const abs = assetAbsPath(p.id, rel)
   mkdirSync(dirname(abs), { recursive: true })
   writeFileSync(abs, bytes)
+  const basisHash = computeClipTtsBasisHash({ narration: s.clip.narration, voice, ttsProvider: p.ttsProvider })
   const asset = insertAsset({
     projectId: p.id,
     clipId: s.clip.id,
@@ -249,7 +279,7 @@ function store(p: Project, s: Segment, voice: string, takeId: string, bytes: Buf
     prompt: s.clip.narration,
     localPath: rel,
     durationMs: s.durationMs,
-    meta: { words: s.words, estimatedTimings: s.estimated, voice, take: takeId, ...(s.timedBy ? { timedBy: s.timedBy } : {}) }
+    meta: { words: s.words, estimatedTimings: s.estimated, voice, take: takeId, basisHash, ...(s.timedBy ? { timedBy: s.timedBy } : {}) }
   })
   emit.asset(asset)
   // Each piece already carries half of the pause on either side, so the pieces play back as the one take.
@@ -265,17 +295,27 @@ export function generateNarration(projectId: string, mode: 'missing' | 'all', ep
   const running = activeProjectJob(projectId, 'narration', episodeId)
   if (running) return running
   const project = withActiveTts(getProject(projectId), getSettings())
-  const isVideoDialog = (c: Clip) => isVideoDialogue(project, c)
-  const targets = clipsOf(projectId, episodeId).filter((c) => c.narration.trim() && !isVideoDialog(c) && (mode === 'all' || !c.audioAssetId))
+  const targets = clipsOf(projectId, episodeId).filter((c) => c.narration.trim() && !isVideoDialogue(project, c) && (mode === 'all' || !c.audioAssetId))
   if (!targets.length) throw new Error('Tidak ada naskah narasi yang perlu disuarakan.')
   const job = insertJob({ projectId, episodeId, kind: 'narration', provider: project.ttsProvider, payload: { mode, clipIds: targets.map((c) => c.id) } })
   emit.job(job)
   return runJob(job, 'tts', async (ctx) => {
     const p = withActiveTts(getProject(projectId), getSettings())
     const voice = p.ttsVoice || (p.ttsProvider === 'gemini' ? 'Charon' : '')
-    if (p.ttsProvider === 'elevenlabs' && !voice) throw new Error('Pilih suara ElevenLabs dulu di Lorebook atau Storyboard.')
-    const clips = targets.map((c) => getClip(c.id)).filter((c) => c.narration.trim() && !isVideoDialog(c))
+    const clips = targets
+      .map((c) => {
+        try {
+          return getClip(c.id)
+        } catch {
+          return null
+        }
+      })
+      .filter((c): c is Clip => !!c && !!c.narration.trim() && !isVideoDialogue(p, c))
+    if (!clips.length) return { message: 'Tidak ada adegan yang perlu disuarakan' }
     const chars = charactersOf(projectId)
+    if (p.ttsProvider === 'elevenlabs' && clips.some((c) => !voiceForClip(c, chars, p.ttsProvider, voice))) {
+      throw new Error('Pilih suara ElevenLabs dulu di Lorebook atau Storyboard.')
+    }
     const groups = parts(clips, p.ttsProvider, chars, voice)
     const tmp = join(dataDir(), 'tmp', `narration-${ctx.jobId}`)
     mkdirSync(tmp, { recursive: true })

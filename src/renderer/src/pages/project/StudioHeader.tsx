@@ -29,24 +29,24 @@ function SaveStatus() {
   const { saveState, saveError, savedAt, save } = useProject()
   if (saveState === 'saving') {
     return (
-      <span className="flex items-center gap-1.5 text-xs text-sun-ink">
-        <Loader2 className="size-3.5 animate-[spin_0.8s_linear_infinite]" />
+      <span className="flex items-center gap-1.5 whitespace-nowrap text-xs text-sun-ink">
+        <Loader2 className="size-3.5 shrink-0 animate-[spin_0.8s_linear_infinite]" />
         Menyimpan…
       </span>
     )
   }
   if (saveState === 'dirty') {
     return (
-      <span className="flex items-center gap-1.5 text-xs text-accent-dark">
-        <span className="size-[7px] rounded-full bg-accent" />
+      <span className="flex items-center gap-1.5 whitespace-nowrap text-xs text-accent-dark">
+        <span className="size-[7px] shrink-0 rounded-full bg-accent" />
         Ada perubahan
       </span>
     )
   }
   if (saveState === 'error') {
     return (
-      <span className="flex items-center gap-1.5 text-xs text-bad-ink" title={saveError ?? ''}>
-        <AlertCircle className="size-3.5" />
+      <span className="flex items-center gap-1.5 whitespace-nowrap text-xs text-bad-ink" title={saveError ?? ''}>
+        <AlertCircle className="size-3.5 shrink-0" />
         Gagal menyimpan ·
         <button type="button" className="font-semibold underline" onClick={() => void save()}>
           Coba lagi
@@ -55,10 +55,10 @@ function SaveStatus() {
     )
   }
   return (
-    // The time hides on narrow windows so the status stays on one line next to the step tabs.
-    <span className="flex items-center gap-1.5 whitespace-nowrap text-xs text-ok-ink" title={savedAt ? `Tersimpan ${relativeTime(savedAt)}` : undefined}>
+    // Keep the "Tersimpan" label visible at 1180px so the checkmark never floats alone; hide only the relative timestamp.
+    <span className="flex items-center gap-1.5 whitespace-nowrap text-xs text-ok-ink" title={savedAt ? `Tersimpan ${relativeTime(savedAt)}` : 'Tersimpan'}>
       <CheckCircle2 className="size-3.5 shrink-0" />
-      <span className="sr-only min-[1280px]:not-sr-only min-[1280px]:inline">Tersimpan</span>
+      <span>Tersimpan</span>
       <span className="hidden min-[1400px]:inline">· {savedAt ? relativeTime(savedAt) : 'baru saja'}</span>
     </span>
   )
@@ -123,7 +123,7 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
     try {
       await flush()
       const copy = await window.api.projects.duplicate(project.id)
-      toast('info', `Proyek diduplikasi sebagai "${copy.title}"`)
+      toast('info', `Serial diduplikasi sebagai "${copy.title}"`)
     } catch (err) {
       toast('error', `Gagal menduplikasi: ${errorText(err)}`)
     }
@@ -138,8 +138,11 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
     })
     if (!ok) return
     try {
+      const deletedTitle = project.title
       await window.api.projects.remove(project.id)
-      toast('info', `Serial "${project.title}" telah dihapus`)
+      // Unload before navigating away so ProjectPage unmount does not flush a deleted project.
+      useProject.getState().unload()
+      toast('info', `Serial "${deletedTitle}" telah dihapus`)
       go({ name: 'home' })
     } catch (err) {
       toast('error', `Gagal menghapus: ${errorText(err)}`)
@@ -147,9 +150,9 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
   }
 
   return (
-    <header className="grid h-16 shrink-0 grid-cols-[auto_1fr_auto] items-center gap-4 border-b border-line bg-surface px-4">
+    <header className="grid h-16 shrink-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 border-b border-line bg-surface px-4">
       {/* Left: Back button, Serial title, Aspect ratio, Episode selector */}
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 items-center gap-2.5">
         <IconButton
           label="Kembali ke beranda"
           onClick={async () => {
@@ -174,17 +177,18 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
                 if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
                 if (e.key === 'Escape') setEditingTitle(false)
               }}
-              className="h-8 w-56 rounded-lg border border-line-2 bg-paper px-2.5 font-display text-base font-bold text-ink outline-none transition-colors focus:border-ink"
+              className="h-8 w-44 rounded-lg border border-line-2 bg-paper px-2.5 font-display text-base font-bold text-ink outline-none transition-colors focus:border-ink xl:w-56"
             />
           ) : (
             <div className="flex min-w-0 items-center gap-1.5">
-              <span
+              <button
+                type="button"
                 onClick={() => setEditingTitle(true)}
-                className="block min-w-0 max-w-[220px] cursor-pointer truncate font-display text-base font-bold text-ink hover:underline"
+                className="block min-w-0 max-w-[130px] cursor-pointer truncate rounded font-display text-left text-base font-bold text-ink hover:underline xl:max-w-[220px]"
                 title="Klik untuk mengubah judul serial"
               >
                 {project.title}
-              </span>
+              </button>
               <button
                 type="button"
                 aria-label="Ganti nama serial"
@@ -203,7 +207,7 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
 
         {/* Episode selector */}
         {episodes.length > 0 && episode && (
-          <div className="w-[180px] shrink-0">
+          <div className="w-[140px] shrink-0 xl:w-[180px]">
             <Select
               label="Pilih episode"
               value={episode.id}
@@ -216,7 +220,7 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
       </div>
 
       {/* Middle: Step Tabs (when in episode view) & Save status */}
-      <div className="flex items-center justify-center gap-3">
+      <div className="flex min-w-0 items-center justify-center gap-3">
         {activeView === 'episode' && episode && (
           <Segmented
             value={activeTab}
@@ -311,11 +315,11 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
           size="sm"
           icon={activeJobsCount > 0 ? <Loader2 className="size-3.5 animate-spin" /> : <Activity className="size-3.5 text-accent" />}
           onClick={() => setTaskCenterOpen(true)}
-          title="Pusat Tugas (Task Center) — Pantau dan batalkan pekerjaan AI latar belakang"
+          title="Pusat Tugas (Task Center): pantau dan batalkan pekerjaan AI latar belakang"
         >
           <span>Tugas</span>
           {activeJobsCount > 0 && (
-            <span className="flex size-4 items-center justify-center rounded-full bg-accent text-[10px] font-bold text-white">
+            <span className="flex min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[11px] font-bold text-white">
               {activeJobsCount}
             </span>
           )}
@@ -346,11 +350,6 @@ export function StudioHeader({ onOpenExport }: { onOpenExport?: () => void }) {
               label: 'Arahan & Template Prompt',
               icon: <BookOpen className="size-4" />,
               run: () => setGuidelinesOpen(true)
-            },
-            {
-              label: 'Pusat Tugas (Task Center)',
-              icon: <Activity className="size-4" />,
-              run: () => setTaskCenterOpen(true)
             },
             {
               label: 'Duplikasi serial',

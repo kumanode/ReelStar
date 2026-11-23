@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -105,11 +105,69 @@ export function ProductionStep() {
     void window.api.settings.get().then(setAppSettings).catch(() => setAppSettings(null))
   }, [])
 
+  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingDraftRef = useRef<{ episodeId: string; draft: EpisodeScriptDraft } | null>(null)
+  const ownSavedDraftsRef = useRef(new WeakSet<EpisodeScriptDraft>())
+  const prevEpisodeIdRef = useRef<string | undefined>(episode?.id)
+  const aiOpSeqRef = useRef(0)
+
+  const flushPendingDraftSave = () => {
+    if (draftSaveTimerRef.current) {
+      clearTimeout(draftSaveTimerRef.current)
+      draftSaveTimerRef.current = null
+    }
+    const pending = pendingDraftRef.current
+    pendingDraftRef.current = null
+    if (pending) {
+      ownSavedDraftsRef.current.add(pending.draft)
+      void useProject.getState().updateEpisode(pending.episodeId, { scriptDraft: pending.draft })
+    }
+  }
+
+  const cancelPendingDraftSave = () => {
+    if (draftSaveTimerRef.current) {
+      clearTimeout(draftSaveTimerRef.current)
+      draftSaveTimerRef.current = null
+    }
+    pendingDraftRef.current = null
+  }
+
+  const scheduleDraftSave = (targetEpId: string, nextDraft: EpisodeScriptDraft) => {
+    ownSavedDraftsRef.current.add(nextDraft)
+    pendingDraftRef.current = { episodeId: targetEpId, draft: nextDraft }
+    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
+    draftSaveTimerRef.current = setTimeout(() => {
+      draftSaveTimerRef.current = null
+      const pending = pendingDraftRef.current
+      pendingDraftRef.current = null
+      if (pending) {
+        void useProject.getState().updateEpisode(pending.episodeId, { scriptDraft: pending.draft })
+      }
+    }, 400)
+  }
+
   useEffect(() => {
-    setDraft(episode?.scriptDraft ?? null)
-    setSelectedBatchIds(new Set())
-    setExpandedShotIds(new Set())
+    if (prevEpisodeIdRef.current !== episode?.id) {
+      flushPendingDraftSave()
+      prevEpisodeIdRef.current = episode?.id
+      setDraft(episode?.scriptDraft ?? null)
+      setSelectedBatchIds(new Set())
+      setExpandedShotIds(new Set())
+      return
+    }
+    const incoming = episode?.scriptDraft ?? null
+    // Ignore store echoes of our own debounced local edits so typing never gets clobbered.
+    if (incoming && ownSavedDraftsRef.current.has(incoming)) return
+    if (pendingDraftRef.current?.episodeId === episode?.id) return
+    setDraft(incoming)
   }, [episode?.id, episode?.scriptDraft])
+
+  useEffect(() => () => flushPendingDraftSave(), [])
+
+  // Clear clip batch selection when entering Draft mode so hidden clips are not targeted.
+  useEffect(() => {
+    if (draft) setSelectedBatchIds(new Set())
+  }, [draft])
 
   useEffect(() => {
     return window.api.on.storyProgress((ev) => {
@@ -119,8 +177,12 @@ export function ProductionStep() {
 
   const loadVersions = async () => {
     if (!episode) return
+    const targetEpId = episode.id
     try {
-      setVersions(await window.api.scriptVersions.list(episode.id))
+      const list = await window.api.scriptVersions.list(targetEpId)
+      if (useProject.getState().episode?.id === targetEpId) {
+        setVersions(list)
+      }
     } catch {
       // ignore
     }
@@ -179,7 +241,9 @@ export function ProductionStep() {
     for (const p of draft?.newAssets ?? []) {
       if (p.action === 'ignore') continue
       const key = p.name.trim().toLowerCase()
-      if (p.kind === 'character' && (p.action === 'create' || p.action === 'merge')) charNames.add(key)
+      if (p.kind === 'character' && (p.action === 'create' || p.action === 'merge' || p.action === 'derivative')) {
+        charNames.add(key)
+      }
       if (p.kind === 'location') locNames.add(key)
       if (p.kind === 'prop') propNames.add(key)
     }
@@ -282,7 +346,7 @@ export function ProductionStep() {
       if (!c.videoAssetId) missingVideos++
       if (c.narration.trim() && !isVideoDialogue(project, c) && !c.audioAssetId) missingTts++
       if (is === 'stale' || vs === 'stale') stale++
-      if (is === 'current' && (vs === 'current' || !c.videoAssetId)) ready++
+      if (is === 'current' && vs === 'current') ready++
     }
     return { missingImages, missingVideos, missingTts, stale, ready, totalMs }
   }, [clips, project, prereqCtx])
@@ -346,56 +410,79 @@ export function ProductionStep() {
   if (!project || !episode) return null
 
   const confirmAndWritePrompts = async (targetDraft: EpisodeScriptDraft) => {
+    const targetProjectId = project.id
+    const targetEpId = episode.id
+    const targetEpNum = episode.episodeNum
+    const opId = ++aiOpSeqRef.current
+    cancelPendingDraftSave()
     setIsConfirming(true)
     setPlanMessage('Mengonfirmasi draf shot & mendaftarkan aset baru…')
     try {
       await flush()
-      const confirmed: ProjectBundle = await window.api.story.confirmEpisodeScript(project.id, episode.id, targetDraft)
-      load(confirmed)
-      setDraft(null)
+      const confirmed: ProjectBundle = await window.api.story.confirmEpisodeScript(targetProjectId, targetEpId, targetDraft)
+      if (useProject.getState().episode?.id === targetEpId) {
+        load(confirmed)
+        setDraft(null)
+        void loadVersions()
+      }
       await refreshLorebook()
-      void loadVersions()
 
       // Auto-chain prompt writing right after confirmation so there is no separate manual "Tulis Prompt" gate.
-      setIsConfirming(false)
-      setIsWritingPrompts(true)
-      setPlanMessage('Menulis prompt visual & video untuk semua shot…')
-      const withPrompts = await window.api.story.writePrompts(project.id, episode.id)
-      load(withPrompts)
-      toast('success', `Episode ${episode.episodeNum} siap diproduksi (${withPrompts.clips.length} shot + prompt visual)!`)
+      if (aiOpSeqRef.current === opId) {
+        setIsConfirming(false)
+        setIsWritingPrompts(true)
+        setPlanMessage('Menulis prompt visual & video untuk semua shot…')
+      }
+      const withPrompts = await window.api.story.writePrompts(targetProjectId, targetEpId)
+      if (useProject.getState().episode?.id === targetEpId) {
+        load(withPrompts)
+      }
+      toast('success', `Episode ${targetEpNum} siap diproduksi (${withPrompts.clips.length} shot + prompt visual)!`)
     } catch (err) {
       toast('error', `Gagal memproses naskah: ${errorText(err)}`)
     } finally {
-      setIsConfirming(false)
-      setIsWritingPrompts(false)
-      setPlanMessage(null)
+      if (aiOpSeqRef.current === opId) {
+        setIsConfirming(false)
+        setIsWritingPrompts(false)
+        setPlanMessage(null)
+      }
     }
   }
 
   const handlePlanScript = async () => {
+    const targetProjectId = project.id
+    const targetEpId = episode.id
+    const targetEpNum = episode.episodeNum
+    const targetEpTitle = episode.title
     if (clips.length > 0) {
       const ok = await confirmDialog({
         title: 'Susun Ulang Shot Episode?',
-        body: `Episode ${episode.episodeNum} sudah memiliki ${clips.length} shot. AI akan membuat draf baru yang bisa kamu tinjau dulu sebelum menggantikan shot lama.`,
+        body: `Episode ${targetEpNum} sudah memiliki ${clips.length} shot. AI akan membuat draf baru yang bisa kamu tinjau dulu sebelum menggantikan shot lama.`,
         confirm: 'Buat draf baru',
         danger: true
       })
       if (!ok) return
     }
 
+    const opId = ++aiOpSeqRef.current
+    cancelPendingDraftSave()
     setIsPlanning(true)
-    setPlanMessage(`Menyusun shot untuk ${episode.title}…`)
+    setPlanMessage(`Menyusun shot untuk ${targetEpTitle}…`)
     try {
       await flush()
-      const newDraft = await window.api.story.planEpisodeScript(project.id, episode.id)
-      setDraft(newDraft)
-      await updateEpisode(episode.id, { scriptDraft: newDraft })
+      const newDraft = await window.api.story.planEpisodeScript(targetProjectId, targetEpId)
+      if (useProject.getState().episode?.id === targetEpId) {
+        setDraft(newDraft)
+      }
+      await updateEpisode(targetEpId, { scriptDraft: newDraft })
       toast('success', `Draf ${newDraft.shots.length} shot berhasil dibuat. Tinjau sebentar lalu klik Setujui & Susun Prompt.`)
     } catch (err) {
       toast('error', `Gagal menyusun shot: ${errorText(err)}`)
     } finally {
-      setIsPlanning(false)
-      setPlanMessage(null)
+      if (aiOpSeqRef.current === opId) {
+        setIsPlanning(false)
+        setPlanMessage(null)
+      }
     }
   }
 
@@ -419,23 +506,32 @@ export function ProductionStep() {
 
   const handleRewriteAllPrompts = async () => {
     if (!clips.length) return
+    const targetProjectId = project.id
+    const targetEpId = episode.id
+    const opId = ++aiOpSeqRef.current
     setIsWritingPrompts(true)
     setPlanMessage('Menyusun prompt visual & video yang masih kosong…')
     try {
       await flush()
-      const bundle = await window.api.story.writePrompts(project.id, episode.id)
-      load(bundle)
+      const bundle = await window.api.story.writePrompts(targetProjectId, targetEpId)
+      if (useProject.getState().episode?.id === targetEpId) {
+        load(bundle)
+      }
       toast('success', 'Prompt visual & video berhasil diperbarui.')
     } catch (err) {
       toast('error', `Gagal menulis prompt: ${errorText(err)}`)
     } finally {
-      setIsWritingPrompts(false)
-      setPlanMessage(null)
+      if (aiOpSeqRef.current === opId) {
+        setIsWritingPrompts(false)
+        setPlanMessage(null)
+      }
     }
   }
 
   const handleOptimizeAllPromptsAi = async () => {
     if (!clips.length) return
+    const targetProjectId = project.id
+    const targetEpId = episode.id
     const hasExisting = clips.some((c) => c.visualPrompt.trim() || c.videoPrompt.trim())
     if (hasExisting) {
       const ok = await confirmDialog({
@@ -446,22 +542,27 @@ export function ProductionStep() {
       })
       if (!ok) return
     }
+    const opId = ++aiOpSeqRef.current
     setIsWritingPrompts(true)
     setPlanMessage(`Mengoptimasi ${clips.length} prompt visual & video dengan AI Director…`)
     try {
       await flush()
-      const bundle = await window.api.story.writePrompts(project.id, episode.id, undefined, {
+      const bundle = await window.api.story.writePrompts(targetProjectId, targetEpId, undefined, {
         force: true,
         useAi: true,
         requireAi: true
       })
-      load(bundle)
+      if (useProject.getState().episode?.id === targetEpId) {
+        load(bundle)
+      }
       toast('success', `${bundle.clips.length} shot berhasil dioptimasi dengan AI Visual Director!`)
     } catch (err) {
       toast('error', `Gagal mengoptimasi prompt: ${errorText(err)}`)
     } finally {
-      setIsWritingPrompts(false)
-      setPlanMessage(null)
+      if (aiOpSeqRef.current === opId) {
+        setIsWritingPrompts(false)
+        setPlanMessage(null)
+      }
     }
   }
 
@@ -512,7 +613,7 @@ export function ProductionStep() {
     const nextAssets = draft.newAssets.map((a, i) => (i === idx ? { ...a, ...patch } : a))
     const nextDraft = { ...draft, newAssets: nextAssets }
     setDraft(nextDraft)
-    void updateEpisode(episode.id, { scriptDraft: nextDraft })
+    scheduleDraftSave(episode.id, nextDraft)
   }
 
   const updateDraftShot = (idx: number, patch: Partial<DraftShot>) => {
@@ -520,14 +621,14 @@ export function ProductionStep() {
     const nextShots = draft.shots.map((s, i) => (i === idx ? { ...s, ...patch } : s))
     const nextDraft = { ...draft, shots: nextShots }
     setDraft(nextDraft)
-    void updateEpisode(episode.id, { scriptDraft: nextDraft })
+    scheduleDraftSave(episode.id, nextDraft)
   }
 
   const removeDraftShot = (idx: number) => {
     if (!draft || draft.shots.length <= 1) return
     const nextDraft = { ...draft, shots: draft.shots.filter((_, i) => i !== idx) }
     setDraft(nextDraft)
-    void updateEpisode(episode.id, { scriptDraft: nextDraft })
+    scheduleDraftSave(episode.id, nextDraft)
   }
 
   const proposeDraftAsset = (kind: 'character' | 'location' | 'prop', name: string) => {
@@ -543,7 +644,7 @@ export function ProductionStep() {
     }
     const nextDraft = { ...draft, newAssets: [...draft.newAssets, proposal] }
     setDraft(nextDraft)
-    void updateEpisode(episode.id, { scriptDraft: nextDraft })
+    scheduleDraftSave(episode.id, nextDraft)
     toast('info', `"${clean}" ditambahkan ke usulan aset baru.`)
   }
 
@@ -581,11 +682,14 @@ export function ProductionStep() {
   }
 
   const selectedIds = Array.from(selectedBatchIds)
+  const selectedTtsCount = clips.filter(
+    (c) => selectedBatchIds.has(c.id) && c.narration.trim() && !isVideoDialogue(project, c)
+  ).length
   const hasClips = clips.length > 0
   const busyAi = isPlanning || isConfirming || isWritingPrompts
   const allShotsSilent = hasClips && clips.every((c) => !c.narration.trim())
   const incompleteCount = clips.filter((c) => !c.imageAssetId || !c.videoAssetId).length
-  const readyCount = clips.filter((c) => c.imageAssetId && c.videoAssetId).length
+  const readyCount = clipStats.ready
 
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden bg-paper">
@@ -600,7 +704,7 @@ export function ProductionStep() {
               {episode.title}
             </h2>
           </div>
-          {hasClips && (
+          {!draft && hasClips && (
             <span className="hidden shrink-0 rounded-full border border-line bg-paper px-2 py-0.5 font-mono text-[11px] text-muted sm:inline-flex">
               {clips.length} shot · {secLabel(clipStats.totalMs || episode.durationSec * 1000)}
             </span>
@@ -608,9 +712,23 @@ export function ProductionStep() {
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
-          {!hasClips && (
+          {draft ? (
+            <>
+              <Badge tone="warn">Mode Draf</Badge>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<Save className="size-3.5" />}
+                disabled={busyAi}
+                onClick={() => setSaveSnapOpen(true)}
+                title="Simpan kondisi draf naskah saat ini sebagai snapshot"
+              >
+                Simpan Snapshot
+              </Button>
+            </>
+          ) : !hasClips ? (
             <Button
-              variant={!draft ? 'primary' : 'secondary'}
+              variant="primary"
               size="sm"
               icon={<Sparkles className="size-3.5" />}
               loading={busyAi}
@@ -619,9 +737,7 @@ export function ProductionStep() {
             >
               {busyAi ? (planMessage || 'Memproses…') : 'Susun Shot & Prompt'}
             </Button>
-          )}
-
-          {hasClips && (
+          ) : (
             <>
               <Button
                 variant={clipStats.missingImages > 0 ? 'primary' : 'secondary'}
@@ -678,16 +794,19 @@ export function ProductionStep() {
                   {
                     label: 'Susun ulang shot dengan AI',
                     icon: <Sparkles className="size-3.5" />,
+                    disabled: busyAi,
                     run: () => void handlePlanScript()
                   },
                   {
                     label: 'Optimasi semua prompt dengan AI',
                     icon: <Wand2 className="size-3.5" />,
+                    disabled: busyAi,
                     run: () => void handleOptimizeAllPromptsAi()
                   },
                   {
                     label: 'Tulis prompt visual yang kosong',
                     icon: <RefreshCw className="size-3.5" />,
+                    disabled: busyAi,
                     run: () => void handleRewriteAllPrompts()
                   },
                   {
@@ -698,22 +817,18 @@ export function ProductionStep() {
                   {
                     label: 'Sinkron caption (Whisper)',
                     icon: <Volume2 className="size-3.5" />,
+                    disabled: busyAi,
                     run: async () => {
-                      await flush()
-                      const job = await window.api.generate.syncCaptions(project.id, 'stale')
-                      upsertJob(job)
-                      toast('info', 'Menyinkronkan waktu caption dengan Whisper…')
+                      try {
+                        await flush()
+                        const job = await window.api.generate.syncCaptions(project.id, 'stale', episode.id)
+                        upsertJob(job)
+                        toast('info', 'Menyinkronkan waktu caption dengan Whisper…')
+                      } catch (e) {
+                        toast('error', errorText(e))
+                      }
                     }
                   },
-                  ...(draft
-                    ? [
-                        {
-                          label: 'Simpan snapshot naskah',
-                          icon: <Save className="size-3.5" />,
-                          run: () => setSaveSnapOpen(true)
-                        }
-                      ]
-                    : []),
                   {
                     label: 'Tambah shot kosong di akhir',
                     icon: <Plus className="size-3.5" />,
@@ -727,13 +842,18 @@ export function ProductionStep() {
       </div>
 
       {/* MULTI-SELECT BATCH BAR — SEPARATED IMAGE / VIDEO / TTS FOR SELECTED SHOTS */}
-      {selectedIds.length > 0 && (
+      {!draft && selectedIds.length > 0 && (
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-line-2 bg-sun-soft px-4 py-2 text-xs text-sun-ink">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-md border border-line bg-surface px-2 py-0.5 font-mono font-bold text-ink">
-              {selectedIds.length} shot dipilih
+              {selectedIds.length}/{clips.length} shot dipilih
             </span>
-            <span className="hidden font-medium md:inline">Jalankan aksi terpisah hanya pada shot terpilih:</span>
+            {selectedIds.length < clips.length && (
+              <Button variant="ghost" size="sm" onClick={toggleSelectAll}>
+                Pilih semua
+              </Button>
+            )}
+            <span className="hidden font-medium lg:inline">Jalankan aksi terpisah hanya pada shot terpilih:</span>
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <Button
@@ -757,15 +877,21 @@ export function ProductionStep() {
               size="sm"
               icon={<Volume2 className="size-3.5" />}
               loading={busyTtsBatch}
+              disabled={selectedTtsCount === 0}
+              title={
+                selectedTtsCount === 0
+                  ? 'Shot yang dipilih tidak membutuhkan TTS (dialog memakai suara video)'
+                  : `Rekam suara TTS untuk ${selectedTtsCount} shot terpilih`
+              }
               onClick={() => void handleBatchTts(selectedIds)}
             >
-              TTS
+              TTS ({selectedTtsCount})
             </Button>
             <Button variant="danger" size="sm" icon={<Trash2 className="size-3.5" />} onClick={() => void handleBatchDelete()}>
               Hapus
             </Button>
             <Button variant="ghost" size="sm" onClick={() => setSelectedBatchIds(new Set())}>
-              Batal
+              Batal pilih
             </Button>
           </div>
         </div>
@@ -788,7 +914,14 @@ export function ProductionStep() {
             <Stethoscope className="size-3" />
             <span>Cek Naskah</span>
             {doctorIssues.length > 0 && (
-              <span className="rounded-full bg-sun-soft px-1.5 font-mono text-[10px] text-sun-ink">{doctorIssues.length}</span>
+              <span
+                className={cx(
+                  'rounded-full px-1.5 font-mono text-[11px]',
+                  doctorOpen ? 'bg-sun text-[var(--color-on-sun)]' : 'bg-sun-soft text-sun-ink'
+                )}
+              >
+                {doctorIssues.length}
+              </span>
             )}
           </button>
 
@@ -817,49 +950,36 @@ export function ProductionStep() {
           </button>
 
           {!draft && hasClips && (
-            <>
-              <button
-                type="button"
-                onClick={() => setActiveView('lorebook')}
-                title={`${activeImageModelLabel} (${refCap > 0 ? `maks ${refCap} referensi/shot` : 'tanpa dukungan referensi'}) · Klik untuk buka Lorebook`}
-                className={cx(
-                  'inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-semibold transition-colors',
-                  refCap === 0
-                    ? 'border-bad-ink/40 bg-bad-soft text-bad-ink'
-                    : episodeSheetStats.missing > 0
-                      ? 'border-line-2 bg-sun-soft text-sun-ink hover:border-ink-2'
-                      : 'border-line bg-surface text-ink-2 hover:text-ink'
-                )}
-              >
-                {refCap === 0 ? (
-                  <AlertTriangle className="size-3 shrink-0" />
-                ) : (
-                  <CheckCircle2 className={cx('size-3 shrink-0', episodeSheetStats.missing > 0 ? 'text-sun-ink' : 'text-ok-ink')} />
-                )}
-                <span className="max-w-[150px] truncate">{activeImageModelLabel.replace(/^Flow2API · /, '')}</span>
-                {refCap > 0 && episodeSheetStats.total > 0 && (
-                  <span className="font-mono text-[10px] opacity-85">
-                    · {episodeSheetStats.ready}/{episodeSheetStats.total} lembar
-                  </span>
-                )}
-              </button>
-
-              <button
-                type="button"
-                disabled={busyAi}
-                onClick={() => void handleOptimizeAllPromptsAi()}
-                className="inline-flex h-7 items-center gap-1 rounded-full border border-line bg-surface px-2.5 text-[11px] font-semibold text-ink transition-colors hover:border-ink disabled:opacity-50"
-                title="Optimasi semua prompt gambar & video dengan AI Visual Director"
-              >
-                <Wand2 className="size-3 text-accent" />
-                <span>Optimasi Prompt</span>
-              </button>
-            </>
+            <button
+              type="button"
+              onClick={() => setActiveView('lorebook')}
+              title={`${activeImageModelLabel} (${refCap > 0 ? `maks ${refCap} referensi/shot` : 'tanpa dukungan referensi'}) · Klik untuk buka Dunia & Pemeran`}
+              className={cx(
+                'inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-semibold transition-colors',
+                refCap === 0
+                  ? 'border-bad-ink/40 bg-bad-soft text-bad-ink'
+                  : episodeSheetStats.missing > 0
+                    ? 'border-line-2 bg-sun-soft text-sun-ink hover:border-ink-2'
+                    : 'border-line bg-surface text-ink-2 hover:text-ink'
+              )}
+            >
+              {refCap === 0 ? (
+                <AlertTriangle className="size-3 shrink-0" />
+              ) : (
+                <CheckCircle2 className={cx('size-3 shrink-0', episodeSheetStats.missing > 0 ? 'text-sun-ink' : 'text-ok-ink')} />
+              )}
+              <span className="max-w-[150px] truncate">{activeImageModelLabel.replace(/^Flow2API · /, '')}</span>
+              {refCap > 0 && episodeSheetStats.total > 0 && (
+                <span className="font-mono text-[11px] opacity-85">
+                  · {episodeSheetStats.ready}/{episodeSheetStats.total} lembar
+                </span>
+              )}
+            </button>
           )}
         </div>
 
         {/* Right: Rhythm indicator + Status filter pills */}
-        {hasClips && (
+        {!draft && hasClips && (
           <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">
             {rhythmSegments.length > 0 && (
               <div
@@ -930,7 +1050,7 @@ export function ProductionStep() {
           <div className="flex items-center gap-2">
             <AlertTriangle className="size-4 shrink-0" />
             <span>
-              Semua shot belum memiliki teks dialog — video AI akan dibuat <strong>tanpa suara bicara</strong>. Tulis dialog di kartu shot atau susun ulang dengan AI.
+              Semua shot belum memiliki teks dialog, sehingga video AI akan dibuat <strong>tanpa suara bicara</strong>. Tulis dialog di kartu shot atau susun ulang dengan AI.
             </span>
           </div>
           <Button size="sm" variant="secondary" icon={<Sparkles className="size-3.5" />} loading={busyAi} onClick={() => void handlePlanScript()}>
@@ -993,6 +1113,7 @@ export function ProductionStep() {
                 episodeNum={episode.episodeNum}
                 draft={draft}
                 characters={characters}
+                derivatives={derivatives}
                 locations={locations}
                 props={props}
                 blockingCount={draftBlockingCount}
@@ -1003,6 +1124,7 @@ export function ProductionStep() {
                 onDiscardDraft={
                   hasClips
                     ? () => {
+                        cancelPendingDraftSave()
                         setDraft(null)
                         void updateEpisode(episode.id, { scriptDraft: null })
                       }
@@ -1026,7 +1148,9 @@ export function ProductionStep() {
                         <input
                           value={s.title}
                           onChange={(e) => updateDraftShot(idx, { title: e.target.value })}
-                          className="rounded bg-transparent px-1 font-display text-sm font-bold text-ink outline-none hover:bg-sand focus:bg-sand"
+                          aria-label={`Judul shot draf ${clipNumber(idx)}`}
+                          placeholder={`Shot ${clipNumber(idx)}`}
+                          className="rounded bg-transparent px-1 font-display text-sm font-bold text-ink outline-none hover:bg-sand focus:bg-sand focus-visible:ring-2 focus-visible:ring-accent/35"
                         />
                         {s.framing && <Badge tone="draft">{s.framing}</Badge>}
                       </div>
@@ -1046,18 +1170,20 @@ export function ProductionStep() {
                       <AutoTextarea
                         value={s.text}
                         onChange={(e) => updateDraftShot(idx, { text: e.target.value })}
+                        aria-label={`Dialog atau monolog shot draf ${clipNumber(idx)}`}
                         placeholder="Dialog / Monolog batin (kosongkan jika tanpa suara)…"
                         minRows={1}
                         maxHeight={100}
-                        className="w-full rounded-xl border border-line bg-paper p-2.5 text-xs text-ink outline-none focus:border-ink"
+                        className="w-full rounded-xl border border-line bg-paper p-2.5 text-xs text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                       />
                       <AutoTextarea
                         value={s.visualAction}
                         onChange={(e) => updateDraftShot(idx, { visualAction: e.target.value })}
+                        aria-label={`Aksi visual shot draf ${clipNumber(idx)}`}
                         placeholder="Aksi visual di layar…"
                         minRows={1}
                         maxHeight={100}
-                        className="w-full rounded-xl border border-line bg-paper p-2.5 text-xs text-ink-2 outline-none focus:border-ink"
+                        className="w-full rounded-xl border border-line bg-paper p-2.5 text-xs text-ink-2 outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                       />
                     </div>
 
@@ -1162,7 +1288,7 @@ export function ProductionStep() {
               <div className="max-w-md space-y-1">
                 <h2 className="font-display text-lg font-bold text-ink">Mulai Produksi Ep {episode.episodeNum}</h2>
                 <p className="text-xs leading-relaxed text-muted">
-                  Satu klik akan menyusun daftar shot, dialog, dan usulan aset baru dari kerangka episode ini — lalu
+                  Satu klik akan menyusun daftar shot, dialog, dan usulan aset baru dari kerangka episode ini, lalu
                   otomatis menulis prompt visual setelah kamu setujui.
                 </p>
               </div>
@@ -1180,31 +1306,40 @@ export function ProductionStep() {
           {/* CONFIRMED UNIFIED SHOT CARDS */}
           {!draft && hasClips && (
             <>
-              <div className="flex flex-col gap-3">
-                {visibleClips.map(({ clip, index }) => (
-                  <ShotCard
-                    key={clip.id}
-                    clip={clip}
-                    index={index}
-                    total={clips.length}
-                    project={project}
-                    characters={characters}
-                    derivatives={derivatives}
-                    locations={locations}
-                    props={props}
-                    assets={assets}
-                    jobs={jobs}
-                    prereqCtx={prereqCtx}
-                    activeLocks={activeLocks}
-                    previousClipImageAssetId={index > 0 ? (clips[index - 1]?.imageAssetId ?? null) : null}
-                    checked={selectedBatchIds.has(clip.id)}
-                    expanded={expandedShotIds.has(clip.id)}
-                    onToggleCheck={() => toggleSelectBatch(clip.id)}
-                    onToggleExpand={() => toggleExpandShot(clip.id)}
-                    onPlayAnimatic={() => setAnimaticClipId(clip.id)}
-                  />
-                ))}
-              </div>
+              {visibleClips.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-line-2 bg-surface px-6 py-12 text-center">
+                  <p className="text-sm font-semibold text-ink">Tidak ada shot yang cocok dengan filter ini.</p>
+                  <Button variant="secondary" size="sm" onClick={() => setStatusFilter('all')}>
+                    Tampilkan semua shot
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {visibleClips.map(({ clip, index }) => (
+                    <ShotCard
+                      key={clip.id}
+                      clip={clip}
+                      index={index}
+                      total={clips.length}
+                      project={project}
+                      characters={characters}
+                      derivatives={derivatives}
+                      locations={locations}
+                      props={props}
+                      assets={assets}
+                      jobs={jobs}
+                      prereqCtx={prereqCtx}
+                      activeLocks={activeLocks}
+                      previousClipImageAssetId={index > 0 ? (clips[index - 1]?.imageAssetId ?? null) : null}
+                      checked={selectedBatchIds.has(clip.id)}
+                      expanded={expandedShotIds.has(clip.id)}
+                      onToggleCheck={() => toggleSelectBatch(clip.id)}
+                      onToggleExpand={() => toggleExpandShot(clip.id)}
+                      onPlayAnimatic={() => setAnimaticClipId(clip.id)}
+                    />
+                  ))}
+                </div>
+              )}
 
               <button
                 type="button"
@@ -1276,6 +1411,7 @@ export function ProductionStep() {
             danger: true
           })
           if (!ok) return
+          cancelPendingDraftSave()
           setDraft(v.draft)
           await updateEpisode(episode.id, { scriptDraft: v.draft })
           setHistoryOpen(false)

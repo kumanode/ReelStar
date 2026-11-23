@@ -3,6 +3,7 @@ import { Sparkles, AlertCircle } from 'lucide-react'
 import type { Asset, SmartSfxCue } from '@shared/types'
 import { Button, Modal, Spinner } from '../../../components/ui'
 import { useApp } from '../../../store/app'
+import { useProject } from '../../../store/project'
 import { errorText } from '../../../lib/format'
 import type { TimelineItem } from './engine'
 
@@ -16,6 +17,7 @@ interface SmartSfxModalProps {
 
 export function SmartSfxModal({ open, onClose, projectId, items, onBatchAdd }: SmartSfxModalProps) {
   const { toast } = useApp()
+  const episodeId = useProject((s) => s.episode?.id)
   const [loadingPlan, setLoadingPlan] = useState(false)
   const [cues, setCues] = useState<SmartSfxCue[]>([])
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -35,7 +37,7 @@ export function SmartSfxModal({ open, onClose, projectId, items, onBatchAdd }: S
     let active = true
     setLoadingPlan(true)
     window.api.story
-      .planSmartSfx(projectId)
+      .planSmartSfx(projectId, episodeId)
       .then((planCues) => {
         if (!active) return
         setCues(planCues)
@@ -52,7 +54,7 @@ export function SmartSfxModal({ open, onClose, projectId, items, onBatchAdd }: S
     return () => {
       active = false
     }
-  }, [open, projectId, toast])
+  }, [open, projectId, episodeId, toast])
 
   const toggleSelect = (index: number) => {
     const next = new Set(selected)
@@ -129,21 +131,21 @@ export function SmartSfxModal({ open, onClose, projectId, items, onBatchAdd }: S
     <Modal
       open={open}
       onClose={generating ? () => {} : onClose}
-      title="AI Auto-SFX Cerita (ElevenLabs)"
+      title="AI SFX Cerita (ElevenLabs)"
       subtitle="AI membaca naskah dan prompt visual untuk menentukan momen dramatis yang membutuhkan efek suara."
       width={680}
     >
       {loadingPlan ? (
         <div className="flex flex-col items-center justify-center py-12 text-center">
-          <Spinner className="size-8 text-accent mb-3" />
-          <p className="text-sm font-semibold text-ink">Menganalisis adegan & merancang cue suara...</p>
-          <p className="text-xs text-muted mt-1">Mengidentifikasi momen-momen sinematik terbaik dari naskahmu</p>
+          <Spinner className="mb-3 size-8 text-accent-ink" />
+          <p className="text-sm font-semibold text-ink">Menganalisis adegan &amp; merancang efek suara…</p>
+          <p className="mt-1 text-xs text-muted">Mengidentifikasi momen-momen sinematik terbaik dari naskahmu</p>
         </div>
       ) : cues.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-10 text-center">
-          <AlertCircle className="size-8 text-muted mb-2" />
+          <AlertCircle className="mb-2 size-8 text-muted" />
           <p className="text-sm font-semibold text-ink">Tidak ada efek suara yang disarankan</p>
-          <p className="text-xs text-muted mt-1">Pastikan naskah cerita sudah terisi sebelum menjalankan AI Auto-SFX.</p>
+          <p className="mt-1 text-xs text-muted">Pastikan naskah cerita sudah terisi sebelum menjalankan AI SFX Cerita.</p>
           <div className="mt-5">
             <Button type="button" variant="secondary" onClick={onClose}>
               Tutup
@@ -160,20 +162,29 @@ export function SmartSfxModal({ open, onClose, projectId, items, onBatchAdd }: S
               type="button"
               onClick={toggleAll}
               disabled={generating}
-              className="text-xs font-semibold text-accent hover:underline disabled:opacity-50"
+              className="text-xs font-semibold text-accent-ink hover:underline disabled:opacity-50"
             >
               {selected.size === cues.length ? 'Batal Pilih Semua' : 'Pilih Semua'}
             </button>
           </div>
 
-          <div className="max-h-[360px] space-y-2.5 overflow-y-auto pr-1">
+          <div className="scroll-thin max-h-[360px] space-y-2.5 overflow-y-auto pr-1">
             {cues.map((cue, idx) => {
               const isChecked = selected.has(idx)
               const clipIndex = items.findIndex((it) => it.clip.id === cue.clipId) + 1
               return (
                 <div
                   key={idx}
+                  role="checkbox"
+                  aria-checked={isChecked}
+                  tabIndex={generating ? -1 : 0}
                   onClick={() => !generating && toggleSelect(idx)}
+                  onKeyDown={(e) => {
+                    if (!generating && (e.key === 'Enter' || e.key === ' ')) {
+                      e.preventDefault()
+                      toggleSelect(idx)
+                    }
+                  }}
                   className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors ${
                     isChecked
                       ? 'border-accent/40 bg-accent-soft/30 shadow-xs'
@@ -182,19 +193,21 @@ export function SmartSfxModal({ open, onClose, projectId, items, onBatchAdd }: S
                 >
                   <input
                     type="checkbox"
+                    tabIndex={-1}
                     checked={isChecked}
                     disabled={generating}
                     onChange={() => {}}
+                    aria-hidden="true"
                     className="mt-1 size-4 rounded accent-accent"
                   />
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="text-xs font-bold text-ink">{cue.name}</span>
-                      <span className="rounded bg-surface px-1.5 py-0.5 text-[11px] tabular-nums font-semibold text-muted border border-line">
-                        Adegan {clipIndex || '?'} (+{cue.timeOffsetSec.toFixed(1)}s)
+                      <span className="rounded border border-line bg-surface px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-muted">
+                        Adegan {clipIndex || '?'} (+{cue.timeOffsetSec.toFixed(1).replace('.', ',')} dtk)
                       </span>
-                      <span className="rounded bg-surface px-1.5 py-0.5 text-[11px] tabular-nums font-medium text-muted border border-line">
-                        {cue.durationSec.toFixed(1)}s
+                      <span className="rounded border border-line bg-surface px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-muted">
+                        {cue.durationSec.toFixed(1).replace('.', ',')} dtk
                       </span>
                     </div>
                     <p className="mt-1 text-xs text-ink-2 line-clamp-2 italic font-mono text-[11px] opacity-90">
@@ -209,8 +222,8 @@ export function SmartSfxModal({ open, onClose, projectId, items, onBatchAdd }: S
           {progress && (
             <div className="rounded-xl border border-line-2 bg-paper p-3 text-center">
               <div className="flex items-center justify-center gap-2 text-xs font-semibold text-ink">
-                <Spinner className="size-3.5 text-accent" />
-                Men-generate ({progress.current}/{progress.total}): {progress.name}
+                <Spinner className="size-3.5 text-accent-ink" />
+                Membuat efek suara ({progress.current}/{progress.total}): {progress.name}
               </div>
               <p className="mt-0.5 text-[11px] text-muted">
                 Audio langsung disimpan saat selesai. Jangan tutup jendela ini.

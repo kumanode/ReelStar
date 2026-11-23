@@ -41,7 +41,7 @@ export function App() {
           toast('success', 'Video selesai diekspor.', { label: 'Buka folder', run: () => void window.api.exporter.reveal(path) })
         }
       }),
-      window.api.on.clip((e) => p().applyClip(e.clipId, e.patch)),
+      window.api.on.clip((e) => p().applyClip(e.clipId, e.patch, { rev: e.rev, fromUser: e.fromUser })),
       window.api.on.character((e) => p().applyCharacter(e.characterId, e.patch)),
       window.api.on.asset((a) => p().addAsset(a))
     ]

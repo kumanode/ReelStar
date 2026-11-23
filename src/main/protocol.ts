@@ -11,6 +11,7 @@ const TYPES: Record<string, string> = {
   '.webp': 'image/webp',
   '.mp4': 'video/mp4',
   '.mov': 'video/quicktime',
+  '.webm': 'video/webm',
   '.wav': 'audio/wav',
   '.mp3': 'audio/mpeg',
   '.m4a': 'audio/mp4',
@@ -30,12 +31,19 @@ export function handleStudioProtocol(): void {
     const url = new URL(req.url)
     const root = url.hostname === 'fonts' ? fontsDir() : url.hostname === 'asset' ? projectsRoot() : null
     if (!root) return new Response('Not found', { status: 404 })
-    const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '')
+    let rel: string
+    try {
+      rel = decodeURIComponent(url.pathname).replace(/^\/+/, '')
+    } catch {
+      return new Response('Bad request', { status: 400 })
+    }
     const abs = normalize(join(root, rel))
     if (!abs.startsWith(normalize(root) + sep)) return new Response('Forbidden', { status: 403 })
     let size: number
     try {
-      size = statSync(abs).size
+      const st = statSync(abs)
+      if (!st.isFile()) return new Response('Not found', { status: 404 })
+      size = st.size
     } catch {
       return new Response('Not found', { status: 404 })
     }
@@ -43,9 +51,12 @@ export function handleStudioProtocol(): void {
     const range = req.headers.get('range')
     const m = range ? /bytes=(\d*)-(\d*)/.exec(range) : null
     if (m) {
+      if (!m[1] && !m[2]) {
+        return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } })
+      }
       const start = m[1] ? parseInt(m[1], 10) : Math.max(0, size - parseInt(m[2], 10))
       const end = m[1] && m[2] ? Math.min(parseInt(m[2], 10), size - 1) : size - 1
-      if (start >= size || start > end) {
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= size || start > end) {
         return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } })
       }
       const body = Readable.toWeb(createReadStream(abs, { start, end })) as ReadableStream

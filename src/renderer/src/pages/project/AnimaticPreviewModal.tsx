@@ -35,6 +35,8 @@ export function AnimaticPreviewModal({
   const [playing, setPlaying] = useState(true)
   const [muted, setMuted] = useState(false)
   const [elapsedMs, setElapsedMs] = useState(0)
+  const elapsedRef = useRef(0)
+  const mutedRef = useRef(false)
   const imgRef = useRef<HTMLImageElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -45,6 +47,7 @@ export function AnimaticPreviewModal({
     if (!open) return
     const idx = initialClipId ? clips.findIndex((c) => c.id === initialClipId) : 0
     setIndex(idx >= 0 ? idx : 0)
+    elapsedRef.current = 0
     setElapsedMs(0)
     setPlaying(true)
   }, [open, initialClipId, clips.length])
@@ -55,21 +58,52 @@ export function AnimaticPreviewModal({
   const audio = clip?.audioAssetId ? assets[clip.audioAssetId] ?? null : null
   const durMs = Math.max(1200, clip?.durationMs ?? 3000)
 
-  // Play clip audio (TTS or extracted dialogue audio) when available.
+  // Reset shot progress only when switching shots or reopening, never on pause/resume.
+  useEffect(() => {
+    elapsedRef.current = 0
+    setElapsedMs(0)
+  }, [open, clip?.id])
+
+  // Keep mute synced without recreating the Audio element or restarting playback.
+  useEffect(() => {
+    mutedRef.current = muted
+    if (audioRef.current) audioRef.current.muted = muted
+  }, [muted])
+
+  // Load clip audio when entering a shot; play/pause is handled separately so resume continues in place.
   useEffect(() => {
     audioRef.current?.pause()
     audioRef.current = null
-    if (!open || !playing || !clip || !audio || muted) return
+    if (!open || !clip || !audio) return
     const el = new Audio(audio.url)
     el.currentTime = Math.max(0, (clip.voiceInMs ?? 0) / 1000)
+    el.muted = mutedRef.current
     audioRef.current = el
-    void el.play().catch(() => {})
     return () => {
       el.pause()
+      if (audioRef.current === el) audioRef.current = null
     }
-  }, [open, playing, clip?.id, audio?.id, muted])
+  }, [open, clip?.id, audio?.id])
 
-  // Sync HTML5 video preview when a clip already has video.
+  // Play or pause the loaded clip audio without rewinding.
+  useEffect(() => {
+    const el = audioRef.current
+    if (!el) return
+    if (!open || !playing) {
+      el.pause()
+      return
+    }
+    void el.play().catch(() => {})
+  }, [open, playing, clip?.id, audio?.id])
+
+  // Seek video to clip start only when the clip/video changes or the modal opens.
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v || !open) return
+    v.currentTime = Math.max(0, (clip?.mediaInMs ?? 0) / 1000)
+  }, [open, clip?.id, video?.id])
+
+  // Play or pause HTML5 video without rewinding on resume.
   useEffect(() => {
     const v = videoRef.current
     if (!v) return
@@ -77,23 +111,23 @@ export function AnimaticPreviewModal({
       v.pause()
       return
     }
-    v.currentTime = Math.max(0, (clip?.mediaInMs ?? 0) / 1000)
     void v.play().catch(() => {})
   }, [open, playing, clip?.id, video?.id])
 
-  // Advance timer & apply shared Ken Burns camera motion on storyboard images.
+  // Advance timer from current position & apply shared Ken Burns camera motion on storyboard images.
   useEffect(() => {
     if (!open || !playing || !clip) return
     let raf = 0
     let last = performance.now()
-    let localMs = 0
-    setElapsedMs(0)
+    let localMs = elapsedRef.current
 
     const tick = (now: number): void => {
       const dt = Math.min(100, now - last)
       last = now
       localMs += dt
-      setElapsedMs(Math.min(durMs, localMs))
+      const clamped = Math.min(durMs, localMs)
+      elapsedRef.current = clamped
+      setElapsedMs(clamped)
 
       if (imgRef.current && !video) {
         const p = Math.min(1, localMs / durMs)
@@ -102,6 +136,7 @@ export function AnimaticPreviewModal({
 
       if (localMs >= durMs) {
         if (index < clips.length - 1) {
+          elapsedRef.current = 0
           setIndex((i) => i + 1)
         } else {
           setPlaying(false)
@@ -114,6 +149,29 @@ export function AnimaticPreviewModal({
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
   }, [open, playing, clip?.id, durMs, index, clips.length, video])
+
+  // Keyboard shortcuts while preview is open: Space play/pause, Left/Right step shots.
+  useEffect(() => {
+    if (!open || clips.length === 0) return
+    const onKey = (e: KeyboardEvent): void => {
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      if (e.key === ' ') {
+        e.preventDefault()
+        setPlaying((p) => !p)
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        setIndex((i) => Math.max(0, i - 1))
+        setElapsedMs(0)
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        setIndex((i) => Math.min(clips.length - 1, i + 1))
+        setElapsedMs(0)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, clips.length])
 
   if (!open) return null
 
@@ -146,7 +204,7 @@ export function AnimaticPreviewModal({
               <video
                 ref={videoRef}
                 src={video.url}
-                muted
+                muted={muted || Boolean(audio)}
                 playsInline
                 className="size-full object-cover"
               />
@@ -170,7 +228,7 @@ export function AnimaticPreviewModal({
               <span className="rounded-md bg-black/75 px-2 py-0.5 font-mono text-[11px] font-bold text-white">
                 {clipNumber(index)} / {clipNumber(clips.length - 1)}
               </span>
-              <span className="rounded-md bg-black/75 px-2 py-0.5 text-[10px] font-semibold text-white">
+              <span className="rounded-md bg-black/75 px-2 py-0.5 text-[11px] font-semibold text-white">
                 {video ? 'Video AI' : image ? 'Gambar' : 'Kosong'} · {(durMs / 1000).toFixed(1).replace('.', ',')} dtk
               </span>
             </div>
@@ -178,7 +236,7 @@ export function AnimaticPreviewModal({
             {/* Bottom subtitle preview */}
             {clip.narration.trim() && (
               <div className="pointer-events-none absolute inset-x-3 bottom-4 rounded-xl bg-black/80 px-3 py-2 text-center">
-                <div className="mb-0.5 text-[10px] font-semibold text-sun">
+                <div className="mb-0.5 text-[11px] font-semibold text-sun">
                   {speaker ? speaker.name : 'Narator'}
                   {isDialog ? ' · Dialog' : isInner ? ' · Monolog Batin' : ' · O.S.'}
                 </div>
@@ -197,17 +255,17 @@ export function AnimaticPreviewModal({
                 style={{ width: `${Math.min(100, (elapsedMs / durMs) * 100)}%` }}
               />
             </div>
-            <div className="flex items-center justify-between text-[11px] text-muted">
-              <span className="truncate font-semibold text-ink">{clip.title || `Shot ${clipNumber(index)}`}</span>
-              <span className="font-mono tabular-nums">
+            <div className="flex items-center justify-between gap-2 text-[11px] text-muted">
+              <span className="min-w-0 truncate font-semibold text-ink">{clip.title || `Shot ${clipNumber(index)}`}</span>
+              <span className="shrink-0 font-mono tabular-nums">
                 {mmss(elapsedMs)} / {mmss(durMs)}
               </span>
             </div>
           </div>
 
           {/* Playback controls */}
-          <div className="flex w-full items-center justify-between border-t border-line pt-3">
-            <div className="flex items-center gap-1.5">
+          <div className="flex w-full flex-wrap items-center justify-between gap-2 border-t border-line pt-3">
+            <div className="flex shrink-0 items-center gap-1.5">
               <IconButton
                 label={muted ? 'Nyalakan suara' : 'Bisukan suara'}
                 onClick={() => setMuted((m) => !m)}
@@ -216,6 +274,8 @@ export function AnimaticPreviewModal({
               </IconButton>
               {audio ? (
                 <Badge tone="ok">Ada suara</Badge>
+              ) : video && isDialog ? (
+                <Badge tone="info">Audio video</Badge>
               ) : (
                 <Badge tone="draft">Tanpa suara</Badge>
               )}
@@ -239,8 +299,13 @@ export function AnimaticPreviewModal({
                 icon={playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
                 onClick={() => {
                   if (!playing && index === clips.length - 1 && elapsedMs >= durMs - 50) {
-                    setIndex(0)
+                    elapsedRef.current = 0
                     setElapsedMs(0)
+                    if (clips.length === 1) {
+                      if (videoRef.current) videoRef.current.currentTime = Math.max(0, (clips[0]?.mediaInMs ?? 0) / 1000)
+                      if (audioRef.current) audioRef.current.currentTime = Math.max(0, (clips[0]?.voiceInMs ?? 0) / 1000)
+                    }
+                    setIndex(0)
                   }
                   setPlaying((p) => !p)
                 }}

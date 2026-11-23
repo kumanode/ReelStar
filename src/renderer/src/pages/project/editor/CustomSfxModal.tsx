@@ -113,10 +113,11 @@ export function CustomSfxModal({ open, onClose, projectId, onAdd }: CustomSfxMod
     >
       <div className="space-y-4">
         <div>
-          <label className="mb-1 block text-xs font-semibold text-ink-2">
+          <label htmlFor="custom-sfx-prompt" className="mb-1 block text-xs font-semibold text-ink-2">
             Deskripsi Efek Suara (Prompt)
           </label>
           <textarea
+            id="custom-sfx-prompt"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="Contoh: Heavy wooden door slamming shut with long creepy echo in empty corridor"
@@ -130,12 +131,13 @@ export function CustomSfxModal({ open, onClose, projectId, onAdd }: CustomSfxMod
 
         <div>
           <div className="mb-1.5 flex items-center justify-between">
-            <label className="text-xs font-semibold text-ink-2">
-              Durasi Suara: <span className="font-mono text-ink">{durationSec.toFixed(1)}s</span>
+            <label htmlFor="custom-sfx-duration" className="text-xs font-semibold text-ink-2">
+              Durasi Suara: <span className="font-mono text-ink">{durationSec.toFixed(1).replace('.', ',')} dtk</span>
             </label>
-            <span className="text-[11px] text-muted">0.5s - 10s</span>
+            <span className="text-[11px] text-muted">0,5 – 10 dtk</span>
           </div>
           <input
+            id="custom-sfx-duration"
             type="range"
             min={0.5}
             max={10}
@@ -148,24 +150,24 @@ export function CustomSfxModal({ open, onClose, projectId, onAdd }: CustomSfxMod
 
         {asset && (
           <div className="flex items-center justify-between rounded-xl border border-line-2 bg-paper p-3 shadow-xs">
-            <div className="flex items-center gap-2.5 truncate">
+            <div className="flex min-w-0 items-center gap-2.5">
               <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-ok-soft text-ok-ink">
                 <AudioLines className="size-4" />
               </div>
               <div className="min-w-0">
                 <p className="truncate text-xs font-semibold text-ink">{asset.prompt}</p>
                 <p className="text-[11px] text-muted">
-                  {((asset.durationMs ?? 0) / 1000).toFixed(1)} detik · Siap dipasang
+                  {((asset.durationMs ?? 0) / 1000).toFixed(1).replace('.', ',')} dtk · Siap dipasang
                 </p>
               </div>
             </div>
             <button
               type="button"
               onClick={togglePlay}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-2.5 text-xs font-medium text-ink hover:bg-surface"
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-line px-2.5 text-xs font-medium text-ink hover:bg-surface"
             >
-              {playing ? <Square className="size-3.5 fill-current text-accent" /> : <Play className="size-3.5 fill-current" />}
-              {playing ? 'Stop' : 'Putar'}
+              {playing ? <Square className="size-3.5 fill-current text-accent-ink" /> : <Play className="size-3.5 fill-current" />}
+              {playing ? 'Berhenti' : 'Putar'}
             </button>
           </div>
         )}
@@ -188,7 +190,7 @@ export function CustomSfxModal({ open, onClose, projectId, onAdd }: CustomSfxMod
             <Button
               type="button"
               variant="accent"
-              disabled={!asset}
+              disabled={!asset || generating}
               icon={<Plus className="size-4" />}
               onClick={handleCommit}
             >

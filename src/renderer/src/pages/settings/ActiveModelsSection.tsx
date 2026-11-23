@@ -3,7 +3,7 @@ import { AlertTriangle, BookOpen, Film, Image as ImageIcon, Mic } from 'lucide-r
 import type { AppSettings, KeyStatus, ModelPurpose, VisualProvider } from '@shared/types'
 import { FLOW2API_IMAGE_MODELS, FLOW2API_VIDEO_MODELS } from '@shared/flow2api-catalog'
 import { HF_IMAGE_MODELS, HF_VIDEO_MODELS } from '@shared/higgsfield'
-import { providersFor, resolveActive } from '@shared/providers'
+import { DEFAULT_PROVIDER_MODELS, providersFor, resolveActive } from '@shared/providers'
 import { Button, Modal } from '../../components/ui'
 import { ModelPicker } from '../../components/ModelPicker'
 import { Select } from '../../components/Select'
@@ -25,6 +25,16 @@ interface PendingVisualChange {
   providerName: string
   modelName: string
 }
+
+const GEMINI_TTS_OPTIONS = [
+  { value: 'gemini-3.8-flash-tts', label: 'Gemini 3.8 Flash TTS (Cepat & Responsif)' },
+  { value: 'gemini-2.5-flash-tts', label: 'Gemini 2.5 Flash TTS' }
+]
+
+const ELEVENLABS_TTS_OPTIONS = [
+  { value: 'eleven_multilingual_v2', label: 'Eleven Multilingual v2 (Intonasi Terbaik)' },
+  { value: 'eleven_turbo_v2_5', label: 'Eleven Turbo v2.5 (Lebih Cepat)' }
+]
 
 export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
   const { toast } = useApp()
@@ -120,10 +130,10 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
     const providerName = providerObj?.name ?? newProviderId
 
     let modelName = newModelId
-    if (newProviderId === 'flow2api') {
+    if (providerObj?.protocol === 'flow2api') {
       const list = purpose === 'image' ? FLOW2API_IMAGE_MODELS : FLOW2API_VIDEO_MODELS
       modelName = list.find((m) => m.id === newModelId)?.name ?? newModelId
-    } else if (newProviderId === 'higgsfield') {
+    } else if (providerObj?.protocol === 'higgsfield') {
       const list = purpose === 'image' ? HF_IMAGE_MODELS : HF_VIDEO_MODELS
       modelName = list.find((m) => m.id === newModelId)?.name ?? newModelId
     }
@@ -149,10 +159,10 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
       <div className="grid gap-4 md:grid-cols-2">
         {/* Card 1: LLM (Naskah & Cerita) */}
         <section className="flex flex-col gap-3.5 rounded-2xl border border-line bg-surface p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <BookOpen className="size-5 text-accent" />
-              <h2 className="text-base font-bold">Naskah & Cerita (LLM)</h2>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <BookOpen className="size-5 shrink-0 text-accent" />
+              <h2 className="truncate text-base font-bold">Naskah & Cerita (LLM)</h2>
             </div>
             <StatusBadge status={statusOf(activeLlm.provider.id)} />
           </div>
@@ -164,6 +174,7 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
             <Select
               label="Penyedia LLM"
               value={activeLlm.provider.id}
+              disabled={saving}
               onChange={(newProviderId) => {
                 const nextModel = settings.providers?.llm?.models?.[newProviderId]?.llm || ''
                 void applyChange('llm', newProviderId, nextModel)
@@ -175,13 +186,15 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
             />
 
             <div>
-              <span className="block mb-1 text-xs font-semibold text-ink-2">Model Naskah</span>
+              <span className="mb-1 block text-xs font-semibold text-ink-2">Model Naskah</span>
               <ModelPicker
                 value={activeLlm.model}
                 models={llmModelsHook.models}
                 loading={llmModelsHook.loading}
                 error={llmModelsHook.error}
                 fetchedAt={llmModelsHook.fetchedAt}
+                disabled={saving}
+                ariaLabel="Model naskah"
                 onChange={(m) => void applyChange('llm', activeLlm.provider.id, m)}
                 onRefresh={llmModelsHook.refresh}
                 allowCustom
@@ -193,10 +206,10 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
 
         {/* Card 2: TTS (Suara Narasi & Dialog) */}
         <section className="flex flex-col gap-3.5 rounded-2xl border border-line bg-surface p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Mic className="size-5 text-ok-ink" />
-              <h2 className="text-base font-bold">Suara & Dialog (TTS)</h2>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <Mic className="size-5 shrink-0 text-ok-ink" />
+              <h2 className="truncate text-base font-bold">Suara & Dialog (TTS)</h2>
             </div>
             <StatusBadge status={statusOf(activeTts.provider.id)} />
           </div>
@@ -208,9 +221,18 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
             <Select
               label="Penyedia Suara"
               value={activeTts.provider.id}
+              disabled={saving}
               onChange={(newProviderId) => {
-                const defaultModel = newProviderId === 'gemini' ? 'gemini-3.8-flash-tts' : 'eleven_multilingual_v2'
-                void applyChange('tts', newProviderId, defaultModel)
+                const validIds =
+                  newProviderId === 'gemini'
+                    ? GEMINI_TTS_OPTIONS.map((o) => o.value)
+                    : ELEVENLABS_TTS_OPTIONS.map((o) => o.value)
+                const savedModel =
+                  settings.providers?.tts?.models?.[newProviderId]?.tts ||
+                  (newProviderId === 'gemini' ? settings.geminiTtsModel : settings.elevenModel)
+                const fallbackModel = newProviderId === 'gemini' ? 'gemini-3.8-flash-tts' : 'eleven_multilingual_v2'
+                const nextModel = savedModel && validIds.includes(savedModel) ? savedModel : fallbackModel
+                void applyChange('tts', newProviderId, nextModel)
               }}
               options={availableTtsProviders.map((p) => ({
                 value: p.id,
@@ -219,26 +241,22 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
             />
 
             <div>
-              <span className="block mb-1 text-xs font-semibold text-ink-2">Model Suara Aktif</span>
+              <span className="mb-1 block text-xs font-semibold text-ink-2">Model Suara Aktif</span>
               {activeTts.provider.id === 'gemini' ? (
                 <Select
                   label="Model Gemini TTS"
                   value={activeTts.model || 'gemini-3.8-flash-tts'}
+                  disabled={saving}
                   onChange={(v) => void applyChange('tts', 'gemini', v)}
-                  options={[
-                    { value: 'gemini-3.8-flash-tts', label: 'Gemini 2.5 Flash TTS (Cepat & Responsif)' },
-                    { value: 'gemini-2.5-flash-tts', label: 'Gemini 2.0 Flash TTS' }
-                  ]}
+                  options={GEMINI_TTS_OPTIONS}
                 />
               ) : (
                 <Select
                   label="Model ElevenLabs"
                   value={activeTts.model || 'eleven_multilingual_v2'}
+                  disabled={saving}
                   onChange={(v) => void applyChange('tts', 'elevenlabs', v)}
-                  options={[
-                    { value: 'eleven_multilingual_v2', label: 'Eleven Multilingual v2 (Intonasi Terbaik)' },
-                    { value: 'eleven_turbo_v2_5', label: 'Eleven Turbo v2.5 (Lebih Cepat)' }
-                  ]}
+                  options={ELEVENLABS_TTS_OPTIONS}
                 />
               )}
             </div>
@@ -247,10 +265,10 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
 
         {/* Card 3: Visual Image (Gambar AI) */}
         <section className="flex flex-col gap-3.5 rounded-2xl border border-line bg-surface p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ImageIcon className="size-5 text-accent" />
-              <h2 className="text-base font-bold">Gambar AI (Visual Image)</h2>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <ImageIcon className="size-5 shrink-0 text-accent" />
+              <h2 className="truncate text-base font-bold">Gambar AI</h2>
             </div>
             <StatusBadge status={statusOf(activeImage.provider.id)} />
           </div>
@@ -260,10 +278,17 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
 
           <div className="space-y-3 pt-1">
             <Select
-              label="Penyedia Gambar Visual"
+              label="Penyedia Gambar"
               value={activeImage.provider.id}
+              disabled={saving}
               onChange={(newProviderId) => {
-                const defaultModel = newProviderId === 'flow2api' ? 'gemini-3.1-flash-image' : 'nano_banana'
+                const nextProvider = availableVisualProviders.find((p) => p.id === newProviderId)
+                const savedModel = settings.providers?.visual?.models?.[newProviderId]?.image
+                const defaultModel =
+                  savedModel ||
+                  (nextProvider?.protocol === 'flow2api'
+                    ? DEFAULT_PROVIDER_MODELS.flow2api.image!
+                    : DEFAULT_PROVIDER_MODELS.higgsfield.image!)
                 handleVisualChangeRequest('image', newProviderId, defaultModel)
               }}
               options={availableVisualProviders.map((p) => ({
@@ -273,12 +298,13 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
             />
 
             <div>
-              <span className="block mb-1 text-xs font-semibold text-ink-2">Model Gambar</span>
-              {activeImage.provider.id === 'flow2api' ? (
+              <span className="mb-1 block text-xs font-semibold text-ink-2">Model Gambar</span>
+              {activeImage.provider.protocol === 'flow2api' ? (
                 <Select
                   label="Model Gambar Flow2API"
                   value={activeImage.model}
-                  onChange={(v) => handleVisualChangeRequest('image', 'flow2api', v)}
+                  disabled={saving}
+                  onChange={(v) => handleVisualChangeRequest('image', activeImage.provider.id, v)}
                   options={FLOW2API_IMAGE_MODELS.map((m) => ({
                     value: m.id,
                     label: `${m.name} (${m.family})`
@@ -288,7 +314,8 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
                 <Select
                   label="Model Gambar Higgsfield"
                   value={activeImage.model}
-                  onChange={(v) => handleVisualChangeRequest('image', 'higgsfield', v)}
+                  disabled={saving}
+                  onChange={(v) => handleVisualChangeRequest('image', activeImage.provider.id, v)}
                   options={HF_IMAGE_MODELS.map((m) => ({
                     value: m.id,
                     label: `${m.name} (${m.family})`
@@ -301,10 +328,10 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
 
         {/* Card 4: Visual Video (Video AI) */}
         <section className="flex flex-col gap-3.5 rounded-2xl border border-line bg-surface p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Film className="size-5 text-sun-ink" />
-              <h2 className="text-base font-bold">Video AI (Visual Video)</h2>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <Film className="size-5 shrink-0 text-sun-ink" />
+              <h2 className="truncate text-base font-bold">Video AI</h2>
             </div>
             <StatusBadge status={statusOf(activeVideo.provider.id)} />
           </div>
@@ -314,10 +341,17 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
 
           <div className="space-y-3 pt-1">
             <Select
-              label="Penyedia Video Visual"
+              label="Penyedia Video"
               value={activeVideo.provider.id}
+              disabled={saving}
               onChange={(newProviderId) => {
-                const defaultModel = newProviderId === 'flow2api' ? 'veo-3.1-fast-i2v' : 'dopamine'
+                const nextProvider = availableVisualProviders.find((p) => p.id === newProviderId)
+                const savedModel = settings.providers?.visual?.models?.[newProviderId]?.video
+                const defaultModel =
+                  savedModel ||
+                  (nextProvider?.protocol === 'flow2api'
+                    ? DEFAULT_PROVIDER_MODELS.flow2api.video!
+                    : DEFAULT_PROVIDER_MODELS.higgsfield.video!)
                 handleVisualChangeRequest('video', newProviderId, defaultModel)
               }}
               options={availableVisualProviders.map((p) => ({
@@ -327,12 +361,13 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
             />
 
             <div>
-              <span className="block mb-1 text-xs font-semibold text-ink-2">Model Video</span>
-              {activeVideo.provider.id === 'flow2api' ? (
+              <span className="mb-1 block text-xs font-semibold text-ink-2">Model Video</span>
+              {activeVideo.provider.protocol === 'flow2api' ? (
                 <Select
                   label="Model Video Flow2API"
                   value={activeVideo.model}
-                  onChange={(v) => handleVisualChangeRequest('video', 'flow2api', v)}
+                  disabled={saving}
+                  onChange={(v) => handleVisualChangeRequest('video', activeVideo.provider.id, v)}
                   options={FLOW2API_VIDEO_MODELS.map((m) => ({
                     value: m.id,
                     label: `${m.name} (${m.family})`
@@ -342,7 +377,8 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
                 <Select
                   label="Model Video Higgsfield"
                   value={activeVideo.model}
-                  onChange={(v) => handleVisualChangeRequest('video', 'higgsfield', v)}
+                  disabled={saving}
+                  onChange={(v) => handleVisualChangeRequest('video', activeVideo.provider.id, v)}
                   options={HF_VIDEO_MODELS.map((m) => ({
                     value: m.id,
                     label: `${m.name} (${m.family})`
@@ -362,17 +398,34 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
           title="Konfirmasi Pergantian Model Visual Aktif"
           subtitle="Pemberitahuan perubahan model gambar / video"
           width={520}
+          footer={
+            <div className="flex items-center justify-end gap-2.5">
+              <Button onClick={() => setPendingChange(null)} disabled={saving}>
+                Batal
+              </Button>
+              <Button
+                variant="accent"
+                loading={saving}
+                onClick={async () => {
+                  await applyChange(pendingChange.purpose, pendingChange.providerId, pendingChange.modelId)
+                  setPendingChange(null)
+                }}
+              >
+                Ganti Model
+              </Button>
+            </div>
+          }
         >
           <div className="space-y-4 py-2">
             <div className="flex items-start gap-3 rounded-xl border border-sun bg-sun-soft p-3.5 text-xs text-sun-ink">
-              <AlertTriangle className="size-5 shrink-0 mt-0.5" />
+              <AlertTriangle className="mt-0.5 size-5 shrink-0" />
               <div className="space-y-1">
-                <span className="font-semibold block">Dampak pergantian model visual:</span>
+                <span className="block font-semibold">Dampak pergantian model visual:</span>
                 <p>
                   Mengganti model {pendingChange.purpose === 'image' ? 'gambar' : 'video'} aktif menjadi{' '}
                   <strong className="underline">{pendingChange.modelName}</strong> ({pendingChange.providerName}) akan
                   menandai aset {pendingChange.purpose === 'image' ? 'gambar' : 'video'} yang sudah ada di proyek sebagai{' '}
-                  <strong>&quot;basi&quot; (stale)</strong>.
+                  <strong>&quot;basi&quot;</strong>.
                 </p>
                 <p>
                   Shot yang sudah selesai tetap dapat diputar dan diekspor, namun status basi akan mengingatkanmu bahwa
@@ -380,22 +433,6 @@ export function ActiveModelsSection({ settings, keys, onSettings }: Props) {
                 </p>
               </div>
             </div>
-          </div>
-
-          <div className="mt-4 flex items-center justify-end gap-2.5">
-            <Button onClick={() => setPendingChange(null)} disabled={saving}>
-              Batal
-            </Button>
-            <Button
-              variant="accent"
-              loading={saving}
-              onClick={async () => {
-                await applyChange(pendingChange.purpose, pendingChange.providerId, pendingChange.modelId)
-                setPendingChange(null)
-              }}
-            >
-              Ganti Model
-            </Button>
           </div>
         </Modal>
       )}

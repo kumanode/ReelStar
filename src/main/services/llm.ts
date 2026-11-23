@@ -128,8 +128,8 @@ async function openRouterModels(): Promise<ModelOption[]> {
 /** Groq lists speech and safety models next to chat models; keep the ones that write text. */
 const GROQ_NOT_CHAT = /whisper|tts|orpheus|playai|guard|safeguard|embed/i
 
-async function groqModels(): Promise<ModelOption[]> {
-  const c = compat('groq')
+async function groqModels(keyOverride?: string | null): Promise<ModelOption[]> {
+  const c = compat('groq', keyOverride)
   requireKey(c)
   const r = await call<{ data: { id: string; owned_by?: string; active?: boolean; context_window?: number; max_completion_tokens?: number }[] }>(c, '/models')
   return r.data
@@ -148,8 +148,8 @@ async function groqModels(): Promise<ModelOption[]> {
     .sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true }))
 }
 
-async function customModels(providerId = 'custom', baseUrlOverride?: string): Promise<ModelOption[]> {
-  const c = compat(providerId, undefined, baseUrlOverride)
+async function customModels(providerId = 'custom', baseUrlOverride?: string, keyOverride?: string | null): Promise<ModelOption[]> {
+  const c = compat(providerId, keyOverride, baseUrlOverride)
   const r = await call<{ data?: { id: string; owned_by?: string }[]; models?: { name?: string; model?: string; id?: string }[] }>(c, '/models')
   const list = r.data ?? r.models?.map((m) => ({ id: m.id ?? m.model ?? m.name ?? '', owned_by: undefined })) ?? []
   return list
@@ -208,7 +208,7 @@ export async function testLlm(provider: LlmProvider, key?: string | null, baseUr
       return { ok: true, message: parts.join(' · ') }
     }
     // Groq and OpenAI-compatible servers have no key-info endpoint; listing models proves the key works.
-    const models = provider === 'groq' ? await groqModels() : await customModels(provider, baseUrl)
+    const models = provider === 'groq' ? await groqModels(key) : await customModels(provider, baseUrl, key)
     return { ok: true, message: `Terhubung · ${models.length} model tersedia` }
   } catch (e) {
     return { ok: false, message: (e as Error).message }
@@ -271,10 +271,10 @@ async function chatJson(c: Compat, model: string, system: string, prompt: string
         body: JSON.stringify(body),
         signal: signal ? AbortSignal.any([signal, timeout]) : timeout
       })
-      // A 200 can still carry an error.
+      // A 200 can still carry an upstream error; use 502 so formatUnsupported does not retry rate limits or credit errors.
       const choice = r.choices?.[0]
       const inlineError = r.error?.message ?? (choice?.finish_reason === 'error' ? (choice.error?.message ?? 'error') : null)
-      if (inlineError) throw new LlmError(`${PROVIDER_NAMES[c.provider]} gagal: ${inlineError}`, 400, inlineError)
+      if (inlineError) throw new LlmError(`${PROVIDER_NAMES[c.provider]} gagal: ${inlineError}`, 502, inlineError)
       if (choice?.message?.refusal) throw new LlmError(`Model menolak permintaan: ${choice.message.refusal}`, 403, choice.message.refusal)
       const text = contentText(choice?.message?.content)
       if (!text.trim()) throw new BadReply(choice?.finish_reason === 'length' ? 'length' : 'empty')

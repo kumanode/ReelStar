@@ -17,7 +17,7 @@ export function DoctorDrawer({ issues, onClose, onJumpToShot }: DoctorDrawerProp
           <div className="flex items-center gap-2 font-semibold text-sun-ink">
             <AlertTriangle className="size-4 shrink-0" />
             <span>Catatan Dokter Naskah ({issues.length})</span>
-            <span className="font-normal opacity-80">— saran ritme &amp; struktur, tidak memblokir penyimpanan</span>
+            <span className="font-normal opacity-80">· saran ritme &amp; struktur, tidak memblokir penyimpanan</span>
           </div>
           <Button variant="secondary" size="sm" icon={<X className="size-3.5" />} onClick={onClose}>
             Tutup
@@ -101,7 +101,7 @@ export function LocksDrawer({
           <div className="flex items-center gap-2 font-semibold text-info-ink">
             <Lock className="size-3.5 shrink-0" />
             <span>Kunci Kontinuitas Ep {episodeNum}</span>
-            <span className="font-normal opacity-85">— ditempel verbatim ke semua prompt gambar &amp; video episode ini</span>
+            <span className="font-normal opacity-85">· ditempel persis seperti ditulis ke semua prompt gambar &amp; video episode ini</span>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="secondary" size="sm" onClick={onOpenLorebookRules}>
@@ -136,7 +136,7 @@ export function LocksDrawer({
             <div key={l.id} className="flex items-center justify-between gap-2 rounded-lg border border-line bg-surface px-3 py-1.5 text-ink">
               <div className="flex min-w-0 flex-1 items-center gap-2.5">
                 <Switch on={l.enabled} onChange={() => onToggleEpisodeLock(l.id)} label={`Aktifkan ${l.label}`} />
-                <div className="min-w-0">
+                <div className="min-w-0 break-words">
                   <span className="font-semibold">{l.label}</span>
                   <span className="ml-2 font-mono text-[11px] text-muted">{l.text}</span>
                 </div>
@@ -150,12 +150,14 @@ export function LocksDrawer({
 
         <div className="flex flex-wrap items-center gap-2 pt-0.5">
           <input
+            aria-label="Label kunci kontinuitas"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             placeholder="Label (mis. Lampu Ruang Rapat)"
             className="h-8 w-44 rounded-lg border border-line-2 bg-surface px-2.5 text-xs text-ink outline-none focus:border-ink"
           />
           <input
+            aria-label="Frasa kunci kontinuitas"
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
@@ -196,6 +198,16 @@ export function SnapshotModals({
 }: SnapshotModalsProps) {
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
+  const [restoringId, setRestoringId] = useState<string | null>(null)
+
+  const handleRestore = async (v: ScriptVersion) => {
+    setRestoringId(v.id)
+    try {
+      await onRestoreVersion(v)
+    } finally {
+      setRestoringId(null)
+    }
+  }
 
   const handleSave = async () => {
     setSaving(true)
@@ -241,7 +253,13 @@ export function SnapshotModals({
                       {new Date(v.createdAt).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })}
                     </span>
                   </div>
-                  <Button size="sm" variant="secondary" onClick={() => void onRestoreVersion(v)}>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    loading={restoringId === v.id}
+                    disabled={restoringId !== null}
+                    onClick={() => void handleRestore(v)}
+                  >
                     Pulihkan
                   </Button>
                 </div>
@@ -271,13 +289,14 @@ export function SnapshotModals({
       >
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-semibold text-ink">Catatan Snapshot</label>
+            <label htmlFor="snapshot-note-input" className="text-xs font-semibold text-ink">Catatan Snapshot</label>
             <input
+              id="snapshot-note-input"
               value={note}
               onChange={(e) => setNote(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && void handleSave()}
               placeholder="Mis. Sebelum revisi dialog adegan 3"
-              className={inputCls}
+              className={cx(inputCls, 'h-11')}
               autoFocus
             />
           </div>

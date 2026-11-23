@@ -37,7 +37,7 @@ const STATUS_BADGE: Record<EpisodeStatus, { tone: 'draft' | 'info' | 'warn' | 'o
   draft: { tone: 'draft', label: 'Draf' },
   planned: { tone: 'info', label: 'Siap Naskah' },
   script: { tone: 'info', label: 'Naskah' },
-  storyboard: { tone: 'info', label: 'Storyboard' },
+  storyboard: { tone: 'info', label: 'Produksi' },
   editing: { tone: 'warn', label: 'Editor' },
   exported: { tone: 'ok', label: 'Terekspor' }
 }
@@ -45,9 +45,216 @@ const STATUS_BADGE: Record<EpisodeStatus, { tone: 'draft' | 'info' | 'warn' | 'o
 function formatDuration(sec: number): string {
   const m = Math.floor(sec / 60)
   const s = sec % 60
-  if (m === 0) return `${s} detik`
+  if (m === 0) return `${s} dtk`
   if (s === 0) return `${m} menit`
-  return `${m} m ${s} d`
+  return `${m} mnt ${s} dtk`
+}
+
+function EpisodeCard({
+  ep,
+  idx,
+  totalEpisodes,
+  defaultDurationSec,
+  busy,
+  onUpdate,
+  onInsert,
+  onMove,
+  onDelete,
+  onOpen
+}: {
+  ep: Episode
+  idx: number
+  totalEpisodes: number
+  defaultDurationSec: number
+  busy: boolean
+  onUpdate: (patch: Partial<Episode>) => Promise<void>
+  onInsert: (atIndex: number) => void
+  onMove: (index: number, dir: -1 | 1) => void
+  onDelete: (ep: Episode) => void
+  onOpen: (epId: string) => void
+}) {
+  const [title, setTitle] = useState(ep.title)
+  const [hook, setHook] = useState(ep.hook ?? '')
+  const [cliffhanger, setCliffhanger] = useState(ep.cliffhanger ?? '')
+  const [summary, setSummary] = useState(ep.summary ?? '')
+
+  // Sync local draft whenever store values change (e.g. after AI re-plan or project reload).
+  useEffect(() => {
+    setTitle(ep.title)
+  }, [ep.title])
+  useEffect(() => {
+    setHook(ep.hook ?? '')
+  }, [ep.hook])
+  useEffect(() => {
+    setCliffhanger(ep.cliffhanger ?? '')
+  }, [ep.cliffhanger])
+  useEffect(() => {
+    setSummary(ep.summary ?? '')
+  }, [ep.summary])
+
+  const badgeInfo =
+    ep.status === 'planned' && ep.scriptDraft
+      ? { tone: 'warn' as const, label: 'Tinjau Naskah' }
+      : STATUS_BADGE[ep.status] || STATUS_BADGE.draft
+
+  return (
+    <div className="flex flex-col justify-between gap-3 rounded-2xl border border-line bg-surface p-4 transition-all hover:border-ink-2 hover:shadow-xs">
+      {/* Card Header: Ep number, title, status, menu */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="flex h-6 shrink-0 items-center justify-center rounded-md bg-sand px-2 font-mono text-xs font-bold text-ink">
+            Ep {ep.episodeNum}
+          </span>
+          <input
+            value={title}
+            aria-label={`Judul Episode ${ep.episodeNum}`}
+            onChange={(e) => setTitle(e.target.value)}
+            onBlur={() => {
+              const val = title.trim()
+              if (!val) {
+                setTitle(ep.title)
+                return
+              }
+              if (val !== ep.title) {
+                void onUpdate({ title: val })
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            }}
+            className="min-w-0 flex-1 rounded-lg border border-transparent px-2 py-1 font-display text-sm font-bold text-ink outline-none transition-colors hover:border-line-2 focus:border-ink focus:bg-paper focus-visible:ring-2 focus-visible:ring-accent/35"
+          />
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Badge tone={badgeInfo.tone} className="text-[11px]">
+            {badgeInfo.label}
+          </Badge>
+          <Menu
+            trigger={(open) => (
+              <IconButton label="Opsi episode" onClick={open} size={28}>
+                <MoreVertical className="size-3.5" />
+              </IconButton>
+            )}
+            items={[
+              {
+                label: 'Sisipkan sebelum',
+                icon: <ArrowUp className="size-3.5" />,
+                disabled: busy,
+                run: () => onInsert(idx)
+              },
+              {
+                label: 'Sisipkan sesudah',
+                icon: <ArrowDown className="size-3.5" />,
+                disabled: busy,
+                run: () => onInsert(idx + 1)
+              },
+              ...(idx > 0
+                ? [
+                    {
+                      label: 'Pindah ke atas',
+                      icon: <ArrowUp className="size-3.5" />,
+                      disabled: busy,
+                      run: () => onMove(idx, -1)
+                    }
+                  ]
+                : []),
+              ...(idx < totalEpisodes - 1
+                ? [
+                    {
+                      label: 'Pindah ke bawah',
+                      icon: <ArrowDown className="size-3.5" />,
+                      disabled: busy,
+                      run: () => onMove(idx, 1)
+                    }
+                  ]
+                : []),
+              {
+                label: 'Hapus episode',
+                icon: <Trash2 className="size-3.5" />,
+                danger: true,
+                disabled: busy,
+                run: () => onDelete(ep)
+              }
+            ]}
+          />
+        </div>
+      </div>
+
+      {/* Middle: Hook, Cliffhanger, Summary */}
+      <div className="flex flex-col gap-2 rounded-xl border border-line-2/60 bg-paper p-3 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="w-24 shrink-0 rounded border border-line-2/60 bg-sand px-1.5 py-0.5 text-center text-[11px] font-bold uppercase tracking-wider text-muted">
+            Hook
+          </span>
+          <input
+            value={hook}
+            aria-label={`Hook Episode ${ep.episodeNum}`}
+            placeholder="Kejutan pembuka..."
+            onChange={(e) => setHook(e.target.value)}
+            onBlur={() => {
+              if (hook !== (ep.hook ?? '')) {
+                void onUpdate({ hook })
+              }
+            }}
+            className="min-w-0 flex-1 rounded-lg border border-line-2/60 bg-surface px-2 py-1 text-xs text-ink outline-none placeholder:text-muted transition-colors focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="w-24 shrink-0 rounded border border-line-2/60 bg-sand px-1.5 py-0.5 text-center text-[11px] font-bold uppercase tracking-wider text-muted">
+            Cliffhanger
+          </span>
+          <input
+            value={cliffhanger}
+            aria-label={`Cliffhanger Episode ${ep.episodeNum}`}
+            placeholder="Ketegangan penutup..."
+            onChange={(e) => setCliffhanger(e.target.value)}
+            onBlur={() => {
+              if (cliffhanger !== (ep.cliffhanger ?? '')) {
+                void onUpdate({ cliffhanger })
+              }
+            }}
+            className="min-w-0 flex-1 rounded-lg border border-line-2/60 bg-surface px-2 py-1 text-xs text-ink outline-none placeholder:text-muted transition-colors focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1 border-t border-line pt-2">
+          <span className="text-[11px] font-semibold text-muted">Ringkasan cerita</span>
+          <AutoTextarea
+            value={summary}
+            aria-label={`Ringkasan cerita Episode ${ep.episodeNum}`}
+            placeholder="Inti konflik dan perkembangan adegan di episode ini..."
+            minRows={1}
+            maxHeight={100}
+            onChange={(e) => setSummary(e.target.value)}
+            onBlur={() => {
+              if (summary !== (ep.summary ?? '')) {
+                void onUpdate({ summary })
+              }
+            }}
+            className="min-w-0 w-full rounded-lg border border-line-2/60 bg-surface p-2 text-xs text-ink outline-none placeholder:text-muted transition-colors focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
+          />
+        </div>
+      </div>
+
+      {/* Footer: duration and Open Plan button */}
+      <div className="flex items-center justify-between border-t border-line pt-2.5 text-xs">
+        <div className="flex items-center gap-1.5 text-xs text-muted tabular-nums">
+          <Clock className="size-3" />
+          <span>{ep.durationSec || defaultDurationSec} dtk</span>
+        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => onOpen(ep.id)}
+        >
+          Buka Produksi
+          <ArrowRight className="size-3.5" />
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 export function EpisodeHub() {
@@ -77,6 +284,7 @@ export function EpisodeHub() {
   const [isPlanning, setIsPlanning] = useState(false)
   const [planMessage, setPlanMessage] = useState<string | null>(null)
   const [isBatchDrafting, setIsBatchDrafting] = useState(false)
+  const [mutatingEpisode, setMutatingEpisode] = useState(false)
   const [guidelinesOpen, setGuidelinesOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const autoPlanRanRef = useRef(false)
@@ -252,6 +460,7 @@ export function EpisodeHub() {
 
   const handleFileUpload = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
+    e.target.value = ''
     if (!file) return
     const reader = new FileReader()
     reader.onload = (event) => {
@@ -266,35 +475,59 @@ export function EpisodeHub() {
   }
 
   const handleCreateEmptyEpisode = async () => {
-    const nextNum = episodes.length + 1
-    const ep = await createEpisode({
-      title: `Episode ${nextNum}`,
-      episodeNum: nextNum
-    })
-    await switchEpisode(ep.id)
-    setActiveTab('production')
-    setActiveView('episode')
+    if (mutatingEpisode) return
+    setMutatingEpisode(true)
+    try {
+      const nextNum = episodes.length + 1
+      const ep = await createEpisode({
+        title: `Episode ${nextNum}`,
+        episodeNum: nextNum
+      })
+      await switchEpisode(ep.id)
+      setActiveTab('production')
+      setActiveView('episode')
+    } catch (err) {
+      toast('error', `Gagal membuat episode: ${errorText(err)}`)
+    } finally {
+      setMutatingEpisode(false)
+    }
   }
 
   const handleInsertEpisode = async (atIndex: number) => {
-    const nextNum = atIndex + 1
-    const newEp = await createEpisode({
-      title: `Episode baru`,
-      episodeNum: nextNum
-    })
-    const currentIds = episodes.map((e) => e.id)
-    currentIds.splice(atIndex, 0, newEp.id)
-    await reorderEpisodes(currentIds)
-    toast('info', `Episode baru berhasil disisipkan`)
+    if (mutatingEpisode) return
+    setMutatingEpisode(true)
+    try {
+      const nextNum = atIndex + 1
+      const newEp = await createEpisode({
+        title: `Episode baru`,
+        episodeNum: nextNum
+      })
+      const currentIds = episodes.map((e) => e.id)
+      currentIds.splice(atIndex, 0, newEp.id)
+      await reorderEpisodes(currentIds)
+      toast('info', `Episode baru berhasil disisipkan`)
+    } catch (err) {
+      toast('error', `Gagal menyisipkan episode: ${errorText(err)}`)
+    } finally {
+      setMutatingEpisode(false)
+    }
   }
 
   const handleMoveEpisode = async (index: number, dir: -1 | 1) => {
+    if (mutatingEpisode) return
     const targetIndex = index + dir
     if (targetIndex < 0 || targetIndex >= episodes.length) return
-    const ids = episodes.map((e) => e.id)
-    const [moved] = ids.splice(index, 1)
-    ids.splice(targetIndex, 0, moved)
-    await reorderEpisodes(ids)
+    setMutatingEpisode(true)
+    try {
+      const ids = episodes.map((e) => e.id)
+      const [moved] = ids.splice(index, 1)
+      ids.splice(targetIndex, 0, moved)
+      await reorderEpisodes(ids)
+    } catch (err) {
+      toast('error', `Gagal memindahkan episode: ${errorText(err)}`)
+    } finally {
+      setMutatingEpisode(false)
+    }
   }
 
   const handleDeleteEpisode = async (ep: Episode) => {
@@ -327,7 +560,7 @@ export function EpisodeHub() {
           <div className="min-w-0">
             <h1 className="font-display text-2xl font-bold tracking-tight text-ink">Episode Hub</h1>
             <p className="text-sm text-ink-2">
-              Pecah cerita jadi episode, lalu lanjut ke Lorebook untuk tokoh & lokasi.
+              Pecah cerita jadi episode, lalu lanjut ke Dunia &amp; Pemeran untuk tokoh &amp; lokasi.
             </p>
           </div>
           <Button
@@ -338,11 +571,11 @@ export function EpisodeHub() {
             onClick={() => void handleGoToLorebook()}
             title={
               lorebookEmpty && hasStory
-                ? 'Buka Lorebook dan langsung ekstrak karakter, kostum, lokasi, dan prop dari cerita dengan AI'
-                : 'Buka Lorebook untuk mengelola karakter, lokasi, dan prop'
+                ? 'Buka Dunia & Pemeran dan langsung ekstrak karakter, kostum, lokasi, dan prop dari cerita dengan AI'
+                : 'Buka Dunia & Pemeran untuk mengelola karakter, lokasi, dan prop'
             }
           >
-            Lanjut ke Lorebook
+            Lanjut ke Dunia &amp; Pemeran
             <ArrowRight className="size-3.5" />
           </Button>
         </div>
@@ -396,7 +629,7 @@ export function EpisodeHub() {
               }
               minRows={3}
               maxHeight={180}
-              className="w-full rounded-xl border border-line-2 bg-paper p-3 text-sm text-ink outline-none transition-colors focus:border-ink"
+              className="w-full rounded-xl border border-line-2 bg-paper p-3 text-sm text-ink outline-none placeholder:text-muted transition-colors focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
             />
 
             {/* Compact Controls Bar */}
@@ -407,6 +640,7 @@ export function EpisodeHub() {
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
+                      aria-label="Kurangi target episode"
                       disabled={targetEpCount == null || targetEpCount <= MIN_TARGET_EPISODES}
                       onClick={() => updateProject({ targetEpisodeCount: Math.max(MIN_TARGET_EPISODES, (targetEpCount ?? 3) - 1) })}
                       className="flex size-7 items-center justify-center rounded-lg border border-line bg-paper text-ink transition-colors hover:bg-surface disabled:opacity-40"
@@ -414,11 +648,12 @@ export function EpisodeHub() {
                     >
                       <Minus className="size-3.5" />
                     </button>
-                    <span className="w-9 text-center font-mono text-sm font-bold text-ink">
-                      {targetEpCount ?? 'Auto'}
+                    <span className="min-w-9 px-1 text-center font-mono text-sm font-bold text-ink">
+                      {targetEpCount ?? 'Otomatis'}
                     </span>
                     <button
                       type="button"
+                      aria-label="Tambah target episode"
                       disabled={targetEpCount != null && targetEpCount >= MAX_TARGET_EPISODES}
                       onClick={() => updateProject({ targetEpisodeCount: Math.min(MAX_TARGET_EPISODES, (targetEpCount ?? 3) + 1) })}
                       className="flex size-7 items-center justify-center rounded-lg border border-line bg-paper text-ink transition-colors hover:bg-surface disabled:opacity-40"
@@ -437,14 +672,14 @@ export function EpisodeHub() {
                       )}
                       title={targetEpCount == null ? 'Setel target angka' : 'Otomatis mengikuti panjang cerita'}
                     >
-                      Auto
+                      Otomatis
                     </button>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-1.5">
                   <span>Durasi:</span>
-                  <div className="w-40">
+                  <div className="w-48">
                     <Select
                       label="Target durasi episode"
                       value={targetDurationSec}
@@ -524,8 +759,9 @@ export function EpisodeHub() {
 
             <button
               type="button"
+              disabled={mutatingEpisode || isPlanning}
               onClick={() => void handleCreateEmptyEpisode()}
-              className="flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-line-2 bg-surface p-8 text-center transition-all hover:border-ink hover:bg-paper"
+              className="flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-line-2 bg-surface p-8 text-center transition-all hover:border-ink hover:bg-paper disabled:cursor-not-allowed disabled:opacity-50"
             >
               <div className="flex size-12 items-center justify-center rounded-xl border border-line bg-sun-soft text-sun-ink">
                 <Plus className="size-6" />
@@ -566,7 +802,7 @@ export function EpisodeHub() {
 
                 {hasPlannedEpisodes && (
                   <Button
-                    variant="primary"
+                    variant={episodesNeedingDraft > 0 ? 'accent' : 'secondary'}
                     size="sm"
                     icon={isBatchDrafting ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
                     disabled={isBatchDrafting || isPlanning || episodesNeedingDraft === 0}
@@ -585,7 +821,7 @@ export function EpisodeHub() {
                   variant="secondary"
                   size="sm"
                   icon={<Plus className="size-3.5" />}
-                  disabled={isBatchDrafting || isPlanning}
+                  disabled={isBatchDrafting || isPlanning || mutatingEpisode}
                   onClick={() => void handleCreateEmptyEpisode()}
                   title="Tambahkan satu episode kosong baru di akhir daftar"
                 >
@@ -616,144 +852,21 @@ export function EpisodeHub() {
             </div>
 
             <div className={cx('grid gap-4', episodes.length === 1 ? 'grid-cols-1 max-w-3xl' : 'grid-cols-1 md:grid-cols-2')}>
-              {episodes.map((ep, idx) => {
-                const badgeInfo =
-                  ep.status === 'planned' && ep.scriptDraft
-                    ? { tone: 'warn' as const, label: 'Tinjau Naskah' }
-                    : STATUS_BADGE[ep.status] || STATUS_BADGE.draft
-                return (
-                  <div
-                    key={ep.id}
-                    className="flex flex-col justify-between gap-3 rounded-2xl border border-line bg-surface p-4 transition-all hover:border-ink-2 hover:shadow-xs"
-                  >
-                    {/* Card Header: Ep number, title, status, menu */}
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex min-w-0 flex-1 items-center gap-2">
-                        <span className="flex h-6 shrink-0 items-center justify-center rounded-md bg-sand px-2 font-mono text-xs font-bold text-ink">
-                          Ep {ep.episodeNum}
-                        </span>
-                        <input
-                          defaultValue={ep.title}
-                          onBlur={(e) => {
-                            const val = e.target.value.trim()
-                            if (val && val !== ep.title) {
-                              void updateEpisode(ep.id, { title: val })
-                            }
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                          }}
-                          className="min-w-0 flex-1 rounded-lg border border-transparent px-2 py-1 font-display text-sm font-bold text-ink outline-none transition-colors hover:border-line-2 focus:border-ink focus:bg-paper"
-                        />
-                      </div>
-
-                      <div className="flex items-center gap-1.5">
-                        <Badge tone={badgeInfo.tone} className="text-[11px]">
-                          {badgeInfo.label}
-                        </Badge>
-                        <Menu
-                          trigger={(open) => (
-                            <IconButton label="Opsi episode" onClick={open} size={28}>
-                              <MoreVertical className="size-3.5" />
-                            </IconButton>
-                          )}
-                          items={[
-                            {
-                              label: 'Sisipkan sebelum',
-                              icon: <ArrowUp className="size-3.5" />,
-                              run: () => void handleInsertEpisode(idx)
-                            },
-                            {
-                              label: 'Sisipkan sesudah',
-                              icon: <ArrowDown className="size-3.5" />,
-                              run: () => void handleInsertEpisode(idx + 1)
-                            },
-                            ...(idx > 0
-                              ? [
-                                  {
-                                    label: 'Pindah ke atas',
-                                    icon: <ArrowUp className="size-3.5" />,
-                                    run: () => void handleMoveEpisode(idx, -1)
-                                  }
-                                ]
-                              : []),
-                            ...(idx < episodes.length - 1
-                              ? [
-                                  {
-                                    label: 'Pindah ke bawah',
-                                    icon: <ArrowDown className="size-3.5" />,
-                                    run: () => void handleMoveEpisode(idx, 1)
-                                  }
-                                ]
-                              : []),
-                            {
-                              label: 'Hapus episode',
-                              icon: <Trash2 className="size-3.5" />,
-                              danger: true,
-                              run: () => void handleDeleteEpisode(ep)
-                            }
-                          ]}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Middle: Hook, Cliffhanger, Summary */}
-                    <div className="flex flex-col gap-2 rounded-xl border border-line-2/60 bg-paper p-3 text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className="w-24 shrink-0 rounded border border-line-2/60 bg-sand px-1.5 py-0.5 text-center text-[10px] font-bold uppercase tracking-wider text-muted">
-                          Hook
-                        </span>
-                        <input
-                          defaultValue={ep.hook ?? ''}
-                          placeholder="Kejutan pembuka..."
-                          onBlur={(e) => void updateEpisode(ep.id, { hook: e.target.value })}
-                          className="flex-1 rounded-lg border border-line-2/60 bg-surface px-2 py-1 text-xs text-ink outline-none placeholder:text-muted/60 transition-colors focus:border-ink"
-                        />
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <span className="w-24 shrink-0 rounded border border-line-2/60 bg-sand px-1.5 py-0.5 text-center text-[10px] font-bold uppercase tracking-wider text-muted">
-                          Cliffhanger
-                        </span>
-                        <input
-                          defaultValue={ep.cliffhanger ?? ''}
-                          placeholder="Ketegangan penutup..."
-                          onBlur={(e) => void updateEpisode(ep.id, { cliffhanger: e.target.value })}
-                          className="flex-1 rounded-lg border border-line-2/60 bg-surface px-2 py-1 text-xs text-ink outline-none placeholder:text-muted/60 transition-colors focus:border-ink"
-                        />
-                      </div>
-
-                      <div className="flex flex-col gap-1 border-t border-line pt-2">
-                        <span className="text-[11px] font-semibold text-muted">Ringkasan cerita</span>
-                        <AutoTextarea
-                          defaultValue={ep.summary ?? ''}
-                          placeholder="Inti konflik dan perkembangan adegan di episode ini..."
-                          minRows={1}
-                          maxHeight={100}
-                          onBlur={(e) => void updateEpisode(ep.id, { summary: e.target.value })}
-                          className="w-full rounded-lg border border-line-2/60 bg-surface p-2 text-xs text-ink outline-none placeholder:text-muted/60 transition-colors focus:border-ink"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Footer: duration and Open Plan button */}
-                    <div className="flex items-center justify-between border-t border-line pt-2.5 text-xs">
-                      <div className="flex items-center gap-1.5 text-xs text-muted tabular-nums">
-                        <Clock className="size-3" />
-                        <span>{ep.durationSec || project.durationSec || 60} dtk</span>
-                      </div>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => void handleOpenEpisode(ep.id)}
-                      >
-                        Buka Produksi
-                        <ArrowRight className="size-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                )
-              })}
+              {episodes.map((ep, idx) => (
+                <EpisodeCard
+                  key={ep.id}
+                  ep={ep}
+                  idx={idx}
+                  totalEpisodes={episodes.length}
+                  defaultDurationSec={project.durationSec || 60}
+                  busy={mutatingEpisode || isPlanning || isBatchDrafting}
+                  onUpdate={(patch) => updateEpisode(ep.id, patch)}
+                  onInsert={(atIndex) => void handleInsertEpisode(atIndex)}
+                  onMove={(index, dir) => void handleMoveEpisode(index, dir)}
+                  onDelete={(target) => void handleDeleteEpisode(target)}
+                  onOpen={(epId) => void handleOpenEpisode(epId)}
+                />
+              ))}
             </div>
           </section>
         )}

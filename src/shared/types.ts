@@ -681,6 +681,8 @@ export interface ProjectBundle {
   clips: Clip[]
   assets: Asset[]
   jobs: Job[]
+  /** Monotonic main-process revision used to avoid stale autosave overwrites. */
+  rev?: number
 }
 
 export interface ProjectSummary {
@@ -699,13 +701,22 @@ export interface ProjectSummary {
   seriesGuidelines?: string
 }
 
-/** What the renderer sends on save. Asset links are owned by the main process and never overwritten by a save. */
+/** What the renderer sends on save. Asset links are owned by the main process and never overwritten on UPDATE,
+ *  only restored on INSERT when Undo brings back a deleted clip/character. */
 export interface ProjectSnapshot {
   project: Omit<Project, 'createdAt' | 'updatedAt' | 'coverAssetId'>
   episodeId: string
   episodeEditor?: EditorSettings
-  characters: Omit<Character, 'sheetAssetId'>[]
-  clips: Omit<Clip, 'imageAssetId' | 'videoAssetId' | 'audioAssetId'>[]
+  /** Highest main-process clip revision already applied in renderer state. */
+  baseRev?: number
+  characters: (Omit<Character, 'sheetAssetId'> & { sheetAssetId?: string | null })[]
+  /** Optional derivatives snapshot used only to restore cascaded rows when Undo brings back a deleted character. */
+  derivatives?: CharacterDerivative[]
+  clips: (Omit<Clip, 'imageAssetId' | 'videoAssetId' | 'audioAssetId'> & {
+    imageAssetId?: string | null
+    videoAssetId?: string | null
+    audioAssetId?: string | null
+  })[]
 }
 
 export interface NewProjectInput {
@@ -836,6 +847,7 @@ export interface VoiceOption {
   name: string
   description: string
   previewUrl?: string | null
+  gender?: 'female' | 'male'
 }
 
 export type ThemePreference = 'system' | 'light' | 'dark'
@@ -1041,6 +1053,10 @@ export interface ExportOptions {
 export interface ClipPatchEvent {
   clipId: string
   patch: Partial<Clip>
+  /** Main-process revision after this patch was persisted. */
+  rev?: number
+  /** True when triggered directly by a user edit (e.g. detachVoice) so undo checkpoints are not rebased over it. */
+  fromUser?: boolean
 }
 
 export interface CharacterPatchEvent {

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Sparkles } from 'lucide-react'
 import type { BatchEstimateSheetResult } from '@shared/types'
-import { Button, Modal } from '../../components/ui'
+import { Button, Modal, Spinner } from '../../components/ui'
 import { errorText } from '../../lib/format'
 import { useApp } from '../../store/app'
+import { useProject } from '../../store/project'
 
 interface BatchEstimateSheetModalProps {
   open: boolean
@@ -33,15 +34,24 @@ export function BatchEstimateSheetModal({
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    if (open) setIncludeStale(false)
+  }, [open])
+
+  useEffect(() => {
     if (!open) return
     let cancelled = false
     setLoading(true)
     setError(null)
 
-    window.api.generate
-      .batchEstimateSheets(projectId, includeStale)
+    useProject
+      .getState()
+      .flush()
+      .then(() => {
+        if (cancelled) return null
+        return window.api.generate.batchEstimateSheets(projectId, includeStale)
+      })
       .then((res) => {
-        if (!cancelled) setResult(res)
+        if (!cancelled && res) setResult(res)
       })
       .catch((err) => {
         if (!cancelled) setError(errorText(err))
@@ -59,6 +69,7 @@ export function BatchEstimateSheetModal({
     if (!result?.canRun) return
     setStarting(true)
     try {
+      await useProject.getState().flush()
       await window.api.generate.missingSheets(projectId, includeStale)
       toast('info', `Memulai pembuatan ${result.totalItems} lembar Lorebook…`)
       onStarted()
@@ -76,14 +87,32 @@ export function BatchEstimateSheetModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Buat Lembar Lorebook (Batch)"
+      title="Buat Lembar Lorebook"
       subtitle="Perkiraan biaya dan validasi syarat sebelum generate massal"
       width={520}
+      footer={
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="secondary" size="sm" onClick={onClose} disabled={starting}>
+            Batal
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<Sparkles className="size-3.5" />}
+            loading={starting}
+            disabled={loading || !result?.canRun || result.totalItems === 0}
+            onClick={() => void handleStart()}
+          >
+            {starting ? 'Memulai…' : `Mulai buat ${result?.totalItems ?? 0} lembar`}
+          </Button>
+        </div>
+      }
     >
       <div className="flex flex-col gap-4">
         {loading ? (
-          <div className="flex items-center justify-center py-10 text-sm text-muted">
-            Menghitung perkiraan kredit dan memeriksa status lembar…
+          <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted">
+            <Spinner className="size-4" />
+            <span>Menghitung perkiraan kredit dan memeriksa status lembar…</span>
           </div>
         ) : error ? (
           <div className="rounded-xl border border-bad bg-bad-soft p-4 text-xs text-bad-ink">
@@ -145,7 +174,7 @@ export function BatchEstimateSheetModal({
                   Perbaiki aset yang terblokir sebelum memulai proses.
                 </p>
 
-                <div className="mt-1 flex max-h-48 flex-col gap-1.5 overflow-y-auto pr-1">
+                <div className="scroll-thin mt-1 flex max-h-48 flex-col gap-1.5 overflow-y-auto pr-1">
                   {blockedItems.map((it) => (
                     <div
                       key={it.id}
@@ -178,24 +207,6 @@ export function BatchEstimateSheetModal({
                 </span>
               </div>
             )}
-
-            {/* Actions */}
-            <div className="flex items-center justify-end gap-2 border-t border-line pt-3">
-              <Button variant="secondary" size="sm" onClick={onClose}>
-                Batal
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                icon={<Sparkles className="size-3.5" />}
-                disabled={!result.canRun || starting}
-                onClick={() => void handleStart()}
-              >
-                {starting
-                  ? 'Memulai…'
-                  : `Mulai buat ${result.totalItems} lembar`}
-              </Button>
-            </div>
           </>
         ) : null}
       </div>

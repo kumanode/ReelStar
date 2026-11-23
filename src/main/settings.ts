@@ -130,10 +130,13 @@ export function getSettings(): AppSettings {
           out.providers[role].activeId = rawProviders[role]!.activeId
         }
         if (rawProviders[role]?.models && typeof rawProviders[role]!.models === 'object') {
-          out.providers[role].models = {
-            ...out.providers[role].models,
-            ...rawProviders[role]!.models
+          const merged = { ...out.providers[role].models }
+          for (const [pId, pModels] of Object.entries(rawProviders[role]!.models!)) {
+            if (pModels && typeof pModels === 'object') {
+              merged[pId] = { ...(merged[pId] || {}), ...pModels }
+            }
           }
+          out.providers[role].models = merged
         }
       }
     }

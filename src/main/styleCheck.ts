@@ -35,7 +35,7 @@ export function checkChapterStyle(text: string, style: StoryStyleId | undefined,
     issues.push({ problem: `${longSentences.length} kalimat melewati ${limits.maxSentenceWords} kata.`, instruction: `Pecah atau tulis ulang kalimat yang terlalu panjang. Jaga setiap kalimat sekitar ${limits.maxSentenceWords} kata atau kurang dan tetap satu kalimat per baris.` })
   }
 
-  const topic = new Set(context.topicWords ?? [])
+  const topic = new Set((context.topicWords ?? []).map((w) => w.toLocaleLowerCase()))
   const words = clean.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
   // The limit is per ~150 spoken words, so long chapters are not punished for their length.
   const repeatLimit = limits.maxRepeatedWord * Math.max(1, Math.round(words.length / 150))

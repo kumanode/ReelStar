@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   AlertCircle,
@@ -31,7 +31,7 @@ function getKindIcon(kind: JobKind) {
     case 'video':
       return <Film className="size-4 text-accent" />
     case 'image':
-      return <Image className="size-4 text-sun" />
+      return <Image className="size-4 text-sun-ink" />
     case 'tts':
     case 'narration':
     case 'align':
@@ -130,6 +130,13 @@ export function TaskCenterModal({ open, onClose }: TaskCenterModalProps) {
 
   const activeCount = runningCount + queuedCount
 
+  useEffect(() => {
+    if (!open) return
+    if (activeCount > 0) setFilterTab('active')
+    else if (failedCount > 0) setFilterTab('failed')
+    else setFilterTab('all')
+  }, [open])
+
   // Filtered list
   const filteredJobs = useMemo(() => {
     switch (filterTab) {
@@ -187,6 +194,12 @@ export function TaskCenterModal({ open, onClose }: TaskCenterModalProps) {
         await window.api.generate.clipVideo(job.clipId)
       } else if (job.kind === 'tts' && job.clipId) {
         await window.api.generate.clipTts(job.clipId)
+      } else if (job.derivativeId) {
+        await window.api.lorebook.generateDerivativeSheet(job.derivativeId)
+      } else if (job.locationId) {
+        await window.api.lorebook.generateLocationSheet(job.locationId)
+      } else if (job.propId) {
+        await window.api.lorebook.generatePropSheet(job.propId)
       } else if (job.kind === 'sheet' && job.characterId) {
         await window.api.generate.characterSheet(job.characterId)
       } else {
@@ -210,7 +223,7 @@ export function TaskCenterModal({ open, onClose }: TaskCenterModalProps) {
       setActiveView('episode')
       setActiveTab('production')
       select(job.clipId)
-    } else if (job.characterId) {
+    } else if (job.characterId || job.derivativeId || job.locationId || job.propId) {
       setActiveView('lorebook')
     } else if (job.episodeId) {
       await switchEpisode(job.episodeId)
@@ -222,7 +235,7 @@ export function TaskCenterModal({ open, onClose }: TaskCenterModalProps) {
     <Modal
       open={open}
       onClose={onClose}
-      title="Pusat Tugas (Task Center)"
+      title="Pusat Tugas"
       subtitle="Pantau proses AI di latar belakang, batalkan tugas berjalan, atau coba ulang tugas yang gagal."
       width={740}
     >
@@ -231,7 +244,7 @@ export function TaskCenterModal({ open, onClose }: TaskCenterModalProps) {
         <div className="grid grid-cols-4 gap-2 border-b border-line pb-3">
           <div className="flex flex-col rounded-xl border border-line-2/70 bg-paper p-2.5">
             <span className="text-[11px] text-muted">Berjalan</span>
-            <span className="font-display text-base font-bold text-accent">
+            <span className="font-display text-base font-bold text-accent-ink">
               {runningCount}
             </span>
           </div>
@@ -283,7 +296,7 @@ export function TaskCenterModal({ open, onClose }: TaskCenterModalProps) {
         </div>
 
         {/* Job List */}
-        <div className="max-h-[50vh] overflow-y-auto space-y-2.5 pr-1">
+        <div className="scroll-thin max-h-[50vh] space-y-2.5 overflow-y-auto pr-1">
           {filteredJobs.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 py-12 text-center text-xs text-muted">
               <Clock className="size-8 text-line-2" />
@@ -295,8 +308,18 @@ export function TaskCenterModal({ open, onClose }: TaskCenterModalProps) {
               const clip = job.clipId ? clips.find((c) => c.id === job.clipId) : null
               const char = job.characterId ? characters.find((c) => c.id === job.characterId) : null
 
-              const canRetry = (job.status === 'failed' || job.status === 'canceled') && Boolean(job.clipId || job.characterId)
-              const canJump = Boolean(job.clipId || job.characterId || job.episodeId)
+              const canRetry =
+                (job.status === 'failed' || job.status === 'canceled') &&
+                Boolean(
+                  job.clipId ||
+                    job.derivativeId ||
+                    job.locationId ||
+                    job.propId ||
+                    (job.kind === 'sheet' && job.characterId)
+                )
+              const canJump = Boolean(
+                job.clipId || job.characterId || job.derivativeId || job.locationId || job.propId || job.episodeId
+              )
 
               return (
                 <div
@@ -311,17 +334,17 @@ export function TaskCenterModal({ open, onClose }: TaskCenterModalProps) {
                   )}
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-2.5">
+                    <div className="flex min-w-0 flex-1 items-center gap-2.5">
                       <div className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-line bg-paper">
                         {getKindIcon(job.kind)}
                       </div>
-                      <div>
-                        <div className="flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className="font-semibold text-ink">{getKindLabel(job.kind)}</span>
-                          <span className="text-[11px] text-muted">({job.provider})</span>
+                          <span className="truncate text-[11px] text-muted">({job.provider})</span>
                         </div>
                         {/* Target Context */}
-                        <div className="flex items-center gap-1.5 text-[11px] text-muted mt-0.5">
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 break-words text-[11px] text-muted">
                           {ep && <span>Ep {ep.episodeNum}</span>}
                           {clip && <span>· Shot #{clip.sort + 1}</span>}
                           {char && <span>· Tokoh: {char.name}</span>}
@@ -330,7 +353,7 @@ export function TaskCenterModal({ open, onClose }: TaskCenterModalProps) {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex shrink-0 items-center gap-2">
                       {getStatusBadge(job.status)}
 
                       {isRunning(job) && (

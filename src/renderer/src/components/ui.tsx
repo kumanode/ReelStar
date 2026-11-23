@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { Loader2, X } from 'lucide-react'
 import { create } from 'zustand'
 
@@ -7,16 +7,18 @@ import { Popover } from './Popover'
 
 export { cx }
 
-type Variant = 'primary' | 'secondary' | 'accent' | 'ghost' | 'danger' | 'ink'
+type Variant = 'primary' | 'secondary' | 'accent' | 'ghost' | 'danger' | 'destructive' | 'ink'
 type Size = 'sm' | 'md' | 'lg'
 
 const VARIANTS: Record<Variant, string> = {
   primary:
-    'bg-accent text-white border-[1.5px] border-ink shadow-ink hover:bg-accent-dark active:translate-x-px active:translate-y-px active:shadow-none font-semibold',
+    'bg-accent text-white border-[1.5px] border-ink shadow-ink hover:bg-accent-hover active:translate-x-px active:translate-y-px active:shadow-none font-semibold',
   secondary: 'bg-surface text-ink border border-line-2 hover:border-ink-2 hover:bg-paper font-medium',
-  accent: 'bg-surface text-accent-dark border-[1.5px] border-accent hover:bg-accent-soft font-semibold',
+  accent: 'bg-surface text-accent-ink border-[1.5px] border-accent hover:bg-accent-soft font-semibold',
   ghost: 'bg-transparent text-ink-2 border border-transparent hover:bg-sand hover:text-ink font-medium',
   danger: 'bg-surface text-bad-ink border border-line-2 hover:border-bad-ink hover:bg-bad-soft font-medium',
+  destructive:
+    'bg-[#b42318] text-white border-[1.5px] border-ink shadow-ink hover:bg-[#991b1b] active:translate-x-px active:translate-y-px active:shadow-none font-semibold',
   ink: 'bg-ink text-paper border border-ink hover:bg-ink-2 font-semibold'
 }
 
@@ -154,16 +156,18 @@ export function Badge({ tone = 'draft', children, className, title }: { tone?: T
   )
 }
 
-export function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
+export function Switch({ on, onChange, label, disabled }: { on: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={on}
       aria-label={label}
-      onClick={() => onChange(!on)}
+      aria-disabled={disabled || undefined}
+      disabled={disabled}
+      onClick={() => !disabled && onChange(!on)}
       className={cx(
-        'flex h-7 w-[46px] shrink-0 items-center rounded-full border-[1.5px] border-ink p-[3px] transition-colors',
+        'flex h-7 w-[46px] shrink-0 items-center rounded-full border-[1.5px] border-ink p-[3px] transition-colors disabled:cursor-not-allowed disabled:opacity-50',
         on ? 'justify-end bg-accent' : 'justify-start bg-line'
       )}
     >
@@ -173,7 +177,7 @@ export function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boo
 }
 
 export const inputCls =
-  'w-full rounded-xl border border-line-2 bg-surface px-3.5 text-[15px] text-ink outline-none transition-colors placeholder:text-muted/80 focus:border-ink'
+  'w-full rounded-xl border border-line-2 bg-surface px-3.5 text-[15px] text-ink outline-none transition-colors placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35'
 
 export function Field({ label, hint, children, className }: { label: ReactNode; hint?: ReactNode; children: ReactNode; className?: string }) {
   return (
@@ -209,6 +213,7 @@ export function Modal({
   title,
   subtitle,
   children,
+  footer,
   width = 600
 }: {
   open: boolean
@@ -216,35 +221,83 @@ export function Modal({
   title: ReactNode
   subtitle?: ReactNode
   children: ReactNode
+  footer?: ReactNode
   width?: number
 }) {
+  const titleId = useId()
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const prevFocusRef = useRef<HTMLElement | null>(null)
+
   useEffect(() => {
     if (!open) return
+    prevFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const dialog = dialogRef.current
+    const focusables = (): HTMLElement[] => {
+      if (!dialog) return []
+      return Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      ).filter((el) => el.offsetParent !== null)
+    }
+    if (dialog && !dialog.contains(document.activeElement)) {
+      const first = focusables()[0] ?? dialog
+      first.focus()
+    }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') {
+        onClose()
+        return
+      }
+      if (e.key === 'Tab') {
+        const list = focusables()
+        if (!list.length) return
+        const first = list[0]
+        const last = list[list.length - 1]
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault()
+          last.focus()
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      prevFocusRef.current?.focus()
+    }
   }, [open, onClose])
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[2px] p-6" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[2px] p-4 sm:p-6" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        className="scroll-thin flex max-h-full flex-col gap-5 overflow-y-auto rounded-[20px] border-[1.5px] border-ink bg-surface p-7 shadow-ink-xl"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="flex max-h-full max-w-full flex-col overflow-hidden rounded-[20px] border-[1.5px] border-ink bg-surface shadow-ink-xl outline-none"
         style={{ width }}
       >
-        <div className="flex items-start gap-3">
-          <div className="flex-1">
-            <h2 className="font-display text-[26px] font-bold leading-tight">{title}</h2>
+        <div className="flex shrink-0 items-start gap-3 px-7 pt-6 pb-4">
+          <div className="min-w-0 flex-1">
+            <h2 id={titleId} className="font-display text-[26px] font-bold leading-tight">{title}</h2>
             {subtitle && <p className="mt-1 text-sm text-ink-2">{subtitle}</p>}
           </div>
           <IconButton label="Tutup" onClick={onClose}>
             <X className="size-[18px]" />
           </IconButton>
         </div>
-        {children}
+        <div className="scroll-thin flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-7 pb-6">
+          {children}
+        </div>
+        {footer && (
+          <div className="shrink-0 border-t border-line bg-paper/70 px-7 py-4">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -278,14 +331,21 @@ export function ConfirmHost() {
     set(null)
   }
   return (
-    <Modal open={!!req} onClose={() => close(false)} title={req?.title} width={480}>
+    <Modal
+      open={!!req}
+      onClose={() => close(false)}
+      title={req?.title}
+      width={480}
+      footer={
+        <div className="flex justify-end gap-2.5">
+          <Button onClick={() => close(false)}>{req?.cancel ?? 'Batal'}</Button>
+          <Button variant={req?.danger ? 'destructive' : 'primary'} onClick={() => close(true)} autoFocus={!req?.danger}>
+            {req?.confirm}
+          </Button>
+        </div>
+      }
+    >
       <p className="text-[15px] leading-relaxed text-ink-2">{req?.body}</p>
-      <div className="flex justify-end gap-2.5">
-        <Button onClick={() => close(false)}>{req?.cancel ?? 'Batal'}</Button>
-        <Button variant={req?.danger ? 'ink' : 'primary'} onClick={() => close(true)} autoFocus>
-          {req?.confirm}
-        </Button>
-      </div>
     </Modal>
   )
 }
@@ -293,30 +353,85 @@ export function ConfirmHost() {
 // ---------- popover menu ----------
 
 /** A small action menu. It opens in a floating layer, so cards with hidden overflow cannot cut it off. */
-export function Menu({ trigger, items }: { trigger: (open: () => void) => ReactNode; items: { label: string; icon?: ReactNode; danger?: boolean; run: () => void }[] }) {
+export function Menu({
+  trigger,
+  items
+}: {
+  trigger: (open: () => void, isOpen?: boolean) => ReactNode
+  items: { label: string; icon?: ReactNode; danger?: boolean; disabled?: boolean; run: () => void }[]
+}) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const btn = ref.current?.querySelector<HTMLElement>('button')
+    if (!btn) return
+    btn.setAttribute('aria-haspopup', 'menu')
+    btn.setAttribute('aria-expanded', String(open))
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const id = requestAnimationFrame(() => {
+      menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')?.focus()
+    })
+    return () => cancelAnimationFrame(id)
+  }, [open])
+
+  const onMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return
+    e.preventDefault()
+    const btns = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? [])
+    if (!btns.length) return
+    const idx = btns.indexOf(document.activeElement as HTMLElement)
+    if (e.key === 'Home') btns[0]?.focus()
+    else if (e.key === 'End') btns[btns.length - 1]?.focus()
+    else {
+      const dir = e.key === 'ArrowDown' ? 1 : -1
+      const next = idx < 0 ? 0 : (idx + dir + btns.length) % btns.length
+      btns[next]?.focus()
+    }
+  }
+
   return (
     <div ref={ref} className="relative inline-flex">
-      {trigger(() => setOpen((o) => !o))}
-      <Popover anchor={ref} open={open} onClose={() => setOpen(false)} width={210} align="right" maxHeight={320} className="p-1">
-        {items.map((it) => (
-          <button
-            key={it.label}
-            type="button"
-            onClick={() => {
-              setOpen(false)
-              it.run()
-            }}
-            className={cx(
-              'flex h-10 w-full shrink-0 items-center gap-2.5 rounded-xl px-3 text-left text-sm font-medium hover:bg-sand',
-              it.danger ? 'text-bad-ink' : 'text-ink'
-            )}
-          >
-            {it.icon}
-            {it.label}
-          </button>
-        ))}
+      {trigger(() => setOpen((o) => !o), open)}
+      <Popover
+        anchor={ref}
+        open={open}
+        onClose={(why) => {
+          setOpen(false)
+          if (why === 'escape') ref.current?.querySelector<HTMLElement>('button')?.focus()
+        }}
+        width={210}
+        align="right"
+        maxHeight={320}
+        className="p-1"
+      >
+        <div ref={menuRef} role="menu" onKeyDown={onMenuKeyDown} className="flex flex-col">
+          {items.map((it) => (
+            <button
+              key={it.label}
+              type="button"
+              role="menuitem"
+              disabled={it.disabled}
+              onClick={(e) => {
+                e.stopPropagation()
+                if (it.disabled) return
+                setOpen(false)
+                it.run()
+              }}
+              className={cx(
+                'flex h-10 w-full shrink-0 items-center gap-2.5 rounded-xl px-3 text-left text-sm font-medium hover:bg-sand disabled:cursor-not-allowed disabled:opacity-45',
+                it.danger ? 'text-bad-ink' : 'text-ink'
+              )}
+            >
+              {it.icon}
+              {it.label}
+            </button>
+          ))}
+        </div>
       </Popover>
     </div>
   )

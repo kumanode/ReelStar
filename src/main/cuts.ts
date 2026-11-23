@@ -7,14 +7,16 @@
 export function chooseCuts(total: number, weights: number[], silences: { start: number; end: number }[], known?: number[]): number[] {
   const n = weights.length
   if (n < 2) return []
-  const sum = weights.reduce((a, b) => a + b, 0) || n
+  // Normalize zero/negative weights up front so sum and cumulative acc use the same floor and expected[k] < total.
+  const w = weights.map((x) => Math.max(1, x))
+  const sum = w.reduce((a, b) => a + b, 0)
   // Where each cut should be: from word timings when known, else from each scene's share of the text.
   const expected: number[] = []
   if (known && known.length === n - 1) expected.push(...known)
   else {
     let acc = 0
     for (let k = 0; k < n - 1; k++) {
-      acc += weights[k] || 1
+      acc += w[k]
       expected.push((total * acc) / sum)
     }
   }
@@ -58,10 +60,10 @@ export function chooseCuts(total: number, weights: number[], silences: { start: 
  * between one scene's last word and the next scene's first word (a little slack, since a word's end can
  * run into the pause), or in the middle of that gap when no pause is found. Never inside a word.
  */
-export function cutsFromWords(gaps: { end: number; start: number }[], silences: { start: number; end: number }[]): number[] {
+export function cutsFromWords(gaps: { end: number; start: number }[], silences: { start: number; end: number }[], total: number): number[] {
   const slack = 0.3
   let prev = 0
-  return gaps.map(({ end, start }) => {
+  return gaps.map(({ end, start }, idx) => {
     const lo = Math.min(end, start)
     const hi = Math.max(end, start)
     let best: { from: number; to: number } | null = null
@@ -70,7 +72,14 @@ export function cutsFromWords(gaps: { end: number; start: number }[], silences: 
       const to = Math.min(s.end, hi + slack)
       if (to > from && (!best || to - from > best.to - best.from)) best = { from, to }
     }
-    const cut = Math.max(prev, best ? (best.from + best.to) / 2 : (lo + hi) / 2)
+    // Clamp the pause midpoint inside [lo, hi] so slack never slices into an adjacent spoken word.
+    const raw = best ? Math.min(hi, Math.max(lo, (best.from + best.to) / 2)) : (lo + hi) / 2
+    const minCut = prev + 0.05
+    const maxCut = total - 0.05 * (gaps.length - idx)
+    const cut =
+      minCut <= maxCut
+        ? Math.min(maxCut, Math.max(minCut, raw))
+        : prev + (total - prev) / (gaps.length - idx + 1)
     prev = cut
     return cut
   })

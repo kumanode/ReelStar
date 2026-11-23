@@ -1,3 +1,4 @@
+import { parseGenderText } from '@shared/models'
 import { isTagToken, toElevenLabsText } from '@shared/speech'
 import type { KeyTestResult, ModelOption, VoiceOption, WordTiming } from '@shared/types'
 import { getSecret, requireSecret } from '../secrets'
@@ -78,7 +79,14 @@ export async function listVoices(): Promise<VoiceOption[]> {
     }>(`/v2/voices?${q}`)
     for (const v of r.voices) {
       const labels = Object.values(v.labels ?? {}).filter(Boolean).slice(0, 3).join(', ')
-      out.push({ id: v.voice_id, name: v.name, description: labels || v.category || '', previewUrl: v.preview_url ?? null })
+      const parsedGender = parseGenderText(v.labels?.gender)
+      out.push({
+        id: v.voice_id,
+        name: v.name,
+        description: labels || v.category || '',
+        previewUrl: v.preview_url ?? null,
+        gender: parsedGender === 'unknown' ? undefined : parsedGender
+      })
     }
     if (!r.has_more || !r.next_page_token) break
     token = r.next_page_token
@@ -127,10 +135,40 @@ interface Alignment {
 function toWords(a: Alignment): WordTiming[] {
   const out: WordTiming[] = []
   let cur: WordTiming | null = null
-  a.characters.forEach((ch, i) => {
-    if (/\s/.test(ch)) {
-      if (cur) out.push(cur)
+  let squareDepth = 0
+  let angleDepth = 0
+  const flush = (): void => {
+    if (cur) {
+      out.push(cur)
       cur = null
+    }
+  }
+  a.characters.forEach((ch, i) => {
+    // Track [tag] and <break .../> nesting so multi-word tags (including interior spaces) never leak into captions.
+    if (ch === '[' && (squareDepth > 0 || a.characters.indexOf(']', i + 1) !== -1)) {
+      flush()
+      squareDepth++
+      return
+    }
+    if (ch === ']') {
+      if (squareDepth > 0) squareDepth--
+      else flush()
+      return
+    }
+    if (ch === '<' && (angleDepth > 0 || a.characters.indexOf('>', i + 1) !== -1)) {
+      flush()
+      angleDepth++
+      return
+    }
+    if (ch === '>') {
+      if (angleDepth > 0) angleDepth--
+      else flush()
+      return
+    }
+    if (squareDepth > 0 || angleDepth > 0) return
+
+    if (/\s/.test(ch)) {
+      flush()
       return
     }
     const s = a.character_start_times_seconds[i]
@@ -141,7 +179,7 @@ function toWords(a: Alignment): WordTiming[] {
       cur.end = e
     }
   })
-  if (cur) out.push(cur)
+  flush()
   // Audio tags and <break> markup show up as characters but are not spoken words.
   return out.filter((w) => !isTagToken(w.text))
 }

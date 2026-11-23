@@ -1,4 +1,4 @@
-import type { LlmProvider } from './types'
+import type { Character, Clip, LlmProvider, Project } from './types'
 
 export const LLM_PROVIDERS: { id: LlmProvider; name: string; note: string; link: string | null; linkLabel: string }[] = [
   {
@@ -126,6 +126,17 @@ export function geminiVoiceGender(id: string): 'female' | 'male' | undefined {
   return undefined
 }
 
+/** Parses an explicit gender label (e.g. from Lorebook profile.visual.gender or ElevenLabs labels.gender). */
+export function parseGenderText(raw?: string | null): 'female' | 'male' | 'unknown' {
+  const text = (raw ?? '').trim().toLowerCase()
+  if (!text) return 'unknown'
+  if (/^(f|p|female|perempuan|wanita|cewek|woman|girl)$/i.test(text)) return 'female'
+  if (/^(m|l|male|laki-?laki|laki|pria|cowok|man|boy)$/i.test(text)) return 'male'
+  if (/\b(perempuan|wanita|female|woman|girl|cewek)\b/i.test(text)) return 'female'
+  if (/\b(laki-?laki|pria|male|man|boy|cowok)\b/i.test(text)) return 'male'
+  return 'unknown'
+}
+
 /**
  * Guesses a character's gender from their name and their own description. Only pass text about that
  * character: a scene note that mentions someone else ("Budi hugs his mother") would skew the guess.
@@ -133,17 +144,90 @@ export function geminiVoiceGender(id: string): 'female' | 'male' | undefined {
  */
 export function detectGender(name: string, description = ''): 'female' | 'male' | 'unknown' {
   const text = `${name} ${description}`.toLowerCase()
-  const femaleMatches = text.match(/\b(female|woman|women|girl|mother|mom|sister|daughter|lady|queen|princess|witch|waitress|actress|heroine|perempuan|wanita|gadis|ibu|mama|putri|ratu|nenek|tante|mbak|nyonya|saudari)\b/g) || []
-  const maleMatches = text.match(/\b(male|man|men|boy|father|dad|brother|son|lord|king|prince|wizard|actor|hero|laki-laki|pria|cowok|ayah|bapak|papa|pangeran|raja|kakek|paman|om|mas|tuan)\b/g) || []
+  const femaleMatches =
+    text.match(
+      /\b(female|woman|women|girl|mother|mom|sister|daughter|wife|lady|queen|princess|witch|waitress|actress|heroine|perempuan|wanita|cewek|gadis|ibu|bunda|mama|istri|janda|putri|ratu|nenek|oma|tante|mbak|teh|nyonya|nona|saudari)\b/g
+    ) || []
+  const maleMatches =
+    text.match(
+      /\b(male|man|men|boy|father|dad|brother|son|husband|lord|king|prince|wizard|actor|hero|laki-?laki|pria|cowok|ayah|bapak|papa|suami|duda|pangeran|raja|kakek|opa|paman|om|mas|bang|kang|tuan)\b/g
+    ) || []
 
   if (femaleMatches.length > maleMatches.length) return 'female'
   if (maleMatches.length > femaleMatches.length) return 'male'
 
   const trimmed = name.trim().toLowerCase()
-  if (/^(ibu|bu|mbak|ny\.|mama|tante)\b/.test(trimmed)) return 'female'
-  if (/^(pak|bapak|mas|om|tn\.|papa|bang)\b/.test(trimmed)) return 'male'
+  if (/^(ibu|bu|bunda|mbak|teh|ny\.|nona|mama|tante|oma)\b/.test(trimmed)) return 'female'
+  if (/^(pak|bapak|mas|kang|om|tn\.|tuan|papa|bang|opa)\b/.test(trimmed)) return 'male'
 
   return 'unknown'
+}
+
+/**
+ * Detects a Lorebook character's gender, preferring their explicit `profile.visual.gender` before falling
+ * back to name, aliases, and description clues.
+ */
+export function detectCharacterGender(
+  c: Pick<Character, 'name' | 'description' | 'profile'> & { aliases?: string[] }
+): 'female' | 'male' | 'unknown' {
+  const fromProfile = parseGenderText(c.profile?.visual?.gender)
+  if (fromProfile !== 'unknown') return fromProfile
+  const extra = [
+    c.description,
+    ...(c.aliases ?? []),
+    c.profile?.visual?.face,
+    c.profile?.visual?.hair,
+    c.profile?.visual?.body,
+    c.profile?.visual?.defaultOutfit,
+    c.profile?.narrative?.role
+  ]
+    .filter(Boolean)
+    .join(' ')
+  return detectGender(c.name, extra)
+}
+
+/**
+ * Resolves the TTS voice for a clip (shared by narration, single-clip TTS, and audio basis-hash validation):
+ * 1. Explicit character voice matching the active TTS provider.
+ * 2. When using Gemini and the speaker has no manual voice yet, deterministically picks a female or male
+ *    Gemini voice based on the character's detected gender (avoiding the narrator and other cast voices).
+ * 3. Falls back to the project's narrator voice.
+ */
+export function resolveClipTtsVoice(
+  clip: Pick<Clip, 'speakerId'>,
+  characters: Pick<Character, 'id' | 'name' | 'description' | 'aliases' | 'profile' | 'ttsVoice' | 'ttsProvider' | 'sort'>[],
+  project: Pick<Project, 'ttsProvider' | 'ttsVoice'>
+): string {
+  const defaultVoice = project.ttsVoice || (project.ttsProvider === 'gemini' ? 'Charon' : '')
+  if (!clip.speakerId) return defaultVoice
+  const char = characters.find((c) => c.id === clip.speakerId)
+  if (!char) return defaultVoice
+  if (char.ttsVoice && char.ttsProvider === project.ttsProvider) return char.ttsVoice
+
+  if (project.ttsProvider === 'gemini') {
+    const gender = detectCharacterGender(char)
+    if (gender === 'female' || gender === 'male') {
+      const pool = gender === 'female' ? FEMALE_GEMINI_VOICES : MALE_GEMINI_VOICES
+      const used = new Set<string>([defaultVoice])
+      for (const other of characters) {
+        if (other.id !== char.id && other.ttsVoice && other.ttsProvider === 'gemini') used.add(other.ttsVoice)
+      }
+      // Assign deterministically in cast order so two same-gender characters without manual voices stay distinct.
+      const sameGenderAuto = characters
+        .filter(
+          (other) =>
+            !(other.ttsVoice && other.ttsProvider === 'gemini') && detectCharacterGender(other) === gender
+        )
+        .sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || a.id.localeCompare(b.id))
+      const available = pool.filter((v) => !used.has(v))
+      const pickPool = available.length ? available : pool.filter((v) => v !== defaultVoice)
+      const list = pickPool.length ? pickPool : pool
+      const idx = Math.max(0, sameGenderAuto.findIndex((other) => other.id === char.id))
+      return list[idx % list.length]
+    }
+  }
+
+  return defaultVoice
 }
 
 /** The 30 classic prebuilt voices. */

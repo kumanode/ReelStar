@@ -28,12 +28,16 @@ export function tagPauseSec(text: string): number {
  * <break> pauses, so other tags are dropped there.
  */
 export function toElevenLabsText(text: string, model: string): string {
-  if (/v3/i.test(model)) return text.replace(/<([^<>]{1,40})>/g, '[$1]')
+  // Pad replacements with spaces so tags touching words never merge into the word token during alignment.
+  if (/v3/i.test(model)) {
+    return text.replace(/<([^<>]{1,40})>/g, ' [$1] ').replace(/\s{2,}/g, ' ').trim()
+  }
   return text
-    .replace(/<short pause>/gi, '<break time="0.4s" />')
-    .replace(/<long pause>/gi, '<break time="1.0s" />')
+    .replace(/<short pause>/gi, ' <break time="0.4s" /> ')
+    .replace(/<long pause>/gi, ' <break time="1.0s" /> ')
     .replace(/<(?!break\b)[^<>]{1,40}>/gi, ' ')
     .replace(/\s{2,}/g, ' ')
+    .trim()
 }
 
 /** True for word tokens that are only tag syntax (e.g. "[laughs]" or parts of a <break> tag). */

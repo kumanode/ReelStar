@@ -7,8 +7,9 @@ import type { AppSettings, CreditEstimate, ModelOption, Project } from '@shared/
 import { ModelLogo } from '../../components/ModelLogo'
 import { ModelPicker } from '../../components/ModelPicker'
 import { Segmented, Spinner } from '../../components/ui'
-import { creditLabel } from '../../lib/format'
+import { creditLabel, errorText } from '../../lib/format'
 import { useEstimate, useEstimates } from '../../lib/useEstimate'
+import { useApp } from '../../store/app'
 
 const IMAGE_OPTIONS = hfModelOptions('image')
 const VIDEO_OPTIONS = hfModelOptions('video')
@@ -80,6 +81,17 @@ export function ModelSection({
   const videoCost = useEstimate('video', video.id, project.aspectRatio, perClip, resolution)
   const [hasKey, setHasKey] = useState<boolean | null>(null)
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null)
+  const { toast } = useApp()
+
+  const saveAppSetting = async (patch: Parameters<typeof window.api.settings.set>[0]): Promise<boolean> => {
+    try {
+      setAppSettings(await window.api.settings.set(patch))
+      return true
+    } catch (e) {
+      toast('error', errorText(e))
+      return false
+    }
+  }
 
   useEffect(() => {
     void window.api.settings.keys().then((keys) => setHasKey(!!keys.find((k) => k.provider === 'higgsfield')?.configured))
@@ -118,10 +130,9 @@ export function ModelSection({
               renderIcon={(m) => <ModelLogo family={m.family} />}
               detail="description"
               tagFilters={['Rekomendasi', 'Cepat', 'Nano Banana', 'Fotorealistik']}
-              menuClassName="w-[430px]"
+              menuClassName="w-[430px] max-w-[calc(100vw-2rem)]"
               onChange={async (id) => {
-                setAppSettings(await window.api.settings.set({ flow2apiImageModel: id }))
-                onChange({ imageModel: id })
+                if (await saveAppSetting({ flow2apiImageModel: id })) onChange({ imageModel: id })
               }}
             />
             <p className="text-[12.5px] leading-snug text-ink-2">
@@ -140,10 +151,9 @@ export function ModelSection({
               detail="description"
               tagFilters={['Rekomendasi', 'Terbaru', 'Cepat', 'Multi-Ref', 'Gambar ke Video', 'Teks ke Video']}
               align="right"
-              menuClassName="w-[430px]"
+              menuClassName="w-[430px] max-w-[calc(100vw-2rem)]"
               onChange={async (id) => {
-                setAppSettings(await window.api.settings.set({ flow2apiVideoModel: id }))
-                onChange({ videoModel: id })
+                if (await saveAppSetting({ flow2apiVideoModel: id })) onChange({ videoModel: id })
               }}
             />
             <p className="text-[12.5px] leading-snug text-ink-2">
@@ -176,7 +186,7 @@ export function ModelSection({
             renderIcon={(m) => <ModelLogo family={m.family} />}
             detail="description"
             tagFilters={['Rekomendasi', 'Referensi', 'GPT Image', 'Soul', 'Recraft', '4K']}
-            menuClassName="w-[430px]"
+            menuClassName="w-[430px] max-w-[calc(100vw-2rem)]"
             onChange={(id) => onChange({ imageModel: id })}
           />
           <div className="flex items-center gap-2.5">
@@ -184,12 +194,12 @@ export function ModelSection({
             <Segmented
               size="sm"
               value={appSettings?.imageGenerationMode ?? 'final'}
-              onChange={async (mode) => setAppSettings(await window.api.settings.set({ imageGenerationMode: mode as 'draft' | 'final' }))}
-              options={[{ id: 'draft', label: 'Draft' }, { id: 'final', label: 'Final' }]}
+              onChange={(mode) => void saveAppSetting({ imageGenerationMode: mode as 'draft' | 'final' })}
+              options={[{ id: 'draft', label: 'Draf' }, { id: 'final', label: 'Final' }]}
               className="min-w-0 flex-1"
             />
           </div>
-          <p className="text-[12.5px] leading-snug text-muted">Draft memakai resolusi terendah yang didukung model; Final memakai resolusi penuh bawaan model.</p>
+          <p className="text-[12.5px] leading-snug text-muted">Draf memakai resolusi terendah yang didukung model; Final memakai resolusi penuh bawaan model.</p>
           <p className="text-[12.5px] leading-snug text-ink-2">
             <Cost value={imageCost} hasKey={hasKey}>
               {(c) => (
@@ -215,7 +225,7 @@ export function ModelSection({
             detail="description"
             tagFilters={['Rekomendasi', 'Kling', 'Seedance', 'Wan', 'Referensi', '4K']}
             align="right"
-            menuClassName="w-[430px]"
+            menuClassName="w-[430px] max-w-[calc(100vw-2rem)]"
             onChange={(id) => onChange({ videoModel: id })}
           />
           {resolutions.length > 1 ? (

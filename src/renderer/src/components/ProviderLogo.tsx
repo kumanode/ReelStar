@@ -17,7 +17,7 @@ const LOOK: Record<ProviderLogoId, { bg: string; src?: string; inset: number }> 
   elevenlabs: { bg: '#000000', src: 'elevenlabs.svg', inset: 0.28 },
   higgsfield: { bg: '#D1FE17', src: 'higgsfield.png', inset: 0 },
   flow2api: { bg: '#000000', src: 'flow2api.webp', inset: 0 },
-  custom: { bg: '#F3EFE8', inset: 0.24 }
+  custom: { bg: 'var(--color-sand)', inset: 0.24 }
 }
 
 export function ProviderLogo({ id, size = 40, className }: { id: ProviderLogoId; size?: number; className?: string }) {

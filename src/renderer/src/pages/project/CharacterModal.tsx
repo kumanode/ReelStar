@@ -28,7 +28,7 @@ export function CharacterModal({
 }
 
 const LOOK_HINT =
-  'Tulis ciri tubuh dulu, lalu "Default outfit:" untuk baju bawaan di lembar karakter. Baju bisa diganti per adegan lewat baris Wardrobe di prompt visual. Contoh: human man, 40s, short black hair, warm brown skin. Default outfit: light-blue colony medical scrubs, stethoscope.'
+  'Tulis ciri tubuh dulu, lalu "Pakaian bawaan:" untuk kostum standar di lembar karakter. Kostum bisa diganti per adegan lewat prompt visual. Contoh: pria 40-an, rambut hitam pendek, kulit sawo matang. Pakaian bawaan: baju medis biru muda dan stetoskop.'
 
 function NewCharacter({ onClose, onCreated }: { onClose: () => void; onCreated?: (id: string) => void }) {
   const { project: rawProject, addCharacter } = useProject()
@@ -64,7 +64,21 @@ function NewCharacter({ onClose, onCreated }: { onClose: () => void; onCreated?:
   }
 
   return (
-    <Modal open onClose={() => void close()} title="Pemeran baru" subtitle="Isi nama dan penampilannya, lalu simpan. Lembar karakter bisa dibuat setelah itu." width={760}>
+    <Modal
+      open
+      onClose={() => void close()}
+      title="Pemeran baru"
+      subtitle="Isi nama dan penampilannya, lalu simpan. Lembar karakter bisa dibuat setelah itu."
+      width={760}
+      footer={
+        <div className="flex items-center justify-end gap-2.5">
+          <Button onClick={onClose}>Batal</Button>
+          <Button variant="primary" disabled={!name.trim()} onClick={save}>
+            Simpan pemeran
+          </Button>
+        </div>
+      }
+    >
       <div className="flex h-[150px] flex-col items-center justify-center gap-2 rounded-xl border-[1.5px] border-dashed border-line-3 bg-paper text-sm text-ink-2">
         <UserPlus className="size-6 text-muted" />
         Lembar karakter dibuat setelah pemeran disimpan.
@@ -90,9 +104,9 @@ function NewCharacter({ onClose, onCreated }: { onClose: () => void; onCreated?:
             value={ttsVoice}
             onChange={(v) => setTtsVoice(v)}
             options={[
-              { value: '', label: `Bawaan narator (${project?.ttsVoice || 'Utama'})` },
+              { value: '', label: `Otomatis sesuai kelamin / narator (${project?.ttsVoice || 'Utama'})` },
               ...voices.map((v) => {
-                const gen = geminiVoiceGender(v.id)
+                const gen = v.gender ?? geminiVoiceGender(v.id)
                 const genTag = gen === 'female' ? 'Perempuan' : gen === 'male' ? 'Laki-laki' : ''
                 return {
                   value: v.id,
@@ -103,12 +117,6 @@ function NewCharacter({ onClose, onCreated }: { onClose: () => void; onCreated?:
             ]}
           />
         </Field>
-      </div>
-      <div className="flex items-center justify-end gap-2.5">
-        <Button onClick={onClose}>Batal</Button>
-        <Button variant="primary" disabled={!name.trim()} onClick={save}>
-          Simpan pemeran
-        </Button>
       </div>
     </Modal>
   )
@@ -134,6 +142,7 @@ function EditCharacter({ characterId, onClose }: { characterId: string | null; o
   const usedIn = clips.filter((cl) => cl.characterIds.includes(c.id)).length
 
   const generate = async (): Promise<void> => {
+    if (running) return
     try {
       await flush()
       await window.api.generate.characterSheet(c.id)
@@ -155,8 +164,30 @@ function EditCharacter({ characterId, onClose }: { characterId: string | null; o
   }
 
   return (
-    <Modal open onClose={onClose} title="Lembar karakter" subtitle={`Dipakai di ${usedIn} klip sebagai referensi supaya tampilannya konsisten.`} width={760}>
-      <div className="relative aspect-video overflow-hidden rounded-xl border-[1.5px] border-ink bg-paper">
+    <Modal
+      open
+      onClose={onClose}
+      title="Lembar karakter"
+      subtitle={`Dipakai di ${usedIn} klip sebagai referensi supaya tampilannya konsisten.`}
+      width={760}
+      footer={
+        <div className="flex items-center gap-2.5">
+          <Button variant="danger" icon={<Trash2 className="size-4" />} onClick={() => void remove()}>
+            Hapus pemeran
+          </Button>
+          <div className="flex-1" />
+          {sheet && (
+            <Button icon={<RefreshCw className="size-4" />} loading={running} onClick={() => void generate()}>
+              Buat ulang lembar
+            </Button>
+          )}
+          <Button variant="ink" onClick={onClose}>
+            Selesai
+          </Button>
+        </div>
+      }
+    >
+      <div className="relative mx-auto aspect-video max-h-[240px] w-full overflow-hidden rounded-xl border-[1.5px] border-ink bg-paper">
         {sheet ? (
           <img src={sheet.url} alt={`Lembar karakter ${c.name}`} className="size-full object-contain" />
         ) : running ? null : (
@@ -202,9 +233,9 @@ function EditCharacter({ characterId, onClose }: { characterId: string | null; o
             value={c.ttsVoice || ''}
             onChange={(v) => updateCharacter(c.id, { ttsVoice: v || null, ttsProvider: v ? project?.ttsProvider ?? null : null })}
             options={[
-              { value: '', label: `Ikuti narator proyek (${project?.ttsVoice || 'Bawaan'})` },
+              { value: '', label: `Otomatis sesuai kelamin / narator (${project?.ttsVoice || 'Bawaan'})` },
               ...voices.map((v) => {
-                const gen = geminiVoiceGender(v.id)
+                const gen = v.gender ?? geminiVoiceGender(v.id)
                 const genTag = gen === 'female' ? 'Perempuan' : gen === 'male' ? 'Laki-laki' : ''
                 return {
                   value: v.id,
@@ -218,20 +249,6 @@ function EditCharacter({ characterId, onClose }: { characterId: string | null; o
         {c.ttsVoice && c.ttsProvider && c.ttsProvider !== project?.ttsProvider && (
           <p className="mt-2 text-xs text-sun-ink">Suara ini dibuat untuk {c.ttsProvider}. Penyedia suara aktif sekarang {project?.ttsProvider}, jadi narator akan dipakai sampai kamu memilih suara yang cocok.</p>
         )}
-      </div>
-      <div className="flex items-center gap-2.5">
-        <Button variant="danger" icon={<Trash2 className="size-4" />} onClick={() => void remove()}>
-          Hapus pemeran
-        </Button>
-        <div className="flex-1" />
-        {sheet && (
-          <Button icon={<RefreshCw className="size-4" />} loading={running} onClick={() => void generate()}>
-            Buat ulang lembar
-          </Button>
-        )}
-        <Button variant="ink" onClick={onClose}>
-          Selesai
-        </Button>
       </div>
     </Modal>
   )

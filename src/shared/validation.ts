@@ -1,6 +1,6 @@
-import { FLOW2API_VIDEO_MODELS, getFlow2ApiModel } from './flow2api-catalog'
+import { FLOW2API_IMAGE_MODELS, FLOW2API_VIDEO_MODELS, getFlow2ApiModel } from './flow2api-catalog'
 import { getImageModel, getVideoModel, maxRefs, modelSupportsNativeAudio } from './higgsfield'
-import { collectReferenceSheets, findSceneAnchorForClip } from './prompts'
+import { collectReferenceSheets, findSceneAnchorForClip, hasReferenceOverride } from './prompts'
 import {
   computeClipImageBasisHash,
   computeClipVideoBasisHash,
@@ -10,7 +10,9 @@ import {
   computeLocationSheetBasisHash,
   computePropSheetBasisHash
 } from './hash'
-import { estimateNarrationMs, isNarratorName } from './script'
+import { estimateNarrationMs, isDefaultCostume, isNarratorName } from './script'
+import { resolveClipTtsVoice } from './models'
+import { spokenWords, tagPauseSec } from './speech'
 import type {
   Asset,
   Character,
@@ -81,6 +83,8 @@ export interface GenerationPrerequisitesContext {
   activeImageModel?: string
   activeVideoModel?: string
   lockWords?: LockWord[]
+  /** Clip IDs being generated in the same video batch, so chained `continueFromPrevious` clips are not blocked. */
+  queuedClipIds?: Set<string>
 }
 
 export interface PrerequisitesCheckResult {
@@ -111,12 +115,30 @@ function findAsset(assets: Asset[] | Record<string, Asset>, id: string | null | 
   return assets[id] ?? null
 }
 
+function normalizeFlow2ApiModel(id: string | null | undefined, kind: 'image' | 'video'): string | null {
+  const clean = (id ?? '')
+    .trim()
+    .replace(/-\d+s-(landscape|portrait)$/, '')
+    .replace(/-(landscape|portrait)$/, '')
+  if (!clean) return null
+  const catalog = kind === 'image' ? FLOW2API_IMAGE_MODELS : FLOW2API_VIDEO_MODELS
+  return catalog.find((m) => m.id === clean)?.id ?? null
+}
+
 function effectiveImageModelId(projectModel: string | null | undefined, ctx: Pick<GenerationPrerequisitesContext, 'isFlow2Api' | 'flow2apiImageModel' | 'activeImageModel'>): string | null {
-  return ctx.activeImageModel?.trim() || (ctx.isFlow2Api ? (ctx.flow2apiImageModel?.trim() || null) : (projectModel?.trim() || null))
+  const raw = ctx.activeImageModel?.trim() || (ctx.isFlow2Api ? (ctx.flow2apiImageModel?.trim() || null) : (projectModel?.trim() || null))
+  if (ctx.isFlow2Api) {
+    return raw || normalizeFlow2ApiModel(projectModel, 'image') || getFlow2ApiModel(null, 'image').id
+  }
+  return getImageModel(raw).id
 }
 
 function effectiveVideoModelId(projectModel: string | null | undefined, ctx: Pick<GenerationPrerequisitesContext, 'isFlow2Api' | 'flow2apiVideoModel' | 'activeVideoModel'>): string | null {
-  return ctx.activeVideoModel?.trim() || (ctx.isFlow2Api ? (ctx.flow2apiVideoModel?.trim() || null) : (projectModel?.trim() || null))
+  const raw = ctx.activeVideoModel?.trim() || (ctx.isFlow2Api ? (ctx.flow2apiVideoModel?.trim() || null) : (projectModel?.trim() || null))
+  if (ctx.isFlow2Api) {
+    return raw || normalizeFlow2ApiModel(projectModel, 'video') || getFlow2ApiModel(null, 'video').id
+  }
+  return getVideoModel(raw).id
 }
 
 /**
@@ -159,7 +181,9 @@ export function videoSecondsFor(
   ctx: Pick<GenerationPrerequisitesContext, 'isFlow2Api' | 'flow2apiVideoModel' | 'activeVideoModel'>
 ): { seconds: number; longest: number; speechMs: number; fits: boolean } {
   const speechMs = isVideoDialogue(project, clip) ? estimateNarrationMs(clip.narration) : 0
-  const want = Math.max(1, Math.ceil(Math.max(clip.durationMs, speechMs) / 1000))
+  // Tolerate up to 150ms of MP4/AAC container padding so a 4s video probed at 4040ms does not bump to 5s/6s.
+  const paddedClipMs = clip.durationMs > 1150 ? clip.durationMs - 150 : clip.durationMs
+  const want = Math.max(1, Math.ceil(Math.max(paddedClipMs, speechMs) / 1000))
   const d = videoDurations(project, ctx)
   if (!d) return { seconds: want, longest: Infinity, speechMs, fits: true }
   if (Array.isArray(d)) {
@@ -189,12 +213,20 @@ export function isVideoDialogue(
  */
 export function checkClipImagePrerequisites(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): PrerequisitesCheckResult {
   const blockers: string[] = []
-  const needsSheets = referenceLimit(project, ctx) > 0
+  const manualOverride = hasReferenceOverride(clip)
+  const needsSheets = referenceLimit(project, ctx) > 0 && !manualOverride
   const charMap = new Map(ctx.characters.map((c) => [c.id, c]))
   const derivMap = new Map(ctx.derivatives.map((d) => [d.id, d]))
   const locMap = new Map(ctx.locations.map((l) => [l.id, l]))
   const propMap = new Map(ctx.props.map((p) => [p.id, p]))
   const hasSheet = (id: string | null | undefined): boolean => !!id && !!findAsset(ctx.assets, id)
+
+  if (manualOverride && referenceLimit(project, ctx) > 0) {
+    const missingManual = clip.referenceAssetIds.filter((id) => !hasSheet(id))
+    if (missingManual.length > 0) {
+      blockers.push('Salah satu gambar referensi manual pada adegan ini sudah tidak tersedia. Pilih ulang referensi manualnya.')
+    }
+  }
 
   for (const cid of clip.characterIds || []) {
     const ch = charMap.get(cid)
@@ -233,33 +265,38 @@ export function checkClipImagePrerequisites(clip: Clip, project: Project, ctx: G
  */
 export function checkClipVideoPrerequisites(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): PrerequisitesCheckResult {
   const blockers: string[] = []
+  const vModelId = effectiveVideoModelId(project.videoModel, ctx) ?? project.videoModel
+  // Flow2API text-to-video models (e.g. veo-3.1-fast) ignore any initial image, so do not block on missing images.
+  const needsInitialImage = !(ctx.isFlow2Api && !getFlow2ApiModel(vModelId, 'video').supportsRef)
 
-  if (clip.continueFromPrevious) {
-    if (ctx.clips && ctx.clips.length > 0) {
-      // Scope to the clip's own episode so clips from other episodes (which also start at sort 0) never interleave.
-      const sameEpisode = clip.episodeId ? ctx.clips.filter((c) => c.episodeId === clip.episodeId) : ctx.clips
-      const sorted = [...sameEpisode].sort((a, b) => a.sort - b.sort)
-      const idx = sorted.findIndex((c) => c.id === clip.id)
-      if (idx <= 0) {
-        blockers.push('Shot pertama tidak bisa menyambung dari shot sebelumnya.')
-      } else {
-        const prev = sorted[idx - 1]
-        const prevAssetId = prev.videoAssetId || prev.imageAssetId || null
-        if (!prevAssetId || !findAsset(ctx.assets, prevAssetId)) {
-          blockers.push('Shot sebelumnya belum memiliki video atau gambar untuk disambung.')
+  if (needsInitialImage) {
+    if (clip.continueFromPrevious) {
+      if (ctx.clips && ctx.clips.length > 0) {
+        // Scope to the clip's own episode so clips from other episodes (which also start at sort 0) never interleave.
+        const sameEpisode = clip.episodeId ? ctx.clips.filter((c) => c.episodeId === clip.episodeId) : ctx.clips
+        const sorted = [...sameEpisode].sort((a, b) => a.sort - b.sort)
+        const idx = sorted.findIndex((c) => c.id === clip.id)
+        if (idx <= 0) {
+          blockers.push('Shot pertama tidak bisa menyambung dari shot sebelumnya.')
+        } else {
+          const prev = sorted[idx - 1]
+          const prevAssetId = prev.videoAssetId || prev.imageAssetId || null
+          const prevWillGenerate = !!ctx.queuedClipIds?.has(prev.id)
+          if (!prevWillGenerate && (!prevAssetId || !findAsset(ctx.assets, prevAssetId))) {
+            blockers.push('Shot sebelumnya belum memiliki video atau gambar untuk disambung.')
+          }
         }
+      } else if (!clip.imageAssetId || !findAsset(ctx.assets, clip.imageAssetId)) {
+        blockers.push('Klip belum punya gambar storyboard. Buat gambarnya dulu.')
       }
     } else if (!clip.imageAssetId || !findAsset(ctx.assets, clip.imageAssetId)) {
       blockers.push('Klip belum punya gambar storyboard. Buat gambarnya dulu.')
     }
-  } else if (!clip.imageAssetId || !findAsset(ctx.assets, clip.imageAssetId)) {
-    blockers.push('Klip belum punya gambar storyboard. Buat gambarnya dulu.')
   }
 
   // Only on-screen dialogue uses the video model's native audio; O.S./V.O./narration always go through TTS.
   if (clip.speakerId && project.dialogAudio === 'video' && (clip.shotDetail?.dialogueType ?? 'dialogue') === 'dialogue') {
     const isFlow = !!ctx.isFlow2Api
-    const vModelId = effectiveVideoModelId(project.videoModel, ctx) ?? project.videoModel
     if (!modelSupportsNativeAudio(vModelId, isFlow)) {
       blockers.push('Model video terpilih tidak mendukung dialog bersuara. Ganti model video yang mendukung suara (misal Veo 3.1) atau alihkan mode dialog ke TTS.')
     }
@@ -308,7 +345,7 @@ function resultStatus(assets: Asset[] | Record<string, Asset>, assetId: string |
 
 /** The basis hash a clip image is generated from, with the same reference sheets generation will send. */
 export function clipImageBasis(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): { basisHash: string; refSheetAssetIds: string[] } {
-  const activeImageModel = ctx.activeImageModel || (ctx.isFlow2Api ? ctx.flow2apiImageModel : null) || project.imageModel
+  const activeImageModel = effectiveImageModelId(project.imageModel, ctx)
   const sceneAnchor = findSceneAnchorForClip(clip, ctx.clips)
   const refs = collectReferenceSheets(clip, ctx.characters, ctx.derivatives, ctx.locations, ctx.props, referenceLimit(project, ctx), sceneAnchor)
   const refSheetAssetIds = refs.map((r) => r.sheetAssetId)
@@ -346,13 +383,28 @@ export function getClipVideoStatus(clip: Clip, project: Project, ctx: Generation
       prevAssetId = prev.videoAssetId || prev.imageAssetId || null
     }
   }
-  const activeVideoModel = ctx.activeVideoModel || (ctx.isFlow2Api ? ctx.flow2apiVideoModel : null) || project.videoModel
+  const activeVideoModel = effectiveVideoModelId(project.videoModel, ctx)
   const lockWords = ctx.lockWords || project.seriesLock || []
+  let seconds = videoSecondsFor(project, clip, ctx).seconds
+  // Non-destructive trimming (such as autoTrimSilence after dialogue extraction) shortens clip.durationMs
+  // inside an already-generated video; keep the requested duration if the existing video still covers it.
+  const existingVideo = findAsset(ctx.assets, clip.videoAssetId)
+  const requestedSec = existingVideo?.meta?.requestedSeconds
+  if (
+    typeof requestedSec === 'number' &&
+    seconds <= requestedSec &&
+    (clip.mediaInMs > 0 ||
+      clip.voiceInMs > 0 ||
+      clip.voiceOutMs != null ||
+      (existingVideo?.durationMs != null && clip.durationMs <= existingVideo.durationMs + 250))
+  ) {
+    seconds = requestedSec
+  }
   const basisHash = computeClipVideoBasisHash({
     project: { ...project, videoModel: activeVideoModel },
     clip,
     characters: ctx.characters,
-    seconds: videoSecondsFor(project, clip, ctx).seconds,
+    seconds,
     prevAssetId,
     lockWords,
     videoModel: activeVideoModel
@@ -362,9 +414,8 @@ export function getClipVideoStatus(clip: Clip, project: Project, ctx: Generation
 
 /** Status of clip narration audio (§6.J). */
 export function getClipAudioStatus(clip: Clip, project: Project, ctx: GenerationPrerequisitesContext): ClipStatusResult {
-  const char = clip.speakerId ? ctx.characters.find((c) => c.id === clip.speakerId) : null
-  // Same fallback as generateClipTts, or every Gemini take without a chosen voice would look stale.
-  const voice = (char?.ttsProvider === project.ttsProvider ? char?.ttsVoice : null) || project.ttsVoice || (project.ttsProvider === 'gemini' ? 'Charon' : '')
+  // Same gender-aware resolution as narration and generateClipTts so basis hashes always match.
+  const voice = resolveClipTtsVoice(clip, ctx.characters, project)
   const basisHash = computeClipTtsBasisHash({ narration: clip.narration, voice, ttsProvider: project.ttsProvider })
   return resultStatus(ctx.assets, clip.audioAssetId, basisHash, checkClipAudioPrerequisites(clip, project, ctx))
 }
@@ -404,7 +455,7 @@ export function dialogVoiceNote(
 
 export function getCharacterSheetStatus(
   character: Character,
-  project: Pick<Project, 'styleId' | 'imageModel'>,
+  project: Pick<Project, 'styleId' | 'imageModel'> & { seriesGuidelines?: string },
   assets: Asset[] | Record<string, Asset>,
   imageModelOverride?: string
 ): SheetStatusResult {
@@ -415,7 +466,8 @@ export function getCharacterSheetStatus(
     description: character.description,
     styleId: project.styleId,
     imageModel: imageModelOverride || project.imageModel,
-    profile: character.profile
+    profile: character.profile,
+    seriesGuidelines: project.seriesGuidelines
   })
   const asset = findAsset(assets, character.sheetAssetId)
   if (asset) {
@@ -434,7 +486,7 @@ export function getCharacterSheetStatus(
 export function getDerivativeSheetStatus(
   derivative: CharacterDerivative,
   character: Character | undefined,
-  project: Pick<Project, 'imageModel'>,
+  project: Pick<Project, 'imageModel'> & { styleId?: string; seriesGuidelines?: string },
   assets: Asset[] | Record<string, Asset>,
   baseSheetWillBeGenerated = false,
   imageModelOverride?: string
@@ -449,7 +501,9 @@ export function getDerivativeSheetStatus(
     baseSheetAssetId: character?.sheetAssetId ?? null,
     promptChange: derivative.promptChange,
     imageModel: imageModelOverride || project.imageModel,
-    costumeKeyphrase: derivative.costumeKeyphrase
+    costumeKeyphrase: derivative.costumeKeyphrase,
+    styleId: project.styleId,
+    seriesGuidelines: project.seriesGuidelines
   })
   const asset = findAsset(assets, derivative.sheetAssetId)
   if (asset) {
@@ -472,7 +526,7 @@ export function getDerivativeSheetStatus(
 
 export function getLocationSheetStatus(
   location: Location,
-  project: Pick<Project, 'styleId' | 'imageModel'>,
+  project: Pick<Project, 'styleId' | 'imageModel'> & { seriesGuidelines?: string },
   assets: Asset[] | Record<string, Asset>,
   imageModelOverride?: string
 ): SheetStatusResult {
@@ -483,7 +537,8 @@ export function getLocationSheetStatus(
     description: location.description,
     styleId: project.styleId,
     imageModel: imageModelOverride || project.imageModel,
-    profile: location.profile
+    profile: location.profile,
+    seriesGuidelines: project.seriesGuidelines
   })
   const asset = findAsset(assets, location.sheetAssetId)
   if (asset) {
@@ -501,7 +556,7 @@ export function getLocationSheetStatus(
 
 export function getPropSheetStatus(
   prop: Prop,
-  project: Pick<Project, 'styleId' | 'imageModel'>,
+  project: Pick<Project, 'styleId' | 'imageModel'> & { seriesGuidelines?: string },
   assets: Asset[] | Record<string, Asset>,
   imageModelOverride?: string
 ): SheetStatusResult {
@@ -512,7 +567,8 @@ export function getPropSheetStatus(
     description: prop.description,
     styleId: project.styleId,
     imageModel: imageModelOverride || project.imageModel,
-    profile: prop.profile
+    profile: prop.profile,
+    seriesGuidelines: project.seriesGuidelines
   })
   const asset = findAsset(assets, prop.sheetAssetId)
   if (asset) {
@@ -545,12 +601,14 @@ export function validateSpeechDuration(text: string, durationSec: number): {
   maxRecommendedWords: number
   wordsPerSecond: number
 } {
-  const words = text.trim().split(/\s+/).filter(Boolean)
+  const words = spokenWords(text)
   const wordCount = words.length
-  const wordsPerSecond = durationSec > 0 ? wordCount / durationSec : wordCount
-  const maxRecommendedWords = Math.floor(durationSec * WORDS_PER_SECOND_MAX)
+  const pauseSec = tagPauseSec(text)
+  const speakingSec = Math.max(0.5, durationSec - pauseSec)
+  const wordsPerSecond = durationSec > 0 ? wordCount / speakingSec : wordCount
+  const maxRecommendedWords = Math.max(0, Math.floor(speakingSec * WORDS_PER_SECOND_MAX))
   return {
-    valid: wordsPerSecond <= WORDS_PER_SECOND_MAX,
+    valid: wordCount === 0 || (durationSec > pauseSec && wordsPerSecond <= WORDS_PER_SECOND_MAX),
     wordCount,
     maxRecommendedWords,
     wordsPerSecond: Math.round(wordsPerSecond * 10) / 10
@@ -679,12 +737,13 @@ export function checkScriptDoctor(
     }
   }
 
-  // 3. Talking head monotony: >= 4 consecutive shots with closeup framing and dialogue
+  // 3. Talking head monotony: >= 4 consecutive shots with closeup framing and on-screen dialogue
   let consecutiveDialogueCloseups = 0
   for (let i = 0; i < shots.length; i++) {
     const s = shots[i]
-    const isCloseup = /close|cu/i.test(s.framing || '')
-    const hasDialogue = Boolean(s.text && s.speaker)
+    const dType = s.shotDetail?.dialogueType ?? defaultDialogueType(s.speaker, s.text)
+    const isCloseup = /\b(close[\s-]?up|extreme\s+close[\s-]?up|ecu|cu|mcu)\b/i.test(s.framing || '')
+    const hasDialogue = dType === 'dialogue' && Boolean(s.text?.trim() && s.speaker?.trim())
     if (isCloseup && hasDialogue) {
       consecutiveDialogueCloseups++
       if (consecutiveDialogueCloseups >= 4) {
@@ -793,41 +852,56 @@ export function checkScriptDoctor(
   }
 
   // 5. Unregistered entities check
+  const charCanonical = new Map<string, string>()
+  for (const c of registered.characters) {
+    const canon = c.name.trim().toLowerCase()
+    charCanonical.set(canon, canon)
+    for (const a of c.aliases || []) charCanonical.set(a.trim().toLowerCase(), canon)
+  }
   const knownChars = new Set([
-    ...registered.characters.map((c) => c.name.toLowerCase()),
-    ...registered.characters.flatMap((c) => c.aliases.map((a) => a.toLowerCase())),
-    ...(draft.newAssets || []).filter((a) => a.kind === 'character').map((a) => a.name.toLowerCase())
+    ...charCanonical.keys(),
+    ...(draft.newAssets || [])
+      .filter((a) => a.kind === 'character' && a.action !== 'ignore')
+      .map((a) => a.name.trim().toLowerCase())
   ])
   const knownLocs = new Set([
-    ...registered.locations.map((l) => l.name.toLowerCase()),
-    ...registered.locations.flatMap((l) => l.aliases.map((a) => a.toLowerCase())),
-    ...(draft.newAssets || []).filter((a) => a.kind === 'location').map((a) => a.name.toLowerCase())
+    ...registered.locations.map((l) => l.name.trim().toLowerCase()),
+    ...registered.locations.flatMap((l) => l.aliases.map((a) => a.trim().toLowerCase())),
+    ...(draft.newAssets || [])
+      .filter((a) => a.kind === 'location' && a.action !== 'ignore')
+      .map((a) => a.name.trim().toLowerCase())
   ])
+  const canonChar = (name: string): string => {
+    const key = name.trim().toLowerCase()
+    return charCanonical.get(key) ?? key
+  }
 
   for (let i = 0; i < shots.length; i++) {
     const s = shots[i]
     const dType = s.shotDetail?.dialogueType ?? defaultDialogueType(s.speaker, s.text)
     const isVisibleDialogue = dType === 'dialogue'
-    if (s.speaker && isVisibleDialogue && !knownChars.has(s.speaker.toLowerCase())) {
+    const speakerTrim = (s.speaker || '').trim()
+    if (speakerTrim && isVisibleDialogue && !isNarratorName(speakerTrim) && !knownChars.has(speakerTrim.toLowerCase())) {
       issues.push({
         code: 'UNREGISTERED_SPEAKER',
         severity: 'warning',
         shotIndex: i,
-        title: `Pembicara "${s.speaker}" Belum Terdaftar`,
-        description: `Karakter "${s.speaker}" di Shot ${i + 1} tidak ditemukan di Lorebook maupun usulan aset baru.`,
-        suggestion: `Daftarkan "${s.speaker}" di Lorebook atau tambahkan ke usulan aset baru.`
+        title: `Pembicara "${speakerTrim}" Belum Terdaftar`,
+        description: `Karakter "${speakerTrim}" di Shot ${i + 1} tidak ditemukan di Lorebook maupun usulan aset baru.`,
+        suggestion: `Daftarkan "${speakerTrim}" di Lorebook atau tambahkan ke usulan aset baru.`
       })
     }
-    if (s.speaker && isVisibleDialogue && !isNarratorName(s.speaker)) {
-      const isVisible = (s.characters || []).some((c) => c.toLowerCase() === s.speaker!.toLowerCase())
+    if (speakerTrim && isVisibleDialogue && !isNarratorName(speakerTrim)) {
+      const spCanon = canonChar(speakerTrim)
+      const isVisible = (s.characters || []).some((c) => canonChar(c) === spCanon)
       if (!isVisible) {
         issues.push({
           code: 'SPEAKER_NOT_VISIBLE',
           severity: 'warning',
           shotIndex: i,
-          title: `Pembicara "${s.speaker}" Harus Terlihat di Shot`,
-          description: `Untuk dialog langsung (on-screen), karakter "${s.speaker}" harus masuk daftar karakter shot agar gerak bibir/ekspresi dapat disinkronkan.`,
-          suggestion: `Tambahkan "${s.speaker}" ke karakter shot, atau ubah tipe dialog menjadi O.S. (Off-Screen) / V.O. jika suara datang dari luar layar.`
+          title: `Pembicara "${speakerTrim}" Harus Terlihat di Shot`,
+          description: `Untuk dialog langsung (on-screen), karakter "${speakerTrim}" harus masuk daftar karakter shot agar gerak bibir/ekspresi dapat disinkronkan.`,
+          suggestion: `Tambahkan "${speakerTrim}" ke karakter shot, atau ubah tipe dialog menjadi O.S. (Off-Screen) / V.O. jika suara datang dari luar layar.`
         })
       }
     }
@@ -843,25 +917,36 @@ export function checkScriptDoctor(
     }
   }
 
-  // 6. Wardrobe continuity check
-  for (let i = 0; i < shots.length - 1; i++) {
-    const curr = shots[i]
-    const next = shots[i + 1]
-    for (const charName of curr.characters || []) {
-      if ((next.characters || []).includes(charName)) {
-        const currCostume = curr.costumes?.[charName] || 'default'
-        const nextCostume = next.costumes?.[charName] || 'default'
-        if (currCostume !== nextCostume && curr.location === next.location) {
-          issues.push({
-            code: 'UNEXPLAINED_WARDROBE_CHANGE',
-            severity: 'warning',
-            shotIndex: i + 1,
-            title: `Perubahan Pakaian Mendadak (${charName})`,
-            description: `Di Shot ${i + 2}, ${charName} berganti dari "${currCostume}" ke "${nextCostume}" di lokasi yang sama tanpa jeda waktu.`,
-            suggestion: 'Pastikan kostum konsisten sepanjang adegan, kecuali cerita memang memuat adegan ganti pakaian.'
-          })
-        }
+  // 6. Wardrobe continuity check (across contiguous shots in the same non-empty location, including shot-reverse-shot)
+  const lastCostumeInBlock = new Map<string, { raw: string; norm: string }>()
+  let activeLocKey = ''
+  for (let i = 0; i < shots.length; i++) {
+    const shot = shots[i]
+    const locKey = (shot.location || '').trim().toLowerCase()
+    if (!locKey || locKey !== activeLocKey) {
+      lastCostumeInBlock.clear()
+      activeLocKey = locKey
+    }
+    if (!locKey) continue
+    const costumeEntries = Object.entries(shot.costumes || {})
+    for (const charName of shot.characters || []) {
+      const cKey = canonChar(charName)
+      const matchedEntry = costumeEntries.find(([k]) => canonChar(k) === cKey)
+      const rawCostume = (matchedEntry?.[1] || '').trim()
+      const normCostume = isDefaultCostume(rawCostume) ? 'default' : rawCostume.toLowerCase()
+      const displayCostume = isDefaultCostume(rawCostume) ? 'default' : rawCostume
+      const prev = lastCostumeInBlock.get(cKey)
+      if (prev && prev.norm !== normCostume) {
+        issues.push({
+          code: 'UNEXPLAINED_WARDROBE_CHANGE',
+          severity: 'warning',
+          shotIndex: i,
+          title: `Perubahan Pakaian Mendadak (${charName})`,
+          description: `Di Shot ${i + 1}, ${charName} berganti dari "${prev.raw}" ke "${displayCostume}" di lokasi yang sama tanpa jeda waktu.`,
+          suggestion: 'Pastikan kostum konsisten sepanjang adegan, kecuali cerita memang memuat adegan ganti pakaian.'
+        })
       }
+      lastCostumeInBlock.set(cKey, { raw: displayCostume, norm: normCostume })
     }
   }
 
@@ -921,10 +1006,13 @@ export function computeEpisodeRhythm(draft: EpisodeScriptDraft): ShotRhythmSegme
   return (draft.shots || []).map((s, idx) => {
     const dur = s.durationSec || 5
     const pacing: 'fast' | 'moderate' | 'slow' = dur <= 3 ? 'fast' : dur <= 6 ? 'moderate' : 'slow'
-    let type: 'action' | 'dialogue' | 'reaction' | 'silent' = 'action'
-    if (s.text && s.speaker) type = 'dialogue'
+    const hasText = Boolean(s.text?.trim())
+    const hasSpeaker = Boolean(s.speaker?.trim() && !isNarratorName(s.speaker))
+    let type: 'action' | 'dialogue' | 'reaction' | 'silent' = 'silent'
+    if (hasText && hasSpeaker) type = 'dialogue'
     else if (s.shotDetail?.nonSpeakingReaction || s.emotion?.toLowerCase().includes('reaksi')) type = 'reaction'
-    else if (!s.text) type = 'silent'
+    else if (!hasText && s.visualAction?.trim()) type = 'action'
+    else if (hasText) type = 'dialogue'
 
     const em = (s.emotion || '').toLowerCase()
     const highWords = ['marah', 'histeris', 'menjerit', 'menampar', 'teriak', 'panik', 'syok', 'climax', 'intense', 'benci', 'ancam']

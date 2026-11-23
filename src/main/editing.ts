@@ -45,7 +45,8 @@ async function voicePart(audio: Asset, clipId: string, fromMs: number, toMs: num
     prompt,
     localPath: rel,
     durationMs: (toMs ?? audio.durationMs ?? fromMs) - fromMs,
-    meta: { ...audio.meta, words }
+    // Mark sliced audio so auto-trim knows its timestamps no longer align to 0..video.durationMs.
+    meta: { ...audio.meta, words, splitPart: true }
   })
   emit.asset(asset)
   return asset
@@ -84,22 +85,44 @@ export async function splitClip(clipId: string, atMs: number): Promise<ProjectBu
       let cutIn = span.inMs + (at - span.startMs)
       const gap = wordGapNear(words, cutIn / 1000)
       if (gap !== null) {
-        const snapped = Math.round(span.startMs + (gap * 1000 - span.inMs))
-        if (snapped >= MIN_ITEM_MS && snapped <= clip.durationMs - MIN_ITEM_MS) {
+        const gapMs = gap * 1000
+        const snapped = Math.round(span.startMs + (gapMs - span.inMs))
+        const minAt = Math.max(MIN_ITEM_MS, span.startMs + MIN_ITEM_MS)
+        const maxAt = Math.min(clip.durationMs - MIN_ITEM_MS, span.startMs + span.playMs - MIN_ITEM_MS)
+        if (
+          gapMs > span.inMs + MIN_ITEM_MS &&
+          gapMs < span.inMs + span.playMs - MIN_ITEM_MS &&
+          snapped >= minAt &&
+          snapped <= maxAt
+        ) {
           at = snapped
-          cutIn = Math.round(gap * 1000)
+          cutIn = Math.round(gapMs)
         }
       }
-      const spokenBefore = words.filter((w) => w.start * 1000 < cutIn).length
-      ;[narrationA, narrationB] = splitNarration(clip.narration, spokenBefore)
-      const partA = await voicePart(audio, clip.id, 0, cutIn, narrationA)
-      const partB = await voicePart(audio, newId, cutIn, null, narrationB)
-      voiceA = { audioAssetId: partA.id, voiceInMs: span.inMs, voiceOutMs: null, voiceStartMs: span.startMs }
-      voiceB = {
-        audioAssetId: partB.id,
-        voiceInMs: 0,
-        voiceOutMs: clip.voiceOutMs != null ? Math.max(MIN_ITEM_MS, clip.voiceOutMs - cutIn) : null,
-        voiceStartMs: 0
+      const remOut = clip.voiceOutMs != null ? clip.voiceOutMs - cutIn : null
+      if (remOut != null && remOut <= 0) {
+        // Trimmed voice ends at or before the cut: keep narration on Clip A and leave Clip B voiceless.
+        narrationA = clip.narration
+        narrationB = ''
+        const partA = await voicePart(audio, clip.id, 0, cutIn, narrationA)
+        voiceA = { audioAssetId: partA.id, voiceInMs: span.inMs, voiceOutMs: null, voiceStartMs: span.startMs }
+        voiceB = { audioAssetId: null, voiceInMs: 0, voiceOutMs: null, voiceStartMs: 0 }
+      } else {
+        const spokenWordCount = (clip.narration.match(/<[^>]*>|\S+/g) ?? []).filter((t) => !t.startsWith('<')).length
+        const spokenBefore =
+          words.length > 0
+            ? words.filter((w) => w.end * 1000 > span.inMs && w.start * 1000 < cutIn).length
+            : Math.round(spokenWordCount * ((cutIn - span.inMs) / Math.max(1, span.playMs)))
+        ;[narrationA, narrationB] = splitNarration(clip.narration, spokenBefore)
+        const partA = await voicePart(audio, clip.id, 0, cutIn, narrationA)
+        const partB = await voicePart(audio, newId, cutIn, null, narrationB)
+        voiceA = { audioAssetId: partA.id, voiceInMs: span.inMs, voiceOutMs: null, voiceStartMs: span.startMs }
+        voiceB = {
+          audioAssetId: partB.id,
+          voiceInMs: 0,
+          voiceOutMs: remOut != null ? Math.round(remOut) : null,
+          voiceStartMs: 0
+        }
       }
     }
     // Otherwise the voice ends before the cut and stays with the first part.
@@ -131,7 +154,7 @@ export async function splitClip(clipId: string, atMs: number): Promise<ProjectBu
 export function detachVoice(clipId: string): void {
   const patch: Partial<Clip> = { audioAssetId: null, voiceInMs: 0, voiceOutMs: null, voiceStartMs: 0 }
   patchClip(clipId, patch)
-  emit.clip({ clipId, patch })
+  emit.clip({ clipId, patch, fromUser: true })
 }
 
 /**
@@ -152,6 +175,8 @@ export function autoTrimEpisode(
     const video = getAsset(clip.videoAssetId)
     const audio = getAsset(clip.audioAssetId)
     if (!video || !audio) continue
+    // Only auto-trim or reset intact video-extracted dialogue; TTS voiceovers and split audio parts do not align to 0..video.durationMs.
+    if (audio.meta.source !== 'video' || audio.meta.splitPart) continue
     const totalMs = video.durationMs ?? audio.durationMs ?? 0
     if (totalMs <= 0) continue
 
@@ -172,7 +197,6 @@ export function autoTrimEpisode(
     }
 
     // Only auto-trim when we have real Whisper timings from video dialogue audio so we never clip spoken words.
-    if (audio.meta.source !== 'video') continue
     if (audio.meta.timedBy !== WHISPER_TIMING || !audio.meta.words?.length) continue
 
     const win = computeSpeechTrimWindow(audio.meta.words, totalMs)

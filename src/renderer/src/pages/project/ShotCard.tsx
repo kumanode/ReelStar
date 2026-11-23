@@ -17,7 +17,6 @@ import {
   Play,
   Plus,
   RotateCcw,
-  Sparkles,
   Trash2,
   Upload,
   User,
@@ -229,7 +228,7 @@ export function ShotCard({
     clip.propIds.length > 0 && clip.propIds.every((pid) => hasSheetAsset(propById.get(pid)?.sheetAssetId))
 
   const speakerOptions = useMemo(
-    () => [{ value: '', label: 'Narator / Tanpa pembicara' }, ...characters.map((c) => ({ value: c.id, label: c.name }))],
+    () => [{ value: '', label: 'Narator' }, ...characters.map((c) => ({ value: c.id, label: c.name }))],
     [characters]
   )
 
@@ -309,6 +308,7 @@ export function ShotCard({
   }
 
   const handleOptimizePrompt = async () => {
+    const targetEpId = useProject.getState().episode?.id
     setBusyPrompt(true)
     try {
       await flush()
@@ -317,7 +317,9 @@ export function ShotCard({
         useAi: true,
         requireAi: true
       })
-      load(bundle)
+      if (useProject.getState().episode?.id === targetEpId) {
+        load(bundle)
+      }
       toast('success', `Prompt visual & video Shot ${clipNumber(index)} berhasil dioptimasi AI.`)
     } catch (err) {
       toast('error', `Gagal mengoptimasi prompt: ${errorText(err)}`)
@@ -436,7 +438,7 @@ export function ShotCard({
             {/* Top overlay: Checkbox + Shot number + Media status pill */}
             <div className="absolute inset-x-1.5 top-1.5 z-20 flex items-center justify-between gap-1">
               <label
-                className="flex cursor-pointer items-center gap-1 rounded-md bg-ink/85 px-1.5 py-0.5 text-paper backdrop-blur-[2px]"
+                className="flex cursor-pointer items-center gap-1 rounded-md bg-black/75 px-1.5 py-0.5 text-white backdrop-blur-[2px]"
                 title="Pilih shot untuk aksi batch"
                 onClick={(e) => e.stopPropagation()}
               >
@@ -446,12 +448,12 @@ export function ShotCard({
                   onChange={onToggleCheck}
                   className="size-3 cursor-pointer accent-accent"
                 />
-                <span className="font-mono text-[10px] font-bold">{clipNumber(index)}</span>
+                <span className="font-mono text-[11px] font-bold">{clipNumber(index)}</span>
               </label>
               {video ? (
-                <span className="rounded bg-ok-ink/95 px-1.5 py-0.5 font-mono text-[9px] font-bold text-paper">VID</span>
+                <span className="rounded bg-ok-ink/95 px-1.5 py-0.5 font-mono text-[11px] font-bold text-white">VID</span>
               ) : image ? (
-                <span className="rounded bg-ink/80 px-1.5 py-0.5 font-mono text-[9px] font-bold text-paper">IMG</span>
+                <span className="rounded bg-black/75 px-1.5 py-0.5 font-mono text-[11px] font-bold text-white">IMG</span>
               ) : null}
             </div>
 
@@ -461,9 +463,9 @@ export function ShotCard({
                 type="button"
                 onClick={onPlayAnimatic}
                 aria-label="Pratinjau shot"
-                className="absolute inset-0 z-[5] flex items-center justify-center bg-ink/0 opacity-0 transition-all hover:bg-ink/35 hover:opacity-100"
+                className="absolute inset-0 z-[5] flex items-center justify-center bg-black/0 opacity-0 transition-all hover:bg-black/40 hover:opacity-100"
               >
-                <span className="flex size-9 items-center justify-center rounded-full bg-ink/85 text-paper shadow-ink">
+                <span className="flex size-9 items-center justify-center rounded-full bg-black/75 text-white shadow-ink">
                   <Play className="ml-0.5 size-4" fill="currentColor" />
                 </span>
               </button>
@@ -472,7 +474,7 @@ export function ShotCard({
             {/* Bottom framing label with subtle cinema gradient */}
             {clip.framing && !isRunning(activeVisualJob) && (
               <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[4] bg-gradient-to-t from-black/80 via-black/45 to-transparent px-2 pb-1.5 pt-4">
-                <span className="block truncate text-[10px] font-medium text-white/95" title={clip.framing}>
+                <span className="block truncate text-[11px] font-medium text-white/95" title={clip.framing}>
                   {clip.framing.replace(/_/g, ' ')}
                 </span>
               </div>
@@ -481,19 +483,28 @@ export function ShotCard({
 
           {/* Image version dots when > 1 */}
           {imageVersions.length > 1 && (
-            <div className="flex items-center justify-center gap-1">
-              {imageVersions.slice(-4).map((v, vi) => (
-                <button
-                  key={v.id}
-                  type="button"
-                  title={`Versi gambar ${vi + 1}`}
-                  onClick={() => void window.api.assets.setActive(clip.id, v.id)}
-                  className={cx(
-                    'size-2 rounded-full transition-colors',
-                    v.id === clip.imageAssetId ? 'bg-accent' : 'bg-line-3 hover:bg-ink-2'
-                  )}
-                />
-              ))}
+            <div className="flex items-center justify-center gap-0.5">
+              {imageVersions.slice(-4).map((v, vi) => {
+                const isActive = v.id === clip.imageAssetId
+                return (
+                  <button
+                    key={v.id}
+                    type="button"
+                    aria-label={`Versi gambar ${vi + 1}`}
+                    aria-current={isActive ? 'true' : undefined}
+                    title={`Versi gambar ${vi + 1}`}
+                    onClick={() => void window.api.assets.setActive(clip.id, v.id)}
+                    className="group flex size-5 items-center justify-center rounded-full"
+                  >
+                    <span
+                      className={cx(
+                        'size-2 rounded-full transition-colors',
+                        isActive ? 'bg-accent' : 'bg-line-3 group-hover:bg-ink-2'
+                      )}
+                    />
+                  </button>
+                )
+              })}
             </div>
           )}
         </div>
@@ -501,14 +512,14 @@ export function ShotCard({
         {/* RIGHT: 3-Zone Modern Storyboard Content */}
         <div className="flex min-w-0 flex-1 flex-col justify-between gap-2.5">
           {/* ZONE 1: Compact Header Row */}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-1.5">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
               <input
                 value={clip.title}
                 onChange={(e) => updateClip(clip.id, { title: e.target.value })}
                 aria-label="Judul shot"
                 placeholder={`Shot ${clipNumber(index)}`}
-                className="w-40 min-w-0 rounded-md bg-transparent px-1 font-display text-sm font-bold text-ink outline-none hover:bg-sand focus:bg-sand sm:w-48"
+                className="w-36 min-w-0 rounded-md bg-transparent px-1 font-display text-sm font-bold text-ink outline-none hover:bg-sand focus:bg-sand focus-visible:ring-2 focus-visible:ring-accent/35 sm:w-44 xl:w-52"
               />
               <Badge tone={speechBadge.tone}>{speechBadge.label}</Badge>
               {clip.continueFromPrevious && (
@@ -519,7 +530,7 @@ export function ShotCard({
               )}
             </div>
 
-            <div className="flex shrink-0 items-center gap-1.5">
+            <div className="flex shrink-0 flex-wrap items-center gap-1">
               <Badge tone={imgBadge.tone} title={imgStatus.blockers.join('\n')}>
                 {imgBadge.label}
               </Badge>
@@ -561,7 +572,7 @@ export function ShotCard({
           >
             {/* Slim voice & emotion strip integrated into script box */}
             <div className="flex flex-wrap items-center gap-1.5 border-b border-line/80 bg-sand/45 px-2.5 py-1.5">
-              <div className="w-[148px] shrink-0">
+              <div className="w-[152px] shrink-0">
                 <Select
                   label="Pembicara"
                   size="sm"
@@ -577,7 +588,7 @@ export function ShotCard({
                   }}
                 />
               </div>
-              <div className="w-[158px] shrink-0">
+              <div className="w-[164px] shrink-0">
                 <Select
                   label="Jenis ucapan"
                   size="sm"
@@ -595,7 +606,7 @@ export function ShotCard({
                 onChange={(e) => updateClip(clip.id, { emotion: e.target.value })}
                 placeholder="Emosi (mis. marah, dingin, panik)"
                 aria-label="Emosi"
-                className="h-7 min-w-[120px] flex-1 rounded-lg border border-transparent bg-paper/75 px-2.5 text-[11px] text-ink outline-none placeholder:text-muted/80 hover:border-line focus:border-ink focus:bg-paper"
+                className="h-7 min-w-[120px] flex-1 rounded-lg border border-transparent bg-paper/75 px-2.5 text-[11px] text-ink outline-none placeholder:text-muted hover:border-line focus:border-ink focus:bg-paper focus-visible:ring-2 focus-visible:ring-accent/35"
               />
             </div>
 
@@ -606,26 +617,28 @@ export function ShotCard({
                 <AutoTextarea
                   value={clip.narration}
                   onChange={(e) => updateClip(clip.id, { narration: e.target.value })}
+                  aria-label="Dialog atau narasi shot"
                   placeholder="Tulis dialog tokoh atau monolog batin (kosongkan hanya jika shot hening)…"
                   minRows={1}
                   maxHeight={110}
                   className={cx(
-                    'w-full resize-none bg-transparent text-[13px] leading-relaxed text-ink outline-none placeholder:text-muted/65',
+                    'w-full resize-none rounded bg-transparent text-[13px] leading-relaxed text-ink outline-none placeholder:text-muted focus-visible:ring-2 focus-visible:ring-accent/30',
                     isInnerSpeech && 'italic'
                   )}
                 />
               </div>
               <div className="flex items-start gap-2 border-t border-line/70 pt-2">
-                <span className="mt-0.5 shrink-0 rounded bg-sand px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                <span className="mt-0.5 shrink-0 rounded bg-sand px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
                   Visual
                 </span>
                 <AutoTextarea
                   value={clip.story}
                   onChange={(e) => updateClip(clip.id, { story: e.target.value })}
+                  aria-label="Aksi visual shot"
                   placeholder="Aksi visual di layar dan gerakan tokoh…"
                   minRows={1}
                   maxHeight={96}
-                  className="w-full resize-none bg-transparent text-xs leading-relaxed text-ink-2 outline-none placeholder:text-muted/65"
+                  className="w-full resize-none rounded bg-transparent text-xs leading-relaxed text-ink-2 outline-none placeholder:text-muted focus-visible:ring-2 focus-visible:ring-accent/30"
                 />
               </div>
               {voiceNotice?.tone === 'warn' && (
@@ -638,17 +651,17 @@ export function ShotCard({
           </div>
 
           {/* ZONE 3: Stable 2-Side Footer (Entity Chips stay horizontal on left, Actions locked right) */}
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+          <div className="flex flex-wrap items-center justify-between gap-1.5 pt-0.5">
             {/* Lorebook chips */}
-            <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
               <button
                 ref={charAnchor}
                 type="button"
                 onClick={() => setCharPopOpen((o) => !o)}
-                className="inline-flex h-7 max-w-[175px] items-center gap-1 rounded-lg border border-line bg-sand px-2 text-[11px] font-medium text-ink hover:border-ink-2"
+                className="inline-flex h-7 max-w-[140px] items-center gap-1 rounded-lg border border-line bg-sand px-2 text-[11px] font-medium text-ink hover:border-ink-2 xl:max-w-[175px]"
                 title={
                   clip.characterIds.length > 0
-                    ? `${charChipText} — ${charsSheetsReady ? 'Lembar referensi siap' : 'Sebagian pemeran belum punya lembar referensi'}`
+                    ? `${charChipText} · ${charsSheetsReady ? 'Lembar referensi siap' : 'Sebagian pemeran belum punya lembar referensi'}`
                     : 'Pilih pemeran di shot ini'
                 }
               >
@@ -687,7 +700,7 @@ export function ShotCard({
                               className="flex items-center justify-between text-left font-semibold text-ink"
                             >
                               <span>{c.name}</span>
-                              <span className="text-[10px] text-muted">{active ? 'Terpasang' : '+ Tambah'}</span>
+                              <span className="text-[11px] text-muted">{active ? 'Terpasang' : '+ Tambah'}</span>
                             </button>
                             {active && variants.length > 0 && (
                               <Select
@@ -715,10 +728,10 @@ export function ShotCard({
                 ref={locAnchor}
                 type="button"
                 onClick={() => setLocPopOpen((o) => !o)}
-                className="inline-flex h-7 max-w-[165px] items-center gap-1 rounded-lg border border-line bg-sand px-2 text-[11px] font-medium text-ink hover:border-ink-2"
+                className="inline-flex h-7 max-w-[135px] items-center gap-1 rounded-lg border border-line bg-sand px-2 text-[11px] font-medium text-ink hover:border-ink-2 xl:max-w-[165px]"
                 title={
                   clip.locationId
-                    ? `${locChipText} — ${locSheetReady ? 'Lembar referensi lokasi siap' : 'Belum punya lembar referensi di Lorebook'}`
+                    ? `${locChipText} · ${locSheetReady ? 'Lembar referensi lokasi siap' : 'Belum punya lembar referensi di Lorebook'}`
                     : 'Pilih lokasi shot'
                 }
               >
@@ -734,7 +747,7 @@ export function ShotCard({
                 <span className="truncate">{locChipText}</span>
               </button>
               <Popover anchor={locAnchor} open={locPopOpen} onClose={() => setLocPopOpen(false)} width={240}>
-                <div className="flex flex-col gap-1 p-2 text-xs">
+                <div className="scroll-thin flex max-h-56 flex-col gap-1 overflow-y-auto p-2 text-xs">
                   <button
                     type="button"
                     onClick={() => {
@@ -765,10 +778,10 @@ export function ShotCard({
                 ref={propAnchor}
                 type="button"
                 onClick={() => setPropPopOpen((o) => !o)}
-                className="inline-flex h-7 max-w-[175px] items-center gap-1 rounded-lg border border-line bg-sand px-2 text-[11px] font-medium text-ink hover:border-ink-2"
+                className="inline-flex h-7 max-w-[140px] items-center gap-1 rounded-lg border border-line bg-sand px-2 text-[11px] font-medium text-ink hover:border-ink-2 xl:max-w-[175px]"
                 title={
                   clip.propIds.length > 0
-                    ? `${propChipText} — ${propsSheetsReady ? 'Lembar referensi semua prop siap' : 'Sebagian prop belum punya lembar referensi di Lorebook'}`
+                    ? `${propChipText} · ${propsSheetsReady ? 'Lembar referensi semua prop siap' : 'Sebagian prop belum punya lembar referensi di Lorebook'}`
                     : 'Pilih prop di shot ini'
                 }
               >
@@ -784,7 +797,7 @@ export function ShotCard({
                 <span className="truncate">{propChipText}</span>
               </button>
               <Popover anchor={propAnchor} open={propPopOpen} onClose={() => setPropPopOpen(false)} width={240}>
-                <div className="flex flex-col gap-1 p-2 text-xs">
+                <div className="scroll-thin flex max-h-56 flex-col gap-1 overflow-y-auto p-2 text-xs">
                   {props.length === 0 ? (
                     <span className="px-2 py-1 text-muted">Belum ada prop di Lorebook.</span>
                   ) : (
@@ -798,7 +811,7 @@ export function ShotCard({
                           className={cx('flex items-center justify-between rounded-lg px-2.5 py-1.5 text-left', on ? 'bg-sun-soft font-semibold' : 'hover:bg-sand')}
                         >
                           <span>{pr.name}</span>
-                          <span className="text-[10px] text-muted">{on ? '✓' : ''}</span>
+                          <span className="text-[11px] text-muted">{on ? '✓' : ''}</span>
                         </button>
                       )
                     })
@@ -819,7 +832,7 @@ export function ShotCard({
               </Button>
 
               <Button
-                variant={!image ? 'primary' : 'secondary'}
+                variant={!image && imgStatus.status !== 'blocked' ? 'accent' : 'secondary'}
                 size="sm"
                 icon={<ImageIcon className="size-3.5" />}
                 loading={busyImg || isRunning(imageJob)}
@@ -830,7 +843,7 @@ export function ShotCard({
               </Button>
 
               <Button
-                variant={image && !video ? 'primary' : 'secondary'}
+                variant={image && !video && vidStatus.status !== 'blocked' ? 'accent' : 'secondary'}
                 size="sm"
                 icon={<Film className="size-3.5" />}
                 loading={busyVid || isRunning(videoJob)}
@@ -896,7 +909,7 @@ export function ShotCard({
               placeholder="Prompt visual berlabel (Setting, Action, Wardrobe, Framing, Avoid)…"
               minRows={3}
               maxHeight={180}
-              className="w-full rounded-xl border border-line bg-paper p-2.5 font-mono text-[11px] leading-relaxed text-ink outline-none focus:border-ink"
+              className="w-full rounded-xl border border-line bg-paper p-2.5 font-mono text-[11px] leading-relaxed text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
             />
 
             <span className="font-display text-[11px] font-bold uppercase tracking-wider text-muted">
@@ -908,7 +921,7 @@ export function ShotCard({
               placeholder="Gerak subjek, ekspresi, interaksi objek, dan gerak kamera untuk Video AI…"
               minRows={2}
               maxHeight={120}
-              className="w-full rounded-xl border border-line bg-paper p-2.5 font-mono text-[11px] leading-relaxed text-ink outline-none focus:border-ink"
+              className="w-full rounded-xl border border-line bg-paper p-2.5 font-mono text-[11px] leading-relaxed text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
             />
 
             {/* Editable Shot Detail (Director Cinematography Notes) */}
@@ -938,7 +951,7 @@ export function ShotCard({
                     onChange={(e) => updateClip(clip.id, { framing: e.target.value })}
                     placeholder="Framing (mis. over-the-shoulder medium close-up)"
                     aria-label="Framing"
-                    className="h-8 rounded-lg border border-line bg-surface px-2.5 text-[11px] text-ink outline-none placeholder:text-muted focus:border-ink"
+                    className="h-8 rounded-lg border border-line bg-surface px-2.5 text-[11px] text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                   />
                 </div>
                 <input
@@ -946,7 +959,7 @@ export function ShotCard({
                   onChange={(e) => updateClip(clip.id, { shotDetail: { ...(clip.shotDetail ?? {}), blocking: e.target.value } })}
                   placeholder="Blocking 180° (kiri/kanan/foreground)"
                   aria-label="Blocking posisi"
-                  className="h-8 rounded-lg border border-line bg-surface px-2.5 text-[11px] text-ink outline-none placeholder:text-muted focus:border-ink"
+                  className="h-8 rounded-lg border border-line bg-surface px-2.5 text-[11px] text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                 />
                 <input
                   value={clip.shotDetail?.propPlacement ?? ''}
@@ -955,21 +968,21 @@ export function ShotCard({
                   }
                   placeholder="Posisi prop & latar tetap (mis. map merah di depan Dina)"
                   aria-label="Posisi prop tetap"
-                  className="h-8 rounded-lg border border-line bg-surface px-2.5 text-[11px] text-ink outline-none placeholder:text-muted focus:border-ink"
+                  className="h-8 rounded-lg border border-line bg-surface px-2.5 text-[11px] text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                 />
                 <input
                   value={clip.shotDetail?.lighting ?? ''}
                   onChange={(e) => updateClip(clip.id, { shotDetail: { ...(clip.shotDetail ?? {}), lighting: e.target.value } })}
                   placeholder="Pencahayaan (mis. warm rim light, jendela kiri)"
                   aria-label="Pencahayaan"
-                  className="h-8 rounded-lg border border-line bg-surface px-2.5 text-[11px] text-ink outline-none placeholder:text-muted focus:border-ink"
+                  className="h-8 rounded-lg border border-line bg-surface px-2.5 text-[11px] text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                 />
                 <input
                   value={clip.shotDetail?.cameraMotion ?? ''}
                   onChange={(e) => updateClip(clip.id, { shotDetail: { ...(clip.shotDetail ?? {}), cameraMotion: e.target.value } })}
                   placeholder="Gerak kamera video (mis. slow dolly in)"
                   aria-label="Gerak kamera video"
-                  className="h-8 rounded-lg border border-line bg-surface px-2.5 text-[11px] text-ink outline-none placeholder:text-muted focus:border-ink"
+                  className="h-8 rounded-lg border border-line bg-surface px-2.5 text-[11px] text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                 />
                 <input
                   value={clip.shotDetail?.nonSpeakingReaction ?? ''}
@@ -978,7 +991,7 @@ export function ShotCard({
                   }
                   placeholder="Reaksi tokoh lain di frame"
                   aria-label="Reaksi tokoh lain"
-                  className="h-8 rounded-lg border border-line bg-surface px-2.5 text-[11px] text-ink outline-none placeholder:text-muted focus:border-ink"
+                  className="h-8 rounded-lg border border-line bg-surface px-2.5 text-[11px] text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                 />
                 <input
                   value={clip.shotDetail?.speechDelivery ?? ''}
@@ -987,7 +1000,7 @@ export function ShotCard({
                   }
                   placeholder="Intonasi bicara (mis. berbisik dingin)"
                   aria-label="Intonasi bicara"
-                  className="h-8 rounded-lg border border-line bg-surface px-2.5 text-[11px] text-ink outline-none placeholder:text-muted focus:border-ink"
+                  className="h-8 rounded-lg border border-line bg-surface px-2.5 text-[11px] text-ink outline-none placeholder:text-muted focus:border-ink focus-visible:ring-2 focus-visible:ring-accent/35"
                 />
               </div>
             </div>
@@ -1011,14 +1024,14 @@ export function ShotCard({
                       void window.api.app.copyText(compiledPrompt)
                       toast('info', 'Prompt final disalin ke clipboard.')
                     }}
-                    className="inline-flex items-center gap-1 text-[10px] font-semibold text-accent-dark hover:text-accent"
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-accent-dark hover:text-accent"
                   >
                     <Copy className="size-3" /> Salin
                   </button>
                 )}
               </div>
               {showCompiledPreview && (
-                <pre className="scroll-thin max-h-56 overflow-y-auto whitespace-pre-wrap border-t border-line bg-paper p-2.5 font-mono text-[10px] leading-relaxed text-ink-2">
+                <pre className="scroll-thin max-h-56 overflow-y-auto whitespace-pre-wrap border-t border-line bg-paper p-2.5 font-mono text-[11px] leading-relaxed text-ink-2">
                   {compiledPrompt}
                 </pre>
               )}
@@ -1052,9 +1065,9 @@ export function ShotCard({
                 <div className="flex items-center justify-between gap-2 border-t border-line pt-2">
                   <div className="min-w-0">
                     <div className="text-[11px] font-medium text-ink-2">Kunci latar &amp; prop ke shot jangkar</div>
-                    <div className="truncate text-[10px] text-muted">
+                    <div className="truncate text-[11px] text-muted">
                       {clip.shotDetail?.sceneAnchorMode === 'off'
-                        ? 'Nonaktif — buat latar & prop segar dari Lorebook saja'
+                        ? 'Nonaktif, buat latar & prop segar dari Lorebook saja'
                         : sceneAnchor
                           ? `Terkunci ke Shot ${sceneAnchor.clipNumber} (${sceneAnchor.clipTitle})`
                           : 'Otomatis mengacu ke shot pembuka lokasi ini saat tersedia'}
@@ -1093,7 +1106,7 @@ export function ShotCard({
                       <button
                         type="button"
                         onClick={() => updateClip(clip.id, { referenceAssetIds: null })}
-                        className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-muted hover:text-ink"
+                        className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-muted hover:text-ink"
                         title="Kembalikan ke pemilihan referensi otomatis"
                       >
                         <RotateCcw className="size-3" /> Reset
@@ -1102,15 +1115,15 @@ export function ShotCard({
                     <button
                       type="button"
                       onClick={() => void handlePickReference()}
-                      className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-accent-dark hover:text-accent"
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-accent-dark hover:text-accent"
                     >
-                      <Sparkles className="size-3" /> + Unggah
+                      <Upload className="size-3" /> Unggah
                     </button>
                   </div>
                 </div>
 
                 {refCap === 0 ? (
-                  <span className="rounded-lg bg-sun-soft px-2 py-1.5 text-[10px] leading-snug text-sun-ink">
+                  <span className="rounded-lg bg-sun-soft px-2 py-1.5 text-[11px] leading-snug text-sun-ink">
                     Model gambar aktif tidak memakai gambar referensi. Ganti ke model ber-referensi (mis. Gemini 3.1 Flash Image) di Pengaturan.
                   </span>
                 ) : refItems.length === 0 ? (
@@ -1122,10 +1135,10 @@ export function ShotCard({
                       return (
                         <div
                           key={ref.sheetAssetId}
-                          className="flex items-center justify-between gap-1.5 rounded-lg border border-line bg-surface p-1.5 text-[10px]"
+                          className="flex items-center justify-between gap-1.5 rounded-lg border border-line bg-surface p-1.5 text-[11px]"
                         >
                           <div className="flex min-w-0 items-center gap-1.5">
-                            <span className="flex size-4 shrink-0 items-center justify-center rounded bg-ink font-mono text-[9px] font-bold text-paper">
+                            <span className="flex size-4 shrink-0 items-center justify-center rounded bg-ink font-mono text-[11px] font-bold text-paper">
                               {refIdx + 1}
                             </span>
                             {sheet?.url ? (
@@ -1135,13 +1148,13 @@ export function ShotCard({
                                 className="size-6 shrink-0 rounded object-cover border border-line"
                               />
                             ) : (
-                              <span className="flex size-6 shrink-0 items-center justify-center rounded bg-sand text-[9px] text-muted">
+                              <span className="flex size-6 shrink-0 items-center justify-center rounded bg-sand text-[11px] text-muted">
                                 ?
                               </span>
                             )}
                             <div className="min-w-0">
                               <div className="truncate font-semibold text-ink">{ref.name}</div>
-                              <div className="text-[9px] text-muted">{REF_KIND_LABEL[ref.kind]}</div>
+                              <div className="text-[11px] text-muted">{REF_KIND_LABEL[ref.kind]}</div>
                             </div>
                           </div>
                           <button
@@ -1165,7 +1178,7 @@ export function ShotCard({
 
                 {refCap > 0 && overflowRefs.length > 0 && (
                   <div className="flex flex-col gap-1 rounded-lg border border-dashed border-line-2 bg-sand/40 p-2">
-                    <span className="text-[10px] font-semibold text-muted">
+                    <span className="text-[11px] font-semibold text-muted">
                       Di luar batas {refCap} slot (dijaga lewat teks &amp; lock words):
                     </span>
                     <div className="flex flex-wrap gap-1">
@@ -1175,10 +1188,10 @@ export function ShotCard({
                           type="button"
                           onClick={() => handlePromoteOverflowRef(ref.sheetAssetId)}
                           title={`Klik untuk memprioritaskan ${ref.name} ke Slot #1`}
-                          className="inline-flex items-center gap-1 rounded border border-line bg-surface px-1.5 py-0.5 text-[10px] text-ink-2 hover:border-ink hover:text-ink"
+                          className="inline-flex items-center gap-1 rounded border border-line bg-surface px-1.5 py-0.5 text-[11px] text-ink-2 hover:border-ink hover:text-ink"
                         >
                           <span className="max-w-[110px] truncate">{ref.name}</span>
-                          <span className="text-[9px] font-bold text-accent-dark">↑</span>
+                          <span className="text-[11px] font-bold text-accent-dark">↑</span>
                         </button>
                       ))}
                     </div>
@@ -1191,7 +1204,7 @@ export function ShotCard({
                     <button
                       type="button"
                       onClick={handleAttachPrevShotRef}
-                      className="inline-flex items-center justify-center gap-1 rounded-lg border border-line bg-sand/70 px-2 py-1 text-[10px] font-semibold text-ink-2 transition-colors hover:border-ink hover:text-ink"
+                      className="inline-flex items-center justify-center gap-1 rounded-lg border border-line bg-sand/70 px-2 py-1 text-[11px] font-semibold text-ink-2 transition-colors hover:border-ink hover:text-ink"
                       title="Pasang gambar shot sebelumnya sebagai referensi pencahayaan & warna ruangan"
                     >
                       <Link2 className="size-3" />

@@ -37,7 +37,7 @@ export function ModelLogo({ family, size = 30, className }: { family?: string; s
   return (
     <span
       className={cx('flex shrink-0 items-center justify-center overflow-hidden border border-line-2 font-bold text-ink-2', className)}
-      style={{ width: size, height: size, borderRadius: Math.round(size * 0.26), background: look?.bg ?? '#F3EFE8', fontSize: Math.round(size * 0.4) }}
+      style={{ width: size, height: size, borderRadius: Math.round(size * 0.26), background: look?.bg ?? 'var(--color-sand)', fontSize: Math.round(size * 0.4) }}
       aria-hidden="true"
     >
       {src ? <img src={src} alt="" draggable={false} style={{ width: inner, height: inner }} className="object-contain" /> : (family ?? '?').slice(0, 1)}

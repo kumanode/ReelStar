@@ -157,8 +157,12 @@ export function Home() {
       danger: true
     })
     if (!ok) return
-    await window.api.projects.remove(p.id)
-    refresh()
+    try {
+      await window.api.projects.remove(p.id)
+      refresh()
+    } catch (e) {
+      toast('error', errorText(e))
+    }
   }
 
   const duplicate = async (p: ProjectSummary): Promise<void> => {
@@ -174,20 +178,20 @@ export function Home() {
     <div className="flex h-full flex-col">
       <header className="flex h-[68px] shrink-0 items-center gap-6 border-b border-line bg-surface px-8">
         <Logo />
-        <label className="flex h-10 w-[360px] items-center gap-2 rounded-full border border-line bg-sand px-3.5 text-muted">
-          <Search className="size-[18px]" />
+        <label className="flex h-10 w-full min-w-[180px] max-w-[360px] items-center gap-2 rounded-full border border-line bg-sand px-3.5 text-muted transition-all focus-within:border-ink focus-within:ring-2 focus-within:ring-accent/35">
+          <Search className="size-[18px] shrink-0" />
           <input
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Cari serial"
             aria-label="Cari serial"
-            className="flex-1 bg-transparent text-sm text-ink outline-none"
+            className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-muted"
           />
         </label>
         <div className="flex-1" />
         <ThemeToggle />
-        <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setNewModalOpen(true)}>
+        <Button variant="secondary" icon={<Plus className="size-4" />} onClick={() => setNewModalOpen(true)}>
           Serial baru
         </Button>
         <Button icon={<SlidersHorizontal className="size-[18px]" />} onClick={() => go({ name: 'settings', back: { name: 'home' } })}>
@@ -233,7 +237,7 @@ export function Home() {
               Tulis premisnya. AI memecahnya jadi episode dan naskah per shot, kamu tinjau, lalu gambar, video, dan suaranya dibuat.
             </p>
           </div>
-          <div className="flex flex-col gap-3 rounded-[18px] border-[1.5px] border-ink bg-surface py-5 pl-6 pr-5 shadow-ink-lg">
+          <div className="flex flex-col gap-3 rounded-[18px] border-[1.5px] border-ink bg-surface py-5 pl-6 pr-5 shadow-ink-lg transition-shadow focus-within:ring-2 focus-within:ring-accent/30">
             <label htmlFor="ide" className="text-[13px] font-semibold text-ink-2">
               Premis atau sinopsis serial
             </label>
@@ -243,7 +247,7 @@ export function Home() {
               value={synopsis}
               onChange={(e) => setSynopsis(e.target.value)}
               placeholder="Contoh: Rani, office girl yang selalu dihina manajernya, ternyata pewaris tunggal perusahaan tempat dia bekerja…"
-              className="resize-none bg-transparent text-lg leading-relaxed outline-none placeholder:text-muted/70"
+              className="resize-none bg-transparent text-lg leading-relaxed outline-none placeholder:text-muted"
             />
             <div className="flex flex-wrap items-center gap-2 border-t border-dashed border-line pt-3.5">
               <Select
@@ -302,7 +306,7 @@ export function Home() {
             </div>
           </div>
 
-          <div className="grid grid-cols-4 gap-5">
+          <div className="grid grid-cols-3 gap-5 xl:grid-cols-4">
             <button
               type="button"
               onClick={() => setNewModalOpen(true)}
@@ -315,73 +319,117 @@ export function Home() {
               <span className="text-[13px] text-muted">Mulai dari serial drama baru</span>
             </button>
 
-            {visible.map((p) => {
-              const st = STATUS[p.status]
-              const epCount = p.episodeCount || 1
-              const expCount = p.exportedCount || 0
-              const progressVal = epCount > 0 ? expCount / epCount : 0
-
-              return (
-                <article
-                  key={p.id}
-                  className="flex flex-col justify-between overflow-hidden rounded-2xl border border-line bg-surface transition-all hover:border-ink-2 hover:shadow-ink"
-                >
-                  <button type="button" onClick={() => go({ name: 'project', id: p.id })} className="text-left">
-                    <div className="relative aspect-video w-full overflow-hidden border-b border-line bg-sand/30">
-                      {p.coverUrl ? (
-                        <img src={p.coverUrl} alt="" className="size-full object-cover" />
-                      ) : (
-                        <StyleSwatch styleId={p.styleId} className="size-full" iconSize={40} />
-                      )}
-                      <span className="absolute left-2.5 top-2.5 rounded-full border border-ink bg-surface px-2.5 py-[3px] text-xs font-semibold">
-                        {getStyle(p.styleId).name}
-                      </span>
-                      <span className="absolute right-2.5 top-2.5 rounded-md bg-ink px-2 py-[2px] font-mono text-[11px] font-bold text-paper">
-                        {p.aspectRatio || '9:16'}
-                      </span>
-                    </div>
-
-                    <div className="flex flex-col gap-1.5 p-4">
-                      <div className="line-clamp-2 min-h-[44px] font-display text-base font-bold leading-snug text-ink">
-                        {p.title}
+            {projects === null
+              ? Array.from({ length: 3 }).map((_, idx) => (
+                  <div
+                    key={idx}
+                    aria-hidden="true"
+                    className="flex min-h-[262px] animate-pulse flex-col justify-between overflow-hidden rounded-2xl border border-line bg-surface"
+                  >
+                    <div>
+                      <div className="aspect-video w-full border-b border-line bg-sand/70" />
+                      <div className="flex flex-col gap-2.5 p-4">
+                        <div className="h-4 w-4/5 rounded bg-sand" />
+                        <div className="h-4 w-3/5 rounded bg-sand" />
+                        <div className="mt-2 h-1.5 w-full rounded-full bg-sand" />
                       </div>
+                    </div>
+                    <div className="flex items-center gap-2 border-t border-line/70 px-4 py-3">
+                      <div className="h-5 w-14 rounded-full bg-sand" />
+                      <div className="h-3.5 w-20 rounded bg-sand" />
+                    </div>
+                  </div>
+                ))
+              : visible.map((p) => {
+                  const st = STATUS[p.status]
+                  const epCount = p.episodeCount || 1
+                  const expCount = p.exportedCount || 0
+                  const progressVal = epCount > 0 ? expCount / epCount : 0
+                  const updatedLabel = relativeTime(p.updatedAt)
 
-                      {/* Episode count & Export progress bar */}
-                      <div className="flex flex-col gap-1 pt-1">
-                        <div className="flex items-center justify-between text-xs text-muted">
-                          <span>{epCount} episode</span>
-                          <span>
-                            {expCount}/{epCount} terekspor
+                  return (
+                    <article
+                      key={p.id}
+                      className="flex flex-col justify-between overflow-hidden rounded-2xl border border-line bg-surface transition-all hover:border-ink-2 hover:shadow-ink"
+                    >
+                      <button type="button" onClick={() => go({ name: 'project', id: p.id })} className="text-left">
+                        <div className="relative aspect-video w-full overflow-hidden border-b border-line bg-sand/30">
+                          {p.coverUrl ? (
+                            <img src={p.coverUrl} alt="" className="size-full object-cover" />
+                          ) : (
+                            <StyleSwatch styleId={p.styleId} className="size-full" iconSize={40} />
+                          )}
+                          <span className="absolute left-2.5 top-2.5 rounded-full border border-ink bg-surface px-2.5 py-[3px] text-xs font-semibold">
+                            {getStyle(p.styleId).name}
+                          </span>
+                          <span className="absolute right-2.5 top-2.5 rounded-md bg-ink px-2 py-[2px] font-mono text-[11px] font-bold text-paper">
+                            {p.aspectRatio || '9:16'}
                           </span>
                         </div>
-                        <Progress value={progressVal} className="h-1.5" />
-                      </div>
-                    </div>
-                  </button>
 
-                  <div className="flex items-center gap-2 border-t border-line/70 py-2.5 pl-4 pr-2">
-                    <Badge tone={st.tone}>{st.label}</Badge>
-                    <span className="truncate text-xs text-muted">{relativeTime(p.updatedAt)}</span>
-                    <div className="flex-1" />
-                    <Menu
-                      trigger={(open) => (
-                        <IconButton label="Opsi serial" onClick={open} className="border-transparent" size={32}>
-                          <MoreHorizontal className="size-4" />
-                        </IconButton>
-                      )}
-                      items={[
-                        { label: 'Buka serial', icon: <FolderOpen className="size-4" />, run: () => go({ name: 'project', id: p.id }) },
-                        { label: 'Duplikat serial', icon: <Copy className="size-4" />, run: () => void duplicate(p) },
-                        { label: 'Hapus serial', icon: <Trash2 className="size-4" />, danger: true, run: () => void remove(p) }
-                      ]}
-                    />
-                  </div>
-                </article>
-              )
-            })}
+                        <div className="flex flex-col gap-1.5 p-4">
+                          <div
+                            title={p.title}
+                            className="line-clamp-2 min-h-[44px] font-display text-base font-bold leading-snug text-ink"
+                          >
+                            {p.title}
+                          </div>
+
+                          {/* Episode count & Export progress bar */}
+                          <div className="flex flex-col gap-1 pt-1">
+                            <div className="flex items-center justify-between text-xs text-muted">
+                              <span>{epCount} episode</span>
+                              <span>
+                                {expCount}/{epCount} terekspor
+                              </span>
+                            </div>
+                            <Progress value={progressVal} className="h-1.5" />
+                          </div>
+                        </div>
+                      </button>
+
+                      <div className="flex items-center gap-2 border-t border-line/70 py-2.5 pl-4 pr-2">
+                        <Badge tone={st.tone}>{st.label}</Badge>
+                        <span title={updatedLabel} className="min-w-0 truncate text-xs text-muted">
+                          {updatedLabel}
+                        </span>
+                        <div className="flex-1" />
+                        <Menu
+                          trigger={(open) => (
+                            <IconButton label="Opsi serial" onClick={open} className="border-transparent" size={32}>
+                              <MoreHorizontal className="size-4" />
+                            </IconButton>
+                          )}
+                          items={[
+                            { label: 'Buka serial', icon: <FolderOpen className="size-4" />, run: () => go({ name: 'project', id: p.id }) },
+                            { label: 'Duplikat serial', icon: <Copy className="size-4" />, run: () => void duplicate(p) },
+                            { label: 'Hapus serial', icon: <Trash2 className="size-4" />, danger: true, run: () => void remove(p) }
+                          ]}
+                        />
+                      </div>
+                    </article>
+                  )
+                })}
           </div>
           {projects && projects.length === 0 && (
             <p className="text-sm text-muted">Belum ada serial drama. Buat serial baru untuk memulai.</p>
+          )}
+          {projects && projects.length > 0 && visible.length === 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-line-2 bg-sand/40 px-5 py-4">
+              <p className="text-sm text-ink-2">
+                Tidak ada serial yang cocok dengan filter atau pencarianmu.
+              </p>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  setFilter('all')
+                  setQuery('')
+                }}
+              >
+                Reset filter
+              </Button>
+            </div>
           )}
         </section>
       </main>
@@ -392,8 +440,11 @@ export function Home() {
         onCreated={(id) => go({ name: 'project', id })}
         initialSynopsis={synopsis}
         initialDurationSec={durationSec}
+        initialLanguage={language}
         initialAspectRatio={aspectRatio}
         initialStyleId={styleId}
+        initialTtsProvider={tts}
+        ttsOptions={ttsOptions}
       />
     </div>
   )
@@ -405,16 +456,22 @@ function NewSerialModal({
   onCreated,
   initialSynopsis = '',
   initialDurationSec = 60,
+  initialLanguage = 'id',
   initialAspectRatio = '9:16',
-  initialStyleId = 'premium_drama'
+  initialStyleId = 'premium_drama',
+  initialTtsProvider = 'gemini',
+  ttsOptions
 }: {
   open: boolean
   onClose: () => void
   onCreated: (projectId: string) => void
   initialSynopsis?: string
   initialDurationSec?: number
+  initialLanguage?: string
   initialAspectRatio?: AspectRatio
   initialStyleId?: string
+  initialTtsProvider?: TtsProvider
+  ttsOptions: SelectOption<TtsProvider>[]
 }) {
   const [title, setTitle] = useState('')
   const [storyText, setStoryText] = useState(initialSynopsis)
@@ -422,6 +479,8 @@ function NewSerialModal({
   const [targetEpisodeCount, setTargetEpisodeCount] = useState<number>(DEFAULT_TARGET_EPISODE_COUNT)
   const [isAutoEpisodes, setIsAutoEpisodes] = useState(false)
   const [sourceKind, setSourceKind] = useState<SourceKind>('novel')
+  const [language, setLanguage] = useState(initialLanguage)
+  const [ttsProvider, setTtsProvider] = useState<TtsProvider>(initialTtsProvider)
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(initialAspectRatio)
   const [styleId, setStyleId] = useState(initialStyleId)
   const [dialogAudio, setDialogAudio] = useState<DialogAudio>('video')
@@ -437,12 +496,14 @@ function NewSerialModal({
       setTargetEpisodeCount(DEFAULT_TARGET_EPISODE_COUNT)
       setIsAutoEpisodes(false)
       setSourceKind('novel')
+      setLanguage(initialLanguage)
+      setTtsProvider(initialTtsProvider)
       setAspectRatio(initialAspectRatio)
       setStyleId(initialStyleId)
       setAutoPlan(true)
       setTitle('')
     }
-  }, [open, initialSynopsis, initialDurationSec, initialAspectRatio, initialStyleId])
+  }, [open, initialSynopsis, initialDurationSec, initialLanguage, initialTtsProvider, initialAspectRatio, initialStyleId])
 
   const { totalEstimatedSec, isOverOneHour } = calculateSeriesDuration(
     isAutoEpisodes ? null : targetEpisodeCount,
@@ -451,12 +512,13 @@ function NewSerialModal({
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
+    e.target.value = ''
     if (!file) return
     const reader = new FileReader()
     reader.onload = (event) => {
       const text = String(event.target?.result ?? '')
       setStoryText(text)
-      toast('info', `File "${file.name}" dimuat (${text.length.toLocaleString()} karakter)`)
+      toast('info', `File "${file.name}" dimuat (${text.length.toLocaleString('id-ID')} karakter)`)
     }
     reader.readAsText(file)
   }
@@ -476,8 +538,10 @@ function NewSerialModal({
         targetEpisodeCount: isAutoEpisodes ? null : targetEpisodeCount,
         sourceKind,
         sourceText: cleanStory,
+        language,
         aspectRatio,
         styleId,
+        ttsProvider,
         dialogAudio
       })
       if (autoPlan && cleanStory) {
@@ -486,7 +550,7 @@ function NewSerialModal({
       toast(
         'success',
         autoPlan && cleanStory
-          ? `Serial "${bundle.project.title}" dibuat — langsung memecah episode…`
+          ? `Serial "${bundle.project.title}" dibuat, langsung memecah episode…`
           : `Serial "${bundle.project.title}" berhasil dibuat`
       )
       onCreated(bundle.project.id)
@@ -502,8 +566,23 @@ function NewSerialModal({
       open={open}
       onClose={onClose}
       title="Buat Serial Baru"
-      subtitle="Isi judul & sinopsis/cerita sekali saja — otomatis tersinkron ke Episode Hub dan bisa langsung dipecah jadi episode."
+      subtitle="Isi judul dan sinopsis sekali saja. Data otomatis tersinkron ke Episode Hub dan bisa langsung dipecah jadi episode."
       width={720}
+      footer={
+        <div className="flex items-center justify-end gap-2.5">
+          <Button onClick={onClose} disabled={creating}>
+            Batal
+          </Button>
+          <Button
+            variant="primary"
+            loading={creating}
+            disabled={isOverOneHour}
+            onClick={() => void handleCreate()}
+          >
+            Buat serial
+          </Button>
+        </div>
+      }
     >
       <div className="flex flex-col gap-4 text-sm text-ink">
         <Field label="Judul Serial" hint="Opsional, otomatis dinamai dari cerita jika dikosongkan.">
@@ -555,7 +634,7 @@ function NewSerialModal({
             placeholder={
               sourceKind === 'screenplay'
                 ? 'Tempel naskah jadi di sini (dialog dan adegan dipertahankan kata per kata)...'
-                : 'Tulis sinopsis, premis, atau tempel cerita novel di sini — otomatis tampil di Sumber Cerita Episode Hub...'
+                : 'Tulis sinopsis, premis, atau tempel cerita novel di sini. Otomatis tampil di Sumber Cerita Episode Hub...'
             }
             className={cx(inputCls, 'resize-none py-2.5 text-sm leading-relaxed')}
           />
@@ -580,17 +659,26 @@ function NewSerialModal({
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                aria-label="Kurangi target episode"
+                title="Kurangi target episode"
                 disabled={isAutoEpisodes || targetEpisodeCount <= MIN_TARGET_EPISODES}
                 onClick={() => setTargetEpisodeCount((prev) => Math.max(MIN_TARGET_EPISODES, prev - 1))}
                 className="flex size-9 items-center justify-center rounded-lg border border-line bg-paper text-ink transition-colors hover:bg-surface disabled:opacity-40"
               >
                 <Minus className="size-4" />
               </button>
-              <span className="w-12 text-center font-mono text-base font-bold text-ink">
-                {isAutoEpisodes ? 'Auto' : targetEpisodeCount}
+              <span
+                className={cx(
+                  'min-w-[68px] px-1 text-center font-mono font-bold text-ink',
+                  isAutoEpisodes ? 'text-xs' : 'text-base'
+                )}
+              >
+                {isAutoEpisodes ? 'Otomatis' : targetEpisodeCount}
               </span>
               <button
                 type="button"
+                aria-label="Tambah target episode"
+                title="Tambah target episode"
                 disabled={isAutoEpisodes || targetEpisodeCount >= MAX_TARGET_EPISODES}
                 onClick={() => setTargetEpisodeCount((prev) => Math.min(MAX_TARGET_EPISODES, prev + 1))}
                 className="flex size-9 items-center justify-center rounded-lg border border-line bg-paper text-ink transition-colors hover:bg-surface disabled:opacity-40"
@@ -600,7 +688,8 @@ function NewSerialModal({
               <Button
                 type="button"
                 size="sm"
-                variant={isAutoEpisodes ? 'primary' : 'ghost'}
+                variant={isAutoEpisodes ? 'ink' : 'secondary'}
+                aria-pressed={isAutoEpisodes}
                 onClick={() => setIsAutoEpisodes(!isAutoEpisodes)}
                 className="ml-auto"
               >
@@ -623,7 +712,7 @@ function NewSerialModal({
         {/* Total duration estimate */}
         <div
           className={cx(
-            'flex items-center justify-between rounded-xl px-3.5 py-2.5 text-xs',
+            'flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-xl px-3.5 py-2.5 text-xs',
             isOverOneHour
               ? 'border border-bad/30 bg-bad-soft text-bad-ink'
               : 'border border-line bg-surface text-ink-2'
@@ -640,6 +729,28 @@ function NewSerialModal({
               Maksimal durasi serial 1 jam (60 menit)!
             </span>
           )}
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="Bahasa Naskah & Suara">
+            <Select
+              label="Bahasa naskah dan suara"
+              value={language}
+              onChange={setLanguage}
+              options={LANGUAGES.map((l) => ({ value: l.code, label: l.label }))}
+              size="md"
+            />
+          </Field>
+
+          <Field label="Suara Narator (TTS)">
+            <Select
+              label="Suara narator"
+              value={ttsProvider}
+              onChange={setTtsProvider}
+              options={ttsOptions}
+              size="md"
+            />
+          </Field>
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -678,20 +789,6 @@ function NewSerialModal({
         <Field label="Gaya Visual Serial" hint="Gaya seni ilustrasi yang akan digunakan pada semua lembar karakter dan adegan.">
           <StylePicker value={styleId} onChange={setStyleId} />
         </Field>
-
-        <div className="flex items-center justify-end gap-2.5 border-t border-line pt-4">
-          <Button onClick={onClose} disabled={creating}>
-            Batal
-          </Button>
-          <Button
-            variant="primary"
-            loading={creating}
-            disabled={isOverOneHour}
-            onClick={() => void handleCreate()}
-          >
-            Buat serial
-          </Button>
-        </div>
       </div>
     </Modal>
   )

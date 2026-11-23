@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { Play } from 'lucide-react'
 import { TRANSITIONS, TRANSITION_MAX_SEC, TRANSITION_MIN_SEC, TRANSITION_SEC, transitionSecOf } from '@shared/motion'
 import type { Clip, TransitionId } from '@shared/types'
@@ -27,6 +27,14 @@ export function TransitionPanel({ clip, next, index }: { clip: Clip; next: Clip;
   const trying = useAudition((s) => (s.audition?.kind === 'transition' && s.audition.override ? s.audition.override.transition : null))
   const seconds = transitionSecOf(clip)
   const preview = (transition?: TransitionId): void => start({ kind: 'transition', clipId: clip.id, override: transition ? { transition } : undefined })
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   useEffect(() => {
     preview()
@@ -68,7 +76,7 @@ export function TransitionPanel({ clip, next, index }: { clip: Clip; next: Clip;
                   on ? 'border-ink bg-sun-soft' : trying === t.id ? 'border-ink-2 bg-paper' : 'border-line-2 hover:border-ink-2'
                 )}
               >
-                <span className={cx('flex size-8 items-center justify-center rounded-full border', on ? 'border-ink bg-sun' : 'border-line-2 bg-surface')}>
+                <span className={cx('flex size-8 items-center justify-center rounded-full border', on ? 'border-ink bg-sun text-[var(--color-on-sun)]' : 'border-line-2 bg-surface')}>
                   <Icon className="size-4" />
                 </span>
                 <span className={cx('text-sm', on && 'font-semibold')}>{t.label}</span>
@@ -89,17 +97,31 @@ export function TransitionPanel({ clip, next, index }: { clip: Clip; next: Clip;
               step={0.1}
               value={seconds}
               onChange={(e) => updateClip(clip.id, { transitionMs: Math.round(Number(e.target.value) * 1000) })}
-              onPointerDown={() => useProject.getState().beginHistoryGesture()}
-              onPointerCancel={() => useProject.getState().endHistoryGesture()}
+              onPointerDown={(e) => {
+                if (e.pointerType === 'mouse' && e.button !== 0) return
+                let active = true
+                useProject.getState().beginHistoryGesture()
+                const finish = (ev: Event): void => {
+                  if (!active) return
+                  active = false
+                  window.removeEventListener('pointerup', finish)
+                  window.removeEventListener('pointercancel', finish)
+                  window.removeEventListener('blur', finish)
+                  useProject.getState().endHistoryGesture()
+                  if (ev.type === 'pointerup' && mountedRef.current) preview()
+                }
+                window.addEventListener('pointerup', finish)
+                window.addEventListener('pointercancel', finish)
+                window.addEventListener('blur', finish)
+              }}
               onDoubleClick={() => {
                 updateClip(clip.id, { transitionMs: Math.round(TRANSITION_SEC * 1000) })
                 preview()
               }}
-              onPointerUp={() => { useProject.getState().endHistoryGesture(); preview() }}
               onKeyUp={() => preview()}
               aria-label="Durasi transisi"
               className="min-w-0 flex-1 cursor-pointer"
-              title="Geser atau klik 2x untuk kembali ke default (0,4 dtk)"
+              title="Geser atau klik 2x untuk kembali ke bawaan (0,4 dtk)"
             />
             <span
               role="button"
@@ -108,7 +130,14 @@ export function TransitionPanel({ clip, next, index }: { clip: Clip; next: Clip;
                 updateClip(clip.id, { transitionMs: Math.round(TRANSITION_SEC * 1000) })
                 preview()
               }}
-              title="Klik 2x untuk kembali ke 0,4 dtk"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  updateClip(clip.id, { transitionMs: Math.round(TRANSITION_SEC * 1000) })
+                  preview()
+                }
+              }}
+              title="Klik 2x atau tekan Enter untuk kembali ke 0,4 dtk"
               className="w-16 shrink-0 text-right font-mono"
             >
               {secondsLabel(seconds)}

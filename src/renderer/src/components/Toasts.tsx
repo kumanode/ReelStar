@@ -11,8 +11,8 @@ export function Toasts() {
           key={t.id}
           role={t.kind === 'error' ? 'alert' : 'status'}
           className={cx(
-            'pointer-events-auto flex items-start gap-3 rounded-2xl border-[1.5px] border-ink bg-surface px-4 py-3 shadow-ink-md',
-            t.kind === 'error' && 'bg-bad-soft'
+            'pointer-events-auto flex items-start gap-3 rounded-2xl border-[1.5px] border-ink px-4 py-3 shadow-ink-md',
+            t.kind === 'error' ? 'bg-bad-soft' : 'bg-surface'
           )}
         >
           {t.kind === 'error' ? (
@@ -37,7 +37,13 @@ export function Toasts() {
               </button>
             )}
           </div>
-          <button type="button" aria-label="Tutup" onClick={() => dismiss(t.id)} className="text-muted hover:text-ink">
+          <button
+            type="button"
+            aria-label="Tutup"
+            title="Tutup"
+            onClick={() => dismiss(t.id)}
+            className="-mr-1 -mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-sand hover:text-ink"
+          >
             <X className="size-4" />
           </button>
         </div>

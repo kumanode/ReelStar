@@ -26,6 +26,10 @@ import { Timeline, overlayLanes, type TimelinePick, type TimelineSelection } fro
 
 const MIN_TIMELINE_H = 180
 const MAX_TIMELINE_RATIO = 0.65
+/** Reserve enough vertical space for StudioHeader, Drama Finishing Bar, and a >= 240px 9:16 Player + transport bar. */
+const MIN_ABOVE_TIMELINE_H = 400
+const calcMaxTimelineHeight = (): number =>
+  Math.max(MIN_TIMELINE_H, Math.min(Math.round(window.innerHeight * MAX_TIMELINE_RATIO), window.innerHeight - MIN_ABOVE_TIMELINE_H))
 
 export function EditorStep() {
   const { project, episode, assets, selectedClipId, select, clips, updateClip, updateEditor, removeClip, flush, load } = useProject()
@@ -113,7 +117,12 @@ export function EditorStep() {
   useEffect(() => {
     useTrackControls.getState().reset()
     usePlayback.setState({ t: 0, playing: false })
-  }, [project?.id])
+    useAudition.getState().stop()
+    useOverlayUi.getState().select(null)
+    useCaptionUi.getState().select(null)
+    setTransitionId(null)
+    setSelectedSfxId(null)
+  }, [project?.id, episode?.id])
 
   const overlays = project?.editor.overlays ?? []
   /** What "Potong" cuts at the playhead: the selected overlay when the playhead is inside it, else the clip there. */
@@ -128,9 +137,10 @@ export function EditorStep() {
   const canSplit = usePlayback((s) => splitTarget(s.t) !== null)
 
   // Resizable timeline state persisted in localStorage. These hooks stay above the early return below.
-  const maxTimelineHeight = Math.max(MIN_TIMELINE_H, Math.round(window.innerHeight * MAX_TIMELINE_RATIO))
+  const maxTimelineHeight = calcMaxTimelineHeight()
   const clampTimelineHeight = (height: number): number => Math.max(MIN_TIMELINE_H, Math.min(maxTimelineHeight, height))
-  const defaultHeight = clampTimelineHeight(360 + (Math.max(1, overlayLanes(overlays, total).length) - 1) * 38)
+  const baseDefaultHeight = Math.min(240, Math.round(window.innerHeight * 0.34))
+  const defaultHeight = clampTimelineHeight(baseDefaultHeight + (Math.max(1, overlayLanes(overlays, total).length) - 1) * 28)
   const [timelineHeight, setTimelineHeight] = useState(() => {
     try {
       const saved = localStorage.getItem('bangstory_timeline_height')
@@ -147,14 +157,14 @@ export function EditorStep() {
   const latestHeight = useRef(timelineHeight)
   useEffect(() => {
     const resize = (): void => setTimelineHeight((height) => {
-      const max = Math.max(MIN_TIMELINE_H, Math.round(window.innerHeight * MAX_TIMELINE_RATIO))
+      const max = calcMaxTimelineHeight()
       const next = Math.max(MIN_TIMELINE_H, Math.min(max, height))
       latestHeight.current = next
       return next
     })
     window.addEventListener('resize', resize)
     return () => window.removeEventListener('resize', resize)
-  }, [maxTimelineHeight])
+  }, [])
 
   const endTimelineResize = (): void => {
     isResizing.current = false
@@ -317,10 +327,11 @@ export function EditorStep() {
             Finishing Drama
           </span>
           <Button
-            variant={hasTrimmedClips ? 'secondary' : 'primary'}
+            variant="secondary"
             size="sm"
             icon={<Scissors className="size-3.5" />}
             loading={trimming}
+            disabled={clips.length === 0}
             onClick={() => void handleAutoTrim('apply')}
             title="Pangkas jeda hening awal/akhir klip dialog video secara non-destruktif berbasis timestamp Whisper"
           >
@@ -366,30 +377,7 @@ export function EditorStep() {
         </div>
       </div>
 
-      <div className="grid min-h-0 grid-cols-[72px_minmax(0,1fr)_340px] grid-rows-[minmax(0,1fr)]">
-        {/* Tabs share the rail's height (36–48 px each) so all of them fit at 1180×720 without a scrollbar;
-            scrolling stays only as a fallback when the timeline is dragged very tall. */}
-        <nav aria-label="Panel editor" className="scroll-thin flex min-h-0 flex-col items-center gap-0.5 overflow-y-auto border-r border-line bg-surface py-1.5">
-          {INSPECTOR_TABS.map((t) => {
-            const Icon = t.icon
-            const on = tab === t.id
-            return (
-              <button
-                key={t.id}
-                type="button"
-                aria-pressed={on}
-                onClick={() => setTab(t.id)}
-                className={cx(
-                  'flex max-h-12 min-h-9 w-14 flex-1 basis-0 flex-col items-center justify-center gap-0.5 rounded-lg text-[11px] leading-tight',
-                  on ? 'border-[1.5px] border-ink bg-sun-soft font-semibold text-ink' : 'font-medium text-ink-2 hover:bg-sand'
-                )}
-              >
-                <Icon className="size-4" />
-                {t.label}
-              </button>
-            )
-          })}
-        </nav>
+      <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_356px] grid-rows-[minmax(0,1fr)]">
         <Player
           items={items}
           total={total}
@@ -399,11 +387,46 @@ export function EditorStep() {
           assets={assets}
           editOverlays={tab === 'overlay'}
         />
-        <Inspector tab={tab} clip={sel} index={selIndex} total={total} transitionId={transitionId} sfxId={selectedSfxId} />
+        <div className="flex min-h-0 flex-col border-l border-line bg-surface">
+          {/* Inspector tabs sit directly above the panel they control, freeing 72px for the player and avoiding a second left rail. */}
+          <nav aria-label="Panel editor" className="grid shrink-0 grid-cols-6 gap-1 border-b border-line bg-paper/70 p-1.5">
+            {INSPECTOR_TABS.map((t) => {
+              const Icon = t.icon
+              const on = tab === t.id
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => setTab(t.id)}
+                  className={cx(
+                    'flex h-11 min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg px-0.5 text-[11px] leading-tight transition-colors',
+                    on ? 'border-[1.5px] border-ink bg-sun-soft font-semibold text-ink' : 'font-medium text-ink-2 hover:bg-sand hover:text-ink'
+                  )}
+                >
+                  <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+                  <span className="max-w-full truncate">{t.label}</span>
+                </button>
+              )
+            })}
+          </nav>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <Inspector
+              tab={tab}
+              clip={sel}
+              index={selIndex}
+              total={total}
+              transitionId={transitionId}
+              sfxId={selectedSfxId}
+              onOpenSmartSfx={() => setSmartSfxOpen(true)}
+            />
+          </div>
+        </div>
       </div>
       <div
         role="separator"
         aria-orientation="horizontal"
+        aria-label="Atur tinggi timeline"
         tabIndex={0}
         onPointerDown={(e) => {
           e.preventDefault()
@@ -464,6 +487,7 @@ export function EditorStep() {
         canDelete={!!selection}
         onSplit={() => void onSplit()}
         onDelete={() => void onDelete()}
+        onOpenSmartSfx={() => setSmartSfxOpen(true)}
       />
 
       <SmartSfxModal
@@ -473,18 +497,22 @@ export function EditorStep() {
         items={items}
         onBatchAdd={(results) => {
           if (!results.length) return
-          const existing = project.editor.sfx ?? []
+          const projectState = useProject.getState()
+          for (const r of results) {
+            projectState.addAsset(r.asset)
+          }
+          const existing = projectState.project?.editor.sfx ?? []
           const added = results.map((r) => ({
             id: crypto.randomUUID(),
             assetId: r.asset.id,
             name: r.asset.prompt || 'SFX AI',
             startMs: Math.max(0, Math.round(r.startMs)),
             durationMs: Math.max(300, r.asset.durationMs ?? 2000),
-            volumeDb: r.volumeDb
+            volumeDb: r.volumeDb,
+            auto: false
           }))
           updateEditor({ sfx: [...existing, ...added] })
           setTab('sfx')
-          toast('success', `${added.length} SFX AI ditambahkan ke timeline.`)
         }}
       />
     </div>

@@ -1,17 +1,43 @@
 import { NO_MUSIC, NO_MUSIC_DIALOG } from '@shared/higgsfield'
 import { extractMediaUrls, normalizeMediaUrl } from '@shared/flow2api-catalog'
+import { resolveActive } from '@shared/providers'
 import type { KeyTestResult } from '@shared/types'
 import { getSecret } from '../secrets'
 import { getSettings } from '../settings'
 import { ApiError, readError, sleep } from './http'
 
+const CONNECT_TIMEOUT_MS = 3 * 60 * 1000
+const STREAM_IDLE_TIMEOUT_MS = 5 * 60 * 1000
+
+function activeFlow2ApiProvider() {
+  const settings = getSettings()
+  const { provider } = resolveActive(settings, 'image')
+  return { settings, provider: provider.protocol === 'flow2api' ? provider : null }
+}
+
 function getBaseUrl(override?: string): string {
-  const base = (override ?? getSettings().flow2apiBaseUrl ?? '').trim().replace(/\/+$/, '')
+  if (override !== undefined) {
+    const base = override.trim().replace(/\/+$/, '')
+    return base || 'http://localhost:8000/v1'
+  }
+  const { settings, provider } = activeFlow2ApiProvider()
+  // Built-in flow2api keeps its user-configured URL in settings.flow2apiBaseUrl; custom flow2api providers use provider.baseUrl.
+  const raw =
+    provider && provider.id !== 'flow2api'
+      ? (provider.baseUrl || settings.flow2apiBaseUrl || '')
+      : (settings.flow2apiBaseUrl || provider?.baseUrl || '')
+  const base = raw.trim().replace(/\/+$/, '')
   return base || 'http://localhost:8000/v1'
 }
 
 function getAuthHeader(cred?: string): Record<string, string> {
-  const key = cred !== undefined ? cred : getSecret('flow2api')
+  let key: string | null
+  if (cred !== undefined) {
+    key = cred
+  } else {
+    const { provider } = activeFlow2ApiProvider()
+    key = provider ? getSecret(provider.id) : getSecret('flow2api')
+  }
   return key?.trim() ? { Authorization: `Bearer ${key.trim()}` } : {}
 }
 
@@ -43,9 +69,6 @@ function parseHttpError(status: number, detail: string, retryAfterMs?: number): 
   if (status === 429) {
     return new ApiError('Flow2API sedang membatasi permintaan (rate limit). Tunggu sebentar lalu coba lagi.', 429, true, retryAfterMs)
   }
-  if (/cookie|session|login|unauthorized|google/i.test(detail)) {
-    return new ApiError('Sesi akun Google di Flow2API kedaluwarsa. Perbarui cookie di dashboard Flow2API.', status)
-  }
   if (/captcha|recaptcha/i.test(detail)) {
     return new ApiError('Verifikasi captcha gagal di Flow2API. Periksa solver captcha di dashboard Flow2API.', status)
   }
@@ -69,6 +92,9 @@ function parseHttpError(status: number, detail: string, retryAfterMs?: number): 
   }
   if (status >= 500) {
     return new ApiError(`Server Flow2API mengalami kesalahan (${status}): ${detail}`, status, status === 503, retryAfterMs)
+  }
+  if (/cookie|session|login|unauthorized/i.test(detail)) {
+    return new ApiError('Sesi akun Google di Flow2API kedaluwarsa. Perbarui cookie di dashboard Flow2API.', status)
   }
   return new ApiError(`Flow2API menolak permintaan (${status}): ${detail}`, status)
 }
@@ -117,136 +143,196 @@ async function streamCompletion(
   const base = getBaseUrl()
   const url = `${base}/chat/completions`
 
-  let res: Response
-  const requestStartedAt = Date.now()
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream, application/json',
-        ...getAuthHeader()
-      },
-      body: JSON.stringify(body),
-      signal
-    })
-  } catch (e) {
-    throw friendlyError(e, base)
+  const reqCtrl = new AbortController()
+  const onOuterAbort = (): void => reqCtrl.abort()
+  if (signal?.aborted) reqCtrl.abort()
+  else signal?.addEventListener('abort', onOuterAbort, { once: true })
+
+  let timedOut = false
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const armTimer = (ms: number, onTimeout?: () => void): void => {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
+      timedOut = true
+      reqCtrl.abort()
+      onTimeout?.()
+    }, ms)
   }
-
-  if (!res.ok) {
-    const detail = await readError(res)
-    const header = res.headers.get('retry-after')
-    const retryAfterSeconds = header ? Number(header) : Number.NaN
-    const retryAfterDate = header && !Number.isFinite(retryAfterSeconds) ? Date.parse(header) : Number.NaN
-    const retryAfterMs = Number.isFinite(retryAfterSeconds)
-      ? Math.max(0, retryAfterSeconds * 1000)
-      : Number.isFinite(retryAfterDate)
-        ? Math.max(0, retryAfterDate - Date.now())
-        : undefined
-    throw parseHttpError(res.status, detail, retryAfterMs)
-  }
-
-  if (!res.body) {
-    throw new ApiError('Flow2API tidak mengembalikan isi stream. Hasil mungkin belum diketahui; permintaan tidak diulang otomatis.', 598)
-  }
-
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder('utf-8')
-  let accumulatedText = ''
-  let buffer = ''
-  let streamEnded = false
-  // Flow2API reports progress and failure text in reasoning_content; kept so an empty result can say why.
-  let lastStatus = ''
-  const started = Date.now()
-
-  // Flow2API answers 200 and then streams `data: {"error": {...}}`, so failures only show up here.
-  const readChunk = (jsonStr: string): void => {
-    let parsed: {
-      error?: { message?: string; status_code?: number }
-      choices?: Array<{ delta?: { content?: string; text?: string; reasoning_content?: string } }>
+  const clearTimer = (): void => {
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
     }
+  }
+
+  try {
+    let res: Response
+    const requestStartedAt = Date.now()
+    armTimer(CONNECT_TIMEOUT_MS)
     try {
-      parsed = JSON.parse(jsonStr)
-    } catch {
-      return
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream, application/json',
+          ...getAuthHeader()
+        },
+        body: JSON.stringify(body),
+        signal: reqCtrl.signal
+      })
+    } catch (e) {
+      if (timedOut && !signal?.aborted) {
+        throw new ApiError(
+          'Flow2API terlalu lama merespons sebelum status permintaan diketahui. Hasil mungkin belum diketahui; periksa server sebelum mencoba lagi.',
+          408
+        )
+      }
+      throw friendlyError(e, base)
+    } finally {
+      clearTimer()
     }
-    if (parsed.error) {
-      throw parseHttpError(parsed.error.status_code ?? 500, parsed.error.message || 'Generation failed')
-    }
-    const delta = parsed.choices?.[0]?.delta
-    const content = delta?.content ?? delta?.text ?? ''
-    if (content) accumulatedText += content
-    const status = delta?.reasoning_content?.trim()
-    if (status) lastStatus = status
-  }
 
-  try {
-    for (;;) {
-      let done: boolean
-      let value: Uint8Array | undefined
+    if (!res.ok) {
+      const detail = await readError(res)
+      const header = res.headers.get('retry-after')
+      const retryAfterSeconds = header ? Number(header) : Number.NaN
+      const retryAfterDate = header && !Number.isFinite(retryAfterSeconds) ? Date.parse(header) : Number.NaN
+      const retryAfterMs = Number.isFinite(retryAfterSeconds)
+        ? Math.max(0, retryAfterSeconds * 1000)
+        : Number.isFinite(retryAfterDate)
+          ? Math.max(0, retryAfterDate - Date.now())
+          : undefined
+      throw parseHttpError(res.status, detail, retryAfterMs)
+    }
+
+    if (!res.body) {
+      throw new ApiError('Flow2API tidak mengembalikan isi stream. Hasil mungkin belum diketahui; permintaan tidak diulang otomatis.', 598)
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let accumulatedText = ''
+    let buffer = ''
+    let streamEnded = false
+    // Flow2API reports progress and failure text in reasoning_content; kept so an empty result can say why.
+    let lastStatus = ''
+    const started = Date.now()
+
+    // Flow2API answers 200 and then streams `data: {"error": {...}}`, so failures only show up here.
+    const readChunk = (jsonStr: string): void => {
+      let parsed: {
+        error?: { message?: string; status_code?: number }
+        choices?: Array<{ delta?: { content?: string; text?: string; reasoning_content?: string } }>
+      }
       try {
-        ;({ done, value } = await reader.read())
-      } catch (e) {
-        if (signal?.aborted) throw e
-        throw new ApiError('Koneksi Flow2API terputus setelah generasi dimulai. Hasil mungkin belum diketahui dan permintaan tidak diulang otomatis; periksa server sebelum mencoba lagi.', 598)
+        parsed = JSON.parse(jsonStr)
+      } catch {
+        return
       }
-      if (done) {
-        streamEnded = true
-        break
+      if (parsed.error) {
+        throw parseHttpError(parsed.error.status_code ?? 500, parsed.error.message || 'Generation failed')
       }
+      const delta = parsed.choices?.[0]?.delta
+      const content = delta?.content ?? delta?.text ?? ''
+      if (content) accumulatedText += content
+      const status = delta?.reasoning_content?.trim()
+      if (status) lastStatus = status
+    }
 
-      const elapsed = Date.now() - started
-      const chunk = decoder.decode(value, { stream: true })
-      buffer += chunk
+    try {
+      for (;;) {
+        let done: boolean
+        let value: Uint8Array | undefined
+        // Reset the idle watchdog on every chunk so hung streams cannot leak worker slots forever.
+        armTimer(STREAM_IDLE_TIMEOUT_MS, () => {
+          reader.cancel().catch(() => {})
+        })
+        try {
+          ;({ done, value } = await reader.read())
+        } catch (e) {
+          if (signal?.aborted) throw e
+          if (timedOut) {
+            throw new ApiError(
+              'Flow2API berhenti mengirim data (timeout) setelah generasi dimulai. Hasil mungkin belum diketahui dan permintaan tidak diulang otomatis; periksa server sebelum mencoba lagi.',
+              408
+            )
+          }
+          throw new ApiError('Koneksi Flow2API terputus setelah generasi dimulai. Hasil mungkin belum diketahui dan permintaan tidak diulang otomatis; periksa server sebelum mencoba lagi.', 598)
+        } finally {
+          clearTimer()
+        }
+        if (done) {
+          if (timedOut && !signal?.aborted) {
+            throw new ApiError(
+              'Flow2API berhenti mengirim data (timeout) setelah generasi dimulai. Hasil mungkin belum diketahui dan permintaan tidak diulang otomatis; periksa server sebelum mencoba lagi.',
+              408
+            )
+          }
+          streamEnded = true
+          break
+        }
 
-      onProgress?.(0.12, `${progressLabel} · ${Math.floor(elapsed / 1000)} dtk`)
+        const elapsed = Date.now() - started
+        const chunk = decoder.decode(value, { stream: true })
+        buffer += chunk
 
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
+        onProgress?.(0.12, `${progressLabel} · ${Math.floor(elapsed / 1000)} dtk`)
 
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed || trimmed.startsWith(':')) continue
-        if (trimmed === 'data: [DONE]') continue
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
 
-        if (trimmed.startsWith('data: ')) {
-          try {
-            readChunk(trimmed.slice(6).trim())
-          } catch (e) {
-            if (e instanceof ApiError) throw new ApiError(`${e.message} Hasil mungkin belum diketahui; permintaan tidak diulang otomatis.`, e.status)
-            throw e
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed || trimmed.startsWith(':')) continue
+          if (trimmed === 'data: [DONE]') continue
+
+          if (trimmed.startsWith('data: ')) {
+            try {
+              readChunk(trimmed.slice(6).trim())
+            } catch (e) {
+              if (e instanceof ApiError) throw new ApiError(`${e.message} Hasil mungkin belum diketahui; permintaan tidak diulang otomatis.`, e.status, false)
+              throw e
+            }
           }
         }
       }
+    } finally {
+      clearTimer()
+      reader.releaseLock()
+      console.info('[flow2api] stream finished', { elapsedMs: Date.now() - requestStartedAt, endedNormally: streamEnded })
     }
-  } finally {
-    reader.releaseLock()
-    console.info('[flow2api] stream finished', { elapsedMs: Date.now() - requestStartedAt, endedNormally: streamEnded })
-  }
 
-  // Handle any remaining buffered content or non-streaming JSON responses
-  const remaining = buffer.trim()
-  if (remaining) {
-    if (remaining.startsWith('data: ') && remaining !== 'data: [DONE]') {
-      readChunk(remaining.slice(6).trim())
-    } else if (!accumulatedText) {
-      try {
-        const parsed = JSON.parse(remaining)
-        if (parsed.error) throw parseHttpError(parsed.error.status_code ?? 500, parsed.error.message || 'Generation failed')
-        const content =
-          parsed.choices?.[0]?.message?.content ??
-          parsed.choices?.[0]?.delta?.content ??
-          parsed.choices?.[0]?.text ??
-          ''
-        if (content) accumulatedText = content
-      } catch (e) {
-        if (e instanceof ApiError) throw e
+    // Handle any remaining buffered content or non-streaming JSON responses
+    const remaining = buffer.trim()
+    if (remaining) {
+      if (remaining.startsWith('data: ') && remaining !== 'data: [DONE]') {
+        try {
+          readChunk(remaining.slice(6).trim())
+        } catch (e) {
+          if (e instanceof ApiError) throw new ApiError(`${e.message} Hasil mungkin belum diketahui; permintaan tidak diulang otomatis.`, e.status, false)
+          throw e
+        }
+      } else if (!accumulatedText) {
+        try {
+          const parsed = JSON.parse(remaining)
+          if (parsed.error) throw parseHttpError(parsed.error.status_code ?? 500, parsed.error.message || 'Generation failed')
+          const content =
+            parsed.choices?.[0]?.message?.content ??
+            parsed.choices?.[0]?.delta?.content ??
+            parsed.choices?.[0]?.text ??
+            ''
+          if (content) accumulatedText = content
+        } catch (e) {
+          if (e instanceof ApiError) throw new ApiError(`${e.message} Hasil mungkin belum diketahui; permintaan tidak diulang otomatis.`, e.status, false)
+        }
       }
     }
-  }
 
-  return accumulatedText || lastStatus
+    return accumulatedText || lastStatus
+  } finally {
+    clearTimer()
+    signal?.removeEventListener('abort', onOuterAbort)
+  }
 }
 
 /**
@@ -330,7 +416,8 @@ export async function generateImage(opts: GenerateImageOptions): Promise<{ media
 
   const urls = extractMediaUrls(markdown)
   if (!urls.length) {
-    throw new Error('Flow2API selesai tanpa mengembalikan tautan gambar hasil')
+    const reason = markdown.trim().slice(0, 300)
+    throw new Error(`Flow2API selesai tanpa mengembalikan tautan gambar hasil${reason ? `: ${reason}` : ''}`)
   }
 
   return { mediaUrl: normalizeMediaUrl(urls[0], base) }

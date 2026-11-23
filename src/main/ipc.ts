@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
+import type { OpenDialogOptions, SaveDialogOptions } from 'electron'
+import { providerById } from '@shared/providers'
 import type {
   ApiProvider,
   AppSettings,
@@ -66,6 +68,7 @@ import {
   createLocation,
   createProject,
   createProp,
+  currentRevision,
   derivativesOf,
   duplicateProject,
   getAsset,
@@ -74,6 +77,7 @@ import {
   getCharacter,
   getClip,
   getDerivative,
+  getEpisode,
   getLocation,
   getProject,
   getProp,
@@ -112,7 +116,7 @@ import {
 } from './repo'
 import { BUILTIN_SFX } from '@shared/sfx'
 import type { Clip } from '@shared/types'
-import { clearSecret, keyStatuses, recordCheck, revealSecret, setSecret } from './secrets'
+import { clearSecret, getSecret, keyStatuses, recordCheck, revealSecret, setSecret } from './secrets'
 import { dropCache, getSettings, setSettings } from './settings'
 import { probeDurationMs, probeSize, probeVideoCodec, toYoutubeThumbnail } from './services/audio'
 import * as eleven from './services/elevenlabs'
@@ -151,11 +155,37 @@ function handle(channel: string, fn: Handler): void {
   })
 }
 
-async function testProvider(provider: ApiProvider, key?: string): Promise<KeyTestResult> {
-  if (provider === 'higgsfield') return hf.testCredentials(key)
-  if (provider === 'flow2api') return f2a.testCredentials(key)
-  if (provider === 'elevenlabs') return eleven.testKey(key)
-  return llm.testLlm(provider, key)
+type TestKeyOverride = { key?: string; baseUrl?: string; protocol?: string }
+
+function parentWindow(): BrowserWindow | undefined {
+  return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+}
+
+function showOpenDialog(opts: OpenDialogOptions) {
+  const win = parentWindow()
+  return win ? dialog.showOpenDialog(win, opts) : dialog.showOpenDialog(opts)
+}
+
+function showSaveDialog(opts: SaveDialogOptions) {
+  const win = parentWindow()
+  return win ? dialog.showSaveDialog(win, opts) : dialog.showSaveDialog(opts)
+}
+
+async function testProvider(provider: ApiProvider, key?: string, override?: TestKeyOverride): Promise<KeyTestResult> {
+  const settings = getSettings()
+  const def = providerById(provider, settings.customProviders)
+  const protocol = override?.protocol || def?.protocol
+  const effectiveKey = override?.key ?? key
+  if (provider === 'flow2api' || protocol === 'flow2api') {
+    // Preset flow2api reads its customizable flow2apiBaseUrl when no override is given; custom flow2api providers read their def baseUrl and stored secret.
+    const f2aBase = override?.baseUrl || (provider === 'flow2api' ? settings.flow2apiBaseUrl || def?.baseUrl : def?.baseUrl)
+    const f2aKey = effectiveKey !== undefined ? effectiveKey : provider === 'flow2api' ? undefined : (getSecret(provider) ?? '')
+    return f2a.testCredentials(f2aKey, f2aBase)
+  }
+  if (provider === 'higgsfield') return hf.testCredentials(effectiveKey)
+  if (provider === 'elevenlabs') return eleven.testKey(effectiveKey)
+  const baseUrl = override?.baseUrl || def?.baseUrl
+  return llm.testLlm(provider, effectiveKey, baseUrl)
 }
 
 function defaultExportFolder(): string {
@@ -166,8 +196,9 @@ export function registerIpc(): void {
   handle('projects:list', () => listProjects())
   handle('projects:create', (input: NewProjectInput) => getBundle(createProject(input).id))
   handle('projects:get', (id: string, episodeId?: string) => getBundle(id, episodeId))
-  handle('projects:save', (snap: ProjectSnapshot) => ({ updatedAt: saveSnapshot(snap) }))
-  handle('projects:remove', (id: string) => {
+  handle('projects:save', (snap: ProjectSnapshot) => ({ updatedAt: saveSnapshot(snap), rev: currentRevision() }))
+  handle('projects:remove', async (id: string) => {
+    await cancelProjectJobs(id)
     const removed = removeProject(id)
     clearExportCache(id)
     return removed
@@ -184,7 +215,15 @@ export function registerIpc(): void {
   handle('episodes:list', (projectId: string) => listEpisodes(projectId))
   handle('episodes:create', (projectId: string, input?: Partial<Episode>) => createEpisode(projectId, input))
   handle('episodes:update', (episodeId: string, patch: Partial<Episode>) => updateEpisode(episodeId, patch))
-  handle('episodes:remove', (episodeId: string) => removeEpisode(episodeId))
+  handle('episodes:remove', async (episodeId: string) => {
+    try {
+      const ep = getEpisode(episodeId)
+      await cancelEpisodeJobs(ep.projectId, episodeId)
+    } catch {
+      // Episode may already be gone; continue safely.
+    }
+    removeEpisode(episodeId)
+  })
   handle('episodes:removeAll', async (projectId: string) => {
     await cancelEpisodeJobs(projectId)
     removeAllEpisodes(projectId)
@@ -207,8 +246,7 @@ export function registerIpc(): void {
   })
   handle('lorebook:pickCharacterSheet', async (characterId: string) => {
     const c = getCharacter(characterId)
-    const win = BrowserWindow.getFocusedWindow()
-    const res = await dialog.showOpenDialog(win!, {
+    const res = await showOpenDialog({
       title: `Pilih lembar karakter untuk ${c.name}`,
       filters: [{ name: 'Gambar', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
       properties: ['openFile']
@@ -246,8 +284,7 @@ export function registerIpc(): void {
   handle('lorebook:pickDerivativeSheet', async (derivativeId: string) => {
     const d = getDerivative(derivativeId)
     if (!d) throw new Error('Varian tidak ditemukan')
-    const win = BrowserWindow.getFocusedWindow()
-    const res = await dialog.showOpenDialog(win!, {
+    const res = await showOpenDialog({
       title: `Pilih lembar varian kostum untuk ${d.name}`,
       filters: [{ name: 'Gambar', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
       properties: ['openFile']
@@ -285,8 +322,7 @@ export function registerIpc(): void {
   handle('lorebook:pickLocationSheet', async (locationId: string) => {
     const l = getLocation(locationId)
     if (!l) throw new Error('Lokasi tidak ditemukan')
-    const win = BrowserWindow.getFocusedWindow()
-    const res = await dialog.showOpenDialog(win!, {
+    const res = await showOpenDialog({
       title: `Pilih lembar lokasi untuk ${l.name}`,
       filters: [{ name: 'Gambar', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
       properties: ['openFile']
@@ -323,8 +359,7 @@ export function registerIpc(): void {
   handle('lorebook:pickPropSheet', async (propId: string) => {
     const pr = getProp(propId)
     if (!pr) throw new Error('Prop tidak ditemukan')
-    const win = BrowserWindow.getFocusedWindow()
-    const res = await dialog.showOpenDialog(win!, {
+    const res = await showOpenDialog({
       title: `Pilih lembar prop untuk ${pr.name}`,
       filters: [{ name: 'Gambar', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
       properties: ['openFile']
@@ -501,7 +536,9 @@ export function registerIpc(): void {
     estimateCredits(kind, modelId, aspect, seconds, resolution)
   )
 
-  handle('assets:setActive', (clipId: string, assetId: string) => setActiveAsset(clipId, assetId))
+  handle('assets:setActive', (clipId: string, assetId: string, preserveTiming?: boolean) =>
+    setActiveAsset(clipId, assetId, Boolean(preserveTiming))
+  )
   handle('clips:split', (clipId: string, atMs: number) => splitClip(clipId, Number(atMs)))
   handle('clips:detachVoice', (clipId: string) => detachVoice(clipId))
   handle('clips:autoTrimEpisode', (projectId: string, episodeId: string, mode?: 'apply' | 'reset') =>
@@ -520,8 +557,7 @@ export function registerIpc(): void {
     return fresh
   })
   handle('assets:pickMusic', async (projectId: string) => {
-    const win = BrowserWindow.getFocusedWindow()
-    const res = await dialog.showOpenDialog(win!, {
+    const res = await showOpenDialog({
       title: 'Pilih musik latar',
       filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'ogg'] }],
       properties: ['openFile']
@@ -545,8 +581,7 @@ export function registerIpc(): void {
   })
 
   handle('assets:pickImage', async (projectId: string) => {
-    const win = BrowserWindow.getFocusedWindow()
-    const res = await dialog.showOpenDialog(win!, {
+    const res = await showOpenDialog({
       title: 'Pilih gambar logo atau watermark',
       filters: [{ name: 'Gambar', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
       properties: ['openFile']
@@ -572,8 +607,7 @@ export function registerIpc(): void {
   })
 
   handle('assets:pickReference', async (projectId: string, clipId?: string) => {
-    const win = BrowserWindow.getFocusedWindow()
-    const res = await dialog.showOpenDialog(win!, {
+    const res = await showOpenDialog({
       title: 'Pilih gambar referensi shot',
       filters: [{ name: 'Gambar', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
       properties: ['openFile']
@@ -650,8 +684,7 @@ export function registerIpc(): void {
   })
 
   handle('assets:pickSfx', async (projectId: string) => {
-    const win = BrowserWindow.getFocusedWindow()
-    const res = await dialog.showOpenDialog(win!, {
+    const res = await showOpenDialog({
       title: 'Pilih file efek suara (SFX)',
       filters: [{ name: 'Audio SFX', extensions: ['wav', 'mp3', 'ogg', 'm4a'] }],
       properties: ['openFile']
@@ -703,8 +736,7 @@ export function registerIpc(): void {
   handle('assets:replaceClipMedia', async (projectId: string, clipId: string) => {
     const ownedClip = getClip(clipId)
     if (ownedClip.projectId !== projectId) throw new Error('Klip tidak cocok dengan proyek ini')
-    const win = BrowserWindow.getFocusedWindow()
-    const res = await dialog.showOpenDialog(win!, {
+    const res = await showOpenDialog({
       title: 'Pilih file media lokal untuk klip',
       filters: [
         { name: 'Semua Media', extensions: ['png', 'jpg', 'jpeg', 'webp', 'mp4', 'webm', 'mov'] },
@@ -797,9 +829,9 @@ export function registerIpc(): void {
     if (provider === 'flow2api') setSettings({ flow2apiBaseUrl: 'http://localhost:8000/v1' })
   })
   handle('models:list', (source: ModelSource, refresh?: boolean) => llm.listModels(source, !!refresh))
-  handle('settings:testKey', async (provider: ApiProvider) => {
-    const result = await testProvider(provider).catch((e): KeyTestResult => ({ ok: false, message: (e as Error).message }))
-    recordCheck(provider, result.ok, result.message)
+  handle('settings:testKey', async (provider: ApiProvider, override?: TestKeyOverride) => {
+    const result = await testProvider(provider, undefined, override).catch((e): KeyTestResult => ({ ok: false, message: (e as Error).message }))
+    if (!override) recordCheck(provider, result.ok, result.message)
     return result
   })
   handle('settings:revealKey', (provider: ApiProvider) => revealSecret(provider))
@@ -812,8 +844,7 @@ export function registerIpc(): void {
   handle('export:nvencAvailable', () => nvencAvailable())
   handle('export:defaultFolder', () => defaultExportFolder())
   handle('export:pickFolder', async () => {
-    const win = BrowserWindow.getFocusedWindow()
-    const res = await dialog.showOpenDialog(win!, {
+    const res = await showOpenDialog({
       title: 'Pilih folder ekspor',
       defaultPath: defaultExportFolder(),
       properties: ['openDirectory', 'createDirectory']
@@ -826,9 +857,8 @@ export function registerIpc(): void {
   handle('export:saveThumbnail', async (assetId: string, fileName: string) => {
     const asset = getAsset(assetId)
     if (!asset || asset.kind !== 'image' || asset.meta.thumbnail !== true) throw new Error('Thumbnail tidak ditemukan')
-    const win = BrowserWindow.getFocusedWindow()
     const safe = String(fileName ?? '').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'thumbnail'
-    const res = await dialog.showSaveDialog(win!, {
+    const res = await showSaveDialog({
       title: 'Simpan thumbnail YouTube',
       defaultPath: join(defaultExportFolder(), `${safe}.jpg`),
       filters: [{ name: 'Gambar JPG', extensions: ['jpg'] }]
@@ -846,10 +876,9 @@ export function registerIpc(): void {
     if (!assetId) throw new Error('Klip ini belum memiliki gambar atau video untuk dijadikan thumbnail.')
     const asset = getAsset(assetId)
     if (!asset) throw new Error('Aset visual klip tidak ditemukan.')
-    const win = BrowserWindow.getFocusedWindow()
     const safeProject = String(project.title || 'video').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'video'
     const safeClip = String(clip.title || `klip-${clip.sort + 1}`).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'klip'
-    const res = await dialog.showSaveDialog(win!, {
+    const res = await showSaveDialog({
       title: 'Simpan Thumbnail YouTube',
       defaultPath: join(defaultExportFolder(), `${safeProject}-${safeClip}-thumbnail.jpg`),
       filters: [{ name: 'Gambar JPG', extensions: ['jpg'] }]

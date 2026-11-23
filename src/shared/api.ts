@@ -57,7 +57,7 @@ export interface StudioApi {
     list(): Promise<ProjectSummary[]>
     create(input: NewProjectInput): Promise<ProjectBundle>
     get(id: string, episodeId?: string): Promise<ProjectBundle>
-    save(snapshot: ProjectSnapshot): Promise<{ updatedAt: number }>
+    save(snapshot: ProjectSnapshot): Promise<{ updatedAt: number; rev?: number }>
     remove(id: string): Promise<void>
     duplicate(id: string): Promise<ProjectSummary>
     setCover(projectId: string, clipId: string): Promise<{ coverAssetId: string }>
@@ -134,17 +134,17 @@ export interface StudioApi {
       options?: { force?: boolean; useAi?: boolean; requireAi?: boolean }
     ): Promise<ProjectBundle>
     /** Script → one image plan per scene; "missing" skips scenes whose plan still matches their story. */
-    visuals(projectId: string, mode: 'missing' | 'all'): Promise<ProjectBundle>
+    visuals(projectId: string, mode: 'missing' | 'all', episodeId?: string): Promise<ProjectBundle>
     /** A background-music prompt that fits the finished script, for use in Suno or another music AI. */
-    musicPrompt(projectId: string): Promise<MusicPrompt>
+    musicPrompt(projectId: string, episodeId?: string): Promise<MusicPrompt>
     /** Plans 3–6 cinematic sound cues based on the story script and scenes. */
-    planSmartSfx(projectId: string): Promise<SmartSfxCue[]>
+    planSmartSfx(projectId: string, episodeId?: string): Promise<SmartSfxCue[]>
     /** Generates background instrumental music via ElevenLabs and sets it on the project. */
     generateMusic(projectId: string, req: { prompt: string; durationMs: number }): Promise<Asset>
     /** AI titles, description, and timestamps for YouTube. */
-    youtubeMetadata(projectId: string): Promise<YoutubeMetadata>
+    youtubeMetadata(projectId: string, episodeId?: string): Promise<YoutubeMetadata>
     /** A thumbnail idea written for the title the user picked. */
-    thumbnailConcept(projectId: string, title: string): Promise<ThumbnailConcept>
+    thumbnailConcept(projectId: string, title: string, episodeId?: string): Promise<ThumbnailConcept>
   }
   continuity: {
     list(projectId: string): Promise<ContinuityItem[]>
@@ -193,7 +193,7 @@ export interface StudioApi {
     /** Voices scenes in one continuous take and cuts it per scene: those without a voice, or all of them. */
     narration(projectId: string, mode: 'missing' | 'all', episodeId?: string): Promise<Job>
     /** Re-times caption words of voiced scenes against the audio with the local Whisper model. */
-    syncCaptions(projectId: string, mode?: 'stale' | 'all' | 'force'): Promise<Job>
+    syncCaptions(projectId: string, mode?: 'stale' | 'all' | 'force', episodeId?: string): Promise<Job>
     cancel(jobId: string): Promise<void>
     cancelProject(projectId: string, kind?: string): Promise<void>
     /** Credits for one image, or one video of about `seconds`, with this model. Null without a working key. */
@@ -218,7 +218,7 @@ export interface StudioApi {
     autoTrimEpisode(projectId: string, episodeId: string, mode?: 'apply' | 'reset'): Promise<AutoTrimEpisodeResult>
   }
   assets: {
-    setActive(clipId: string, assetId: string): Promise<void>
+    setActive(clipId: string, assetId: string, preserveTiming?: boolean): Promise<void>
     /** Caption words of a voice clip, after the text was fixed by hand. */
     setWords(assetId: string, words: WordTiming[]): Promise<Asset>
     pickMusic(projectId: string): Promise<Asset | null>
@@ -247,7 +247,7 @@ export interface StudioApi {
     clearKey(provider: ApiProvider): Promise<void>
     /** The full stored key, only for the "show key" button. */
     revealKey(provider: ApiProvider): Promise<string | null>
-    testKey(provider: ApiProvider): Promise<KeyTestResult>
+    testKey(provider: ApiProvider, override?: { key?: string; baseUrl?: string; protocol?: string }): Promise<KeyTestResult>
     voices(provider: TtsProvider): Promise<VoiceOption[]>
   }
   models: {

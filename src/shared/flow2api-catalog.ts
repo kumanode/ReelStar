@@ -126,7 +126,7 @@ export function getFlow2ApiModel(id: string | null | undefined, kind: 'image' | 
  */
 export function resolveFlow2ApiModelId(baseId: string, aspectRatio: AspectRatio): string {
   const orient = aspectRatio === '9:16' ? 'portrait' : 'landscape'
-  const clean = (baseId || '').trim()
+  const clean = (baseId || '').trim() || DEFAULT_FLOW2API_IMAGE_MODEL
   if (clean.includes('-landscape') || clean.includes('-portrait')) {
     return clean.replace(/-(landscape|portrait)$/, `-${orient}`)
   }

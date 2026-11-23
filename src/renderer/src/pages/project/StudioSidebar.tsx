@@ -1,6 +1,9 @@
+import { useState } from 'react'
 import { LayoutGrid, BookOpen, PanelLeftClose, PanelLeft, Plus } from 'lucide-react'
 import type { EpisodeStatus } from '@shared/types'
 import { cx } from '../../components/ui'
+import { errorText } from '../../lib/format'
+import { useApp } from '../../store/app'
 import { useProject } from '../../store/project'
 
 const STATUS_DOT: Record<EpisodeStatus, string> = {
@@ -14,9 +17,9 @@ const STATUS_DOT: Record<EpisodeStatus, string> = {
 
 const STATUS_LABEL: Record<EpisodeStatus, string> = {
   draft: 'Draf',
-  planned: 'Direncanakan',
+  planned: 'Siap Naskah',
   script: 'Naskah',
-  storyboard: 'Storyboard',
+  storyboard: 'Produksi',
   editing: 'Editor',
   exported: 'Terekspor'
 }
@@ -36,6 +39,8 @@ export function StudioSidebar() {
     switchEpisode,
     createEpisode
   } = useProject()
+  const { toast } = useApp()
+  const [creating, setCreating] = useState(false)
 
   const missingSheetsCount =
     characters.filter((c) => !c.sheetAssetId).length +
@@ -43,20 +48,32 @@ export function StudioSidebar() {
     props.filter((p) => !p.sheetAssetId).length
 
   const handleOpenEpisode = async (epId: string) => {
-    await switchEpisode(epId)
-    setActiveTab('production')
-    setActiveView('episode')
+    try {
+      await switchEpisode(epId)
+      // Preserve whichever episode tab (Produksi / Editor & Rilis) the creator is currently using.
+      setActiveView('episode')
+    } catch (err) {
+      toast('error', `Gagal membuka episode: ${errorText(err)}`)
+    }
   }
 
   const handleAddEpisode = async () => {
-    const nextNum = episodes.length + 1
-    const newEp = await createEpisode({
-      title: `Episode ${nextNum}`,
-      episodeNum: nextNum
-    })
-    await switchEpisode(newEp.id)
-    setActiveTab('production')
-    setActiveView('episode')
+    if (creating) return
+    setCreating(true)
+    try {
+      const nextNum = episodes.length + 1
+      const newEp = await createEpisode({
+        title: `Episode ${nextNum}`,
+        episodeNum: nextNum
+      })
+      await switchEpisode(newEp.id)
+      setActiveTab('production')
+      setActiveView('episode')
+    } catch (err) {
+      toast('error', `Gagal menambah episode: ${errorText(err)}`)
+    } finally {
+      setCreating(false)
+    }
   }
 
   return (
@@ -72,6 +89,8 @@ export function StudioSidebar() {
         <button
           type="button"
           onClick={toggleSidebar}
+          aria-label={sidebarCollapsed ? 'Buka bilah samping' : 'Ciutkan bilah samping'}
+          aria-expanded={!sidebarCollapsed}
           className="flex size-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-sand hover:text-ink"
           title={sidebarCollapsed ? 'Buka bilah samping (≡)' : 'Ciutkan bilah samping'}
         >
@@ -84,6 +103,8 @@ export function StudioSidebar() {
         <button
           type="button"
           onClick={() => setActiveView('hub')}
+          aria-label="Episode Hub"
+          aria-current={activeView === 'hub' ? 'page' : undefined}
           title="Episode Hub"
           className={cx(
             'flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs font-semibold transition-colors',
@@ -98,9 +119,19 @@ export function StudioSidebar() {
         <button
           type="button"
           onClick={() => setActiveView('lorebook')}
-          title="Dunia & Pemeran (Lorebook)"
+          aria-label={
+            missingSheetsCount > 0
+              ? `Dunia & Pemeran (${missingSheetsCount} lembar belum dibuat)`
+              : 'Dunia & Pemeran'
+          }
+          aria-current={activeView === 'lorebook' ? 'page' : undefined}
+          title={
+            missingSheetsCount > 0
+              ? `Dunia & Pemeran (${missingSheetsCount} lembar belum dibuat)`
+              : 'Dunia & Pemeran (Lorebook)'
+          }
           className={cx(
-            'flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs font-semibold transition-colors',
+            'relative flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs font-semibold transition-colors',
             activeView === 'lorebook' ? 'bg-sun-soft text-ink' : 'text-ink-2 hover:bg-sand hover:text-ink',
             sidebarCollapsed && 'justify-center px-0'
           )}
@@ -108,9 +139,15 @@ export function StudioSidebar() {
           <BookOpen className="size-4 shrink-0" />
           {!sidebarCollapsed && <span className="flex-1 truncate text-left">Dunia &amp; Pemeran</span>}
           {!sidebarCollapsed && missingSheetsCount > 0 && (
-            <span className="rounded-full bg-sun-soft px-1.5 py-0.5 font-mono text-[10px] font-bold text-sun-ink">
+            <span className="rounded-full bg-sun-soft px-1.5 py-0.5 font-mono text-[11px] font-bold text-sun-ink">
               {missingSheetsCount}
             </span>
+          )}
+          {sidebarCollapsed && missingSheetsCount > 0 && (
+            <span
+              className="absolute top-1.5 right-1.5 size-2 rounded-full bg-accent"
+              aria-hidden="true"
+            />
           )}
         </button>
       </div>
@@ -126,8 +163,10 @@ export function StudioSidebar() {
             <span className="font-display text-[11px] font-bold tracking-wider text-muted uppercase">Episode</span>
             <button
               type="button"
+              disabled={creating}
+              aria-label="Tambah episode baru"
               onClick={() => void handleAddEpisode()}
-              className="flex size-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-sand hover:text-ink"
+              className="flex size-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-sand hover:text-ink disabled:opacity-40"
               title="Tambah episode baru"
             >
               <Plus className="size-3.5" />
@@ -136,8 +175,10 @@ export function StudioSidebar() {
         ) : (
           <button
             type="button"
+            disabled={creating}
+            aria-label="Tambah episode baru"
             onClick={() => void handleAddEpisode()}
-            className="flex size-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-sand hover:text-ink"
+            className="flex size-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-sand hover:text-ink disabled:opacity-40"
             title="Tambah episode baru"
           >
             <Plus className="size-4" />
@@ -156,6 +197,8 @@ export function StudioSidebar() {
               <button
                 key={ep.id}
                 type="button"
+                aria-label={`Episode ${ep.episodeNum}: ${ep.title} (${STATUS_LABEL[ep.status]})`}
+                aria-current={isActive ? 'page' : undefined}
                 onClick={() => void handleOpenEpisode(ep.id)}
                 title={`Ep ${ep.episodeNum}: ${ep.title} (${STATUS_LABEL[ep.status]})`}
                 className={cx(
@@ -173,6 +216,8 @@ export function StudioSidebar() {
             <button
               key={ep.id}
               type="button"
+              aria-label={`Episode ${ep.episodeNum}: ${ep.title} (${STATUS_LABEL[ep.status]})`}
+              aria-current={isActive ? 'page' : undefined}
               onClick={() => void handleOpenEpisode(ep.id)}
               className={cx(
                 'group flex h-8 w-full items-center justify-between rounded-lg px-2 text-xs transition-colors',

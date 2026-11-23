@@ -10,7 +10,9 @@ export const VOICE_PAD_MS = 400
  */
 export function estimateNarrationMs(narration: string): number {
   const words = spokenWords(narration).length
-  return Math.round(Math.min(15, Math.max(3, words / 2.6 + 0.6 + tagPauseSec(narration))) * 1000)
+  // Keep a 3s floor for very short lines, but do not cap long speeches at 15s (video duration checks and
+  // Gemini TTS part-splitting both rely on the real estimated speaking length).
+  return Math.round(Math.max(3, words / 2.6 + 0.6 + tagPauseSec(narration)) * 1000)
 }
 
 /** Spoken words only; vocal tags such as <short pause> do not count. */

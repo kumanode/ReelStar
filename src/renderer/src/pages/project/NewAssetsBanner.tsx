@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronUp, Sparkles, X } from 'lucide-react'
 import type {
   Character,
+  CharacterDerivative,
   EpisodeScriptDraft,
   Location,
   NewAssetProposal,
@@ -14,6 +15,7 @@ interface NewAssetsBannerProps {
   episodeNum: number
   draft: EpisodeScriptDraft
   characters: Character[]
+  derivatives?: CharacterDerivative[]
   locations: Location[]
   props: Prop[]
   blockingCount: number
@@ -46,6 +48,7 @@ export function NewAssetsBanner({
   episodeNum,
   draft,
   characters,
+  derivatives = [],
   locations,
   props,
   blockingCount,
@@ -59,8 +62,23 @@ export function NewAssetsBanner({
   const [expandedList, setExpandedList] = useState(false)
   const proposals = draft.newAssets ?? []
   const busy = confirming || writingPrompts
+  const charNameById = new Map(characters.map((c) => [c.id, c.name]))
+
+  const actionOptionsFor = (p: NewAssetProposal) =>
+    p.kind === 'character' || p.kind === 'derivative'
+      ? ACTION_OPTIONS
+      : ACTION_OPTIONS.filter((o) => o.value !== 'derivative')
 
   const targetOptionsFor = (p: NewAssetProposal) => {
+    if (p.kind === 'derivative') {
+      if (p.action === 'merge') {
+        return derivatives.map((d) => {
+          const parentName = charNameById.get(d.characterId)
+          return { value: d.id, label: parentName ? `${d.name} (${parentName})` : d.name }
+        })
+      }
+      return characters.map((c) => ({ value: c.id, label: c.name }))
+    }
     if (p.action === 'derivative' || p.kind === 'character') {
       return characters.map((c) => ({ value: c.id, label: c.name }))
     }
@@ -193,28 +211,43 @@ export function NewAssetsBanner({
                       label="Tindakan"
                       size="sm"
                       value={asset.action}
-                      options={ACTION_OPTIONS}
-                      onChange={(val) => onUpdateProposal(idx, { action: val as NewAssetProposal['action'] })}
+                      options={actionOptionsFor(asset)}
+                      onChange={(val) => {
+                        const nextAction = val as NewAssetProposal['action']
+                        const poolChanged =
+                          asset.kind === 'derivative' &&
+                          ((asset.action === 'merge') !== (nextAction === 'merge'))
+                        onUpdateProposal(idx, {
+                          action: nextAction,
+                          ...(nextAction === 'ignore' || poolChanged ? { target: undefined } : {})
+                        })
+                      }}
                     />
                   </div>
                 </div>
 
-                {(asset.action === 'merge' || asset.action === 'derivative') && (
-                  <div className="flex items-center gap-2 border-t border-line pt-2">
-                    <span className="text-[11px] font-semibold text-muted">
-                      {asset.action === 'merge' ? 'Gabung ke:' : 'Karakter induk:'}
-                    </span>
-                    <div className="w-[220px]">
-                      <Select
-                        label="Pilih target aset"
-                        size="sm"
-                        value={asset.target ?? ''}
-                        options={targetOptionsFor(asset)}
-                        onChange={(val) => onUpdateProposal(idx, { target: String(val) })}
-                      />
+                {(asset.action === 'merge' || asset.action === 'derivative' || (asset.kind === 'derivative' && asset.action !== 'ignore')) && (() => {
+                  const opts = targetOptionsFor(asset)
+                  const resolvedTarget = asset.target
+                    ? (opts.find((o) => o.value === asset.target || o.label.toLowerCase() === asset.target!.trim().toLowerCase())?.value ?? asset.target)
+                    : ''
+                  return (
+                    <div className="flex items-center gap-2 border-t border-line pt-2">
+                      <span className="text-[11px] font-semibold text-muted">
+                        {asset.action === 'merge' ? 'Gabung ke:' : 'Karakter induk:'}
+                      </span>
+                      <div className="w-[220px]">
+                        <Select
+                          label="Pilih target aset"
+                          size="sm"
+                          value={resolvedTarget}
+                          options={opts}
+                          onChange={(val) => onUpdateProposal(idx, { target: String(val) })}
+                        />
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )
+                })()}
               </div>
             ))}
           </div>

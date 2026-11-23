@@ -157,7 +157,11 @@ export function Select<T extends string | number>({
         )}
       >
         {current?.icon}
-        <span className={cx('truncate', variant === 'field' && 'flex-1')} style={current?.labelStyle}>
+        <span
+          title={current ? (current.hint && variant === 'field' ? `${current.label} · ${current.hint}` : current.label) : String(value)}
+          className={cx('truncate', variant === 'field' && 'flex-1')}
+          style={current?.labelStyle}
+        >
           {current?.label ?? String(value)}
           {current?.hint && variant === 'field' && <span className="text-muted"> · {current.hint}</span>}
         </span>
@@ -167,7 +171,7 @@ export function Select<T extends string | number>({
       <Popover anchor={trigger} open={open} onClose={(why) => hide(why === 'escape')} width={menuWidth} align={align} maxHeight={search ? 420 : 360}>
         {search && (
           <div className="border-b border-line p-2">
-            <label className="flex h-9 items-center gap-2 rounded-xl border border-line-2 bg-paper px-3 focus-within:border-ink">
+            <label className="flex h-9 items-center gap-2 rounded-xl border border-line-2 bg-paper px-3 transition-all focus-within:border-ink focus-within:ring-2 focus-within:ring-accent/35">
               <Search className="size-4 shrink-0 text-muted" />
               <input
                 autoFocus

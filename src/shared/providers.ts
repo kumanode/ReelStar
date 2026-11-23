@@ -1,3 +1,4 @@
+import { DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL } from './higgsfield'
 import type {
   AppSettings,
   Project,
@@ -101,7 +102,7 @@ export const DEFAULT_PROVIDER_MODELS: Record<string, Partial<Record<ModelPurpose
   groq: { llm: 'llama-3.3-70b-versatile' },
   custom: { llm: '' },
   elevenlabs: { tts: 'eleven_multilingual_v2' },
-  higgsfield: { image: 'nano_banana', video: 'dopamine' },
+  higgsfield: { image: DEFAULT_IMAGE_MODEL, video: DEFAULT_VIDEO_MODEL },
   flow2api: { image: 'gemini-3.1-flash-image', video: 'veo-3.1-fast-i2v' }
 }
 
@@ -148,7 +149,11 @@ export function resolveActive(
   }
 
   const modelFromSettings = roleSettings?.models?.[provider.id]?.[purpose]
-  const defaultModel = DEFAULT_PROVIDER_MODELS[provider.id]?.[purpose] || ''
+  // Custom providers (e.g. a custom Flow2API endpoint) inherit defaults from their protocol when unset.
+  const defaultModel =
+    DEFAULT_PROVIDER_MODELS[provider.id]?.[purpose] ||
+    DEFAULT_PROVIDER_MODELS[provider.protocol]?.[purpose] ||
+    ''
   const model = modelFromSettings && modelFromSettings.trim() ? modelFromSettings.trim() : defaultModel
 
   return { provider, model }

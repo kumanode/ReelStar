@@ -49,6 +49,7 @@ function outputSize(aspect: '16:9' | '9:16', res: ExportOptions['resolution']): 
 
 /** Runs ffmpeg in `cwd`, reporting progress from its `time=` output against `totalSec`. */
 function runFfmpeg(args: string[], cwd: string, signal: AbortSignal, totalSec?: number, onProgress?: (f: number) => void): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error('Dibatalkan'))
   return new Promise((resolve, reject) => {
     const p = spawn(ffmpegPath(), ['-hide_banner', '-y', ...args], { cwd, windowsHide: true })
     let tail = ''
@@ -64,7 +65,10 @@ function runFfmpeg(args: string[], cwd: string, signal: AbortSignal, totalSec?: 
         if (m) onProgress(Math.min(1, (+m[1] * 3600 + +m[2] * 60 + +m[3]) / totalSec))
       }
     })
-    p.on('error', reject)
+    p.on('error', (err) => {
+      signal.removeEventListener('abort', onAbort)
+      reject(err)
+    })
     p.on('close', (code) => {
       signal.removeEventListener('abort', onAbort)
       if (signal.aborted) return reject(new Error('Dibatalkan'))
@@ -113,7 +117,8 @@ function srtTime(sec: number): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms % 1000).padStart(3, '0')}`
 }
 
-const escapeAss = (t: string): string => t.replace(/\\/g, '\\\\').replace(/[{}]/g, '')
+// libass prints `\\` literally; break \n/\N/\h control codes with a zero-width space instead of doubling backslashes.
+const escapeAss = (t: string): string => t.replace(/[{}]/g, '').replace(/\\(?=[nNh\r\n]|$)/g, '\\\u200B')
 
 interface CaptionTrack {
   chunks: CaptionChunk[]
@@ -237,8 +242,11 @@ function captionEvents(track: CaptionTrack, w: number, h: number): string[] {
       return `${gapTag}${color(k)}`
     }).join('')
 
+    const lineWidthOf = (line: string[]): number =>
+      line.reduce((sum, word, k) => sum + measurePx(word) + (k ? measurePx(' ') + extraGap(line[k - 1], word) : 0), 0)
+
     if (style.box) {
-      const textW = Math.max(...layout.map((l) => measure(l.join(' ')) * px))
+      const textW = Math.max(0, ...layout.map(lineWidthOf))
       const textH = layout.length * lineH
       const top = pos === 'atas' ? marginV : pos === 'tengah' ? (h - textH) / 2 : h - marginV - textH
       const path = roundedRectPath(w / 2 - textW / 2 - pad, top - pad, w / 2 + textW / 2 + pad, top + textH + pad, px * CAPTION_BOX_RADIUS)
@@ -262,7 +270,7 @@ function captionEvents(track: CaptionTrack, w: number, h: number): string[] {
       const wordInLine = j - lineStart
       // Each word after the first is preceded by a space and its pop gap, as libass lays out the base line.
       const advance = (word: string, k: number): number => measurePx(word) + (k ? measurePx(' ') + extraGap(line[k - 1], word) : 0)
-      const lineWidth = line.reduce((sum, word, k) => sum + advance(word, k), 0)
+      const lineWidth = lineWidthOf(line)
       const before = line.slice(0, wordInLine + 1).reduce((sum, word, k) => sum + advance(word, k), 0) - measurePx(line[wordInLine])
       const wordWidth = measurePx(shown[j])
       const centerX = Math.round((w - lineWidth) / 2 + before + wordWidth / 2)
@@ -292,7 +300,7 @@ function captionEvents(track: CaptionTrack, w: number, h: number): string[] {
       // The whole line stays in place; only the active word is hidden here and drawn on top at full size.
       const inactive = textOf((k) => (k === j ? `{\\alpha&HFF&}${words[k]}{\\r}` : words[k]))
       lines.push(`Dialogue: 1,${assTime(start)},${assTime(end)},Cap,,0,0,0,,${inactive}`)
-      const activeTags = `\\an5\\pos(${centerX},${centerY})\\c${activeColor}${startScale}`
+      const activeTags = `\\an5\\pos(${centerX},${centerY})\\c${activeColor}${style.pill ? '\\bord0' : ''}${startScale}`
       lines.push(
         `Dialogue: 2,${assTime(start)},${assTime(end)},Cap,,0,0,0,,{${activeTags}${transform}}${activeText}`
       )
@@ -439,8 +447,18 @@ async function renderAudioMix(
       args.push('-i', assetAbsPath(projectId, audio.localPath))
       const sourceStart = span.inMs / 1000 + start - voiceStart
       const playLength = end - start
-      const clippedByVoiceWindow = end >= voiceEnd && span.playMs < span.lengthMs
-      const fade = clippedByVoiceWindow ? `,afade=t=out:st=${Math.max(0, playLength - 0.06).toFixed(3)}:d=${Math.min(0.06, playLength).toFixed(3)}` : ''
+      const voiceFadeStart = Math.max(voiceStart, voiceEnd - 0.06)
+      const voiceFadeDur = voiceEnd - voiceFadeStart
+      let fade = ''
+      if (span.playMs < span.lengthMs && voiceFadeDur > 0.001 && end > voiceFadeStart) {
+        if (start <= voiceFadeStart) {
+          fade = `,afade=t=out:st=${(voiceFadeStart - start).toFixed(3)}:d=${voiceFadeDur.toFixed(3)}`
+        } else {
+          const remain = Math.max(0.001, voiceEnd - start)
+          const gain = Math.max(0, remain / voiceFadeDur)
+          fade = `,volume=${gain.toFixed(4)},afade=t=out:st=0:d=${remain.toFixed(3)}`
+        }
+      }
       const db = (editor.voiceVolumeDb ?? 0) + (seg.clip.voiceGainDb ?? 0)
       const gain = Math.abs(db) > 0.01 ? `,volume=${db.toFixed(2)}dB` : ''
       graph.push(`[${index}:a]atrim=start=${sourceStart.toFixed(6)}:duration=${playLength.toFixed(6)},asetpts=PTS-STARTPTS${fade},aresample=48000,aformat=channel_layouts=stereo${gain},${delayTo(start)}[v${i}]`)
@@ -461,18 +479,30 @@ async function renderAudioMix(
       if (end > start) {
         args.push('-stream_loop', '-1', '-i', assetAbsPath(projectId, music.localPath))
         const sourceStart = span.inSec + start - span.startSec
-        const elapsedAtEnd = end - span.startSec
-        const fadeStart = Math.max(0, span.endSec - span.startSec - 2)
-        const fade = end >= span.endSec && elapsedAtEnd > fadeStart ? `,afade=t=out:st=${Math.max(0, fadeStart - (start - span.startSec)).toFixed(3)}:d=${Math.min(2, elapsedAtEnd - fadeStart).toFixed(3)}` : ''
+        const fadeStartSec = Math.max(span.startSec, span.endSec - 2)
+        const fadeDur = span.endSec - fadeStartSec
+        let fade = ''
+        if (fadeDur > 0.001 && end > fadeStartSec) {
+          if (start <= fadeStartSec) {
+            fade = `,afade=t=out:st=${(fadeStartSec - start).toFixed(3)}:d=${fadeDur.toFixed(3)}`
+          } else {
+            const remain = Math.max(0.001, span.endSec - start)
+            const gain = Math.max(0, remain / fadeDur)
+            fade = `,volume=${gain.toFixed(4)},afade=t=out:st=0:d=${remain.toFixed(3)}`
+          }
+        }
         graph.push(`[${index}:a]aresample=48000,aformat=channel_layouts=stereo,atrim=start=${sourceStart.toFixed(6)}:duration=${(end - start).toFixed(6)},asetpts=PTS-STARTPTS,volume=${editor.musicVolumeDb}dB${fade},${delayTo(start)}[mus]`)
         musicOut = '[mus]'
         index++
       }
     }
     if (voiceOut && musicOut && duck) {
-      graph.push(`${voiceOut}asplit=2[v1][v2]`)
-      graph.push(`${musicOut}[v2]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=500[duck]`)
-      graph.push('[v1][duck]amix=inputs=2:normalize=0:dropout_transition=0[vmix]')
+      const windowDur = (to - mixFrom).toFixed(6)
+      // Pad voice to the full mix window before splitting so sidechaincompress never truncates music after voice ends
+      // and both branches stay in lockstep without deadlocking FFmpeg's filtergraph.
+      graph.push(`${voiceOut}apad,atrim=0:${windowDur},asplit=2[v_dry][v_sc]`)
+      graph.push(`${musicOut}[v_sc]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=500[duck]`)
+      graph.push('[v_dry][duck]amix=inputs=2:normalize=0:dropout_transition=0[vmix]')
       voiceOut = '[vmix]'
       musicOut = null
     }
@@ -611,7 +641,7 @@ function assetOf(bundle: ProjectBundle, id: string | null): Asset | undefined {
 
 function segmentCacheKey(bundle: ProjectBundle, seg: Segment, opts: ExportOptions, size: { w: number; h: number }): string {
   const clip = seg.clip
-  const asset = assetOf(bundle, clip.motionType === 'video' ? clip.videoAssetId : clip.imageAssetId)
+  const asset = (clip.motionType === 'video' && assetOf(bundle, clip.videoAssetId)) || assetOf(bundle, clip.imageAssetId)
   const path = asset ? assetAbsPath(bundle.project.id, asset.localPath) : ''
   const file = path && existsSync(path) ? statSync(path) : null
   return createHash('sha256').update(JSON.stringify({
@@ -720,31 +750,44 @@ async function renderProject(ctx: TaskCtx, projectId: string, opts: ExportOption
     const files: string[] = new Array(segs.length)
     let done = 0
     let next = 0
+    let firstError: unknown = null
+    const workerCtrl = new AbortController()
+    const onOuterAbort = (): void => workerCtrl.abort()
+    if (ctx.signal.aborted) workerCtrl.abort()
+    else ctx.signal.addEventListener('abort', onOuterAbort, { once: true })
     const worker = async (): Promise<void> => {
-      while (next < segs.length) {
-        const i = next++
-        const output = `seg_${String(i).padStart(3, '0')}.mp4`
-        const cached = join(cacheDir, `${segmentCacheKey(bundle, segs[i], opts, size)}.mp4`)
-        if (existsSync(cached)) copyFileSync(cached, join(tmp, output))
-        else {
-          const rendered = await renderSegment(bundle, segs[i], i, opts, size, tmp, ctx.signal)
-          const partial = `${cached}.${ctx.jobId}.partial`
-          copyFileSync(join(tmp, rendered), partial)
-          try {
-            renameSync(partial, cached)
-          } catch (error) {
-            if (!existsSync(cached)) throw error
-            rmSync(partial, { force: true })
+      try {
+        while (next < segs.length && !workerCtrl.signal.aborted) {
+          const i = next++
+          const output = `seg_${String(i).padStart(3, '0')}.mp4`
+          const cached = join(cacheDir, `${segmentCacheKey(bundle, segs[i], opts, size)}.mp4`)
+          if (existsSync(cached)) copyFileSync(cached, join(tmp, output))
+          else {
+            const rendered = await renderSegment(bundle, segs[i], i, opts, size, tmp, workerCtrl.signal)
+            const partial = `${cached}.${ctx.jobId}.partial`
+            copyFileSync(join(tmp, rendered), partial)
+            try {
+              renameSync(partial, cached)
+            } catch (error) {
+              if (!existsSync(cached)) throw error
+              rmSync(partial, { force: true })
+            }
           }
+          files[i] = output
+          done++
+          ctx.progress(0.03 + 0.6 * (done / segs.length), `Merender klip ${done} dari ${segs.length}`)
         }
-        files[i] = output
-        done++
-        ctx.progress(0.03 + 0.6 * (done / segs.length), `Merender klip ${done} dari ${segs.length}`)
+      } catch (error) {
+        // Abort the sibling worker immediately so a failure does not keep rendering remaining clips.
+        if (!firstError) firstError = error
+        workerCtrl.abort()
+        throw error
       }
     }
-    const segmentResults = await Promise.allSettled([worker(), worker()])
-    const segmentFailure = segmentResults.find((result): result is PromiseRejectedResult => result.status === 'rejected')
-    if (segmentFailure) throw segmentFailure.reason
+    await Promise.allSettled([worker(), worker()])
+    ctx.signal.removeEventListener('abort', onOuterAbort)
+    if (firstError) throw firstError
+    if (ctx.signal.aborted) throw new Error('Dibatalkan')
 
     // 2. captions
     const style = resolveCaption(bundle.project.editor)
@@ -851,11 +894,16 @@ async function renderProject(ctx: TaskCtx, projectId: string, opts: ExportOption
       (f) => ctx.progress(0.84 + 0.15 * f, gpu ? 'Menyusun video akhir dengan NVENC' : 'Menyusun video dan audio akhir')
     )
     try {
-      await runFinal(opts.encoder === 'nvenc')
+      try {
+        await runFinal(opts.encoder === 'nvenc')
+      } catch (error) {
+        if (opts.encoder !== 'nvenc' || ctx.signal.aborted) throw error
+        ctx.progress(0.84, 'NVENC gagal; melanjutkan encode akhir dengan CPU')
+        await runFinal(false)
+      }
     } catch (error) {
-      if (opts.encoder !== 'nvenc' || ctx.signal.aborted) throw error
-      ctx.progress(0.84, 'NVENC gagal; melanjutkan encode akhir dengan CPU')
-      await runFinal(false)
+      rmSync(outPath, { force: true })
+      throw error
     }
     if (opts.writeSrt && chunks.length) writeFileSync(outPath.replace(/\.mp4$/i, '.srt'), buildSrt(chunks), 'utf8')
     rmSync(cacheDir, { recursive: true, force: true })

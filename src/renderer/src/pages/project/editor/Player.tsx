@@ -46,22 +46,38 @@ function Frame({
   framing?: CameraCustomFraming | null
 }) {
   const video = useRef<HTMLVideoElement>(null)
+  const hasInitialSeek = useRef(false)
   const useVideo = item.clip.motionType === 'video' && !!item.video
   // A video trimmed on the timeline starts that far into its file.
   const vt = (item.clip.mediaInMs ?? 0) / 1000 + local
 
   useEffect(() => {
+    hasInitialSeek.current = false
+  }, [item.video?.url])
+
+  useEffect(() => {
     const v = video.current
     if (!v) return
+    const dur = Number.isFinite(v.duration) ? v.duration : Infinity
+    const atTail = Number.isFinite(v.duration) && v.duration > 0 && vt >= v.duration - 0.05
     if (playing) {
+      if (atTail) {
+        // Hold the last frame instead of rewinding 50ms and looping at the tail.
+        if (!v.paused) v.pause()
+        return
+      }
       if (v.paused) {
+        // Tighten initial seek tolerance for short mediaInMs trims so <= 250ms trims are never skipped.
+        const needTightSeek = v.readyState >= 1 && (!hasInitialSeek.current || (local < 0.3 && (item.clip.mediaInMs ?? 0) > 0))
+        const tol = needTightSeek ? 0.05 : 0.25
         // A clip that was waiting at its start just plays: seeking again would stall it at the joint.
-        if (Math.abs(v.currentTime - vt) > 0.25) v.currentTime = Math.min(vt, (v.duration || Infinity) - 0.05)
+        if (Math.abs(v.currentTime - vt) > tol) v.currentTime = Math.min(vt, Math.max(0, dur - 0.05))
+        if (v.readyState >= 1) hasInitialSeek.current = true
         void v.play().catch(() => {})
-      } else if (Math.abs(v.currentTime - vt) > 0.35 && vt < (v.duration || Infinity)) v.currentTime = vt
+      } else if (Math.abs(v.currentTime - vt) > 0.35 && vt < dur) v.currentTime = vt
     } else {
       if (!v.paused) v.pause()
-      if (Math.abs(v.currentTime - vt) > 0.04) v.currentTime = Math.min(vt, Math.max(0, (v.duration || Infinity) - 0.05))
+      if (Math.abs(v.currentTime - vt) > 0.04) v.currentTime = Math.min(vt, Math.max(0, dur - 0.05))
     }
   })
 
@@ -79,6 +95,14 @@ function Frame({
           poster={(item.clip.mediaInMs ?? 0) > 0 ? undefined : item.image?.url}
           muted
           playsInline
+          onLoadedMetadata={(e) => {
+            const v = e.currentTarget
+            if ((item.clip.mediaInMs ?? 0) > 0 || local > 0) {
+              const dur = Number.isFinite(v.duration) ? v.duration : Infinity
+              v.currentTime = Math.min(vt, Math.max(0, dur - 0.05))
+            }
+            hasInitialSeek.current = true
+          }}
           className="absolute inset-0 size-full object-cover will-change-transform"
           // A moving video is kept just short of opaque so it is never promoted to a hardware overlay,
           // which would snap the camera move to whole pixels and make it tremble.
@@ -247,7 +271,7 @@ function OverlayItem({ o, asset, box, editable }: { o: Overlay; asset: Asset | n
     top: `${o.y * 100}%`,
     transform: `translate(calc(${-ax * 100}% + ${pad * (2 * ax - 1)}px), calc(${-ay * 100}% + ${pad * (2 * ay - 1)}px))`
   }
-  const ring = editable ? (selected ? 'cursor-move outline outline-2 outline-offset-2 outline-accent' : 'cursor-move hover:outline hover:outline-1 hover:outline-offset-2 hover:outline-paper') : 'pointer-events-none'
+  const ring = editable ? (selected ? 'cursor-move outline outline-2 outline-offset-2 outline-accent' : 'cursor-move hover:outline hover:outline-1 hover:outline-offset-2 hover:outline-white/80') : 'pointer-events-none'
 
   if (o.kind === 'image') {
     if (!asset) return null
@@ -378,10 +402,12 @@ export function Player({
     const el = stage.current
     if (!el) return
     const ro = new ResizeObserver(() => {
-      const availW = el.clientWidth - 40
-      const availH = el.clientHeight - 40 - 56
-      const w = Math.max(200, Math.min(availW, availH * ratio))
-      setBox({ w, h: w / ratio })
+      const availW = Math.max(80, el.clientWidth - 32)
+      const availH = Math.max(120, el.clientHeight - 32 - 52)
+      // Fit strictly inside both width and height so 9:16 never stretches to 1:1 on shorter windows (1180x720).
+      const h = Math.min(availH, availW / ratio)
+      const w = h * ratio
+      setBox({ w: Math.round(w), h: Math.round(h) })
     })
     ro.observe(el)
     return () => ro.disconnect()
@@ -411,11 +437,22 @@ export function Player({
   }
 
   return (
-    <section ref={stage} className="flex min-h-0 flex-col items-center justify-center gap-3 bg-draft p-5">
+    <section ref={stage} className="flex min-h-0 flex-col items-center justify-center gap-2.5 bg-draft p-4">
       <div
-        className="relative overflow-hidden rounded-xl border-[1.5px] border-ink bg-ink"
+        role="button"
+        tabIndex={0}
+        aria-label={audition ? 'Hentikan pratinjau transisi' : playing ? 'Jeda video' : 'Putar video'}
+        className="relative shrink-0 cursor-pointer overflow-hidden rounded-xl border-[1.5px] border-ink bg-[#141311]"
         style={{ width: box.w, height: box.h }}
         onClick={audition ? stopAudition : toggle}
+        onKeyDown={(e) => {
+          // Space is handled globally by EditorStep; handling only Enter here prevents double-toggling playback.
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            if (audition) stopAudition()
+            else toggle()
+          }
+        }}
       >
         {/*
           The clips around the playhead stay mounted, in timeline order, so moving on never creates a new video
@@ -471,63 +508,64 @@ export function Player({
         {showShortsGuide && aspect === '9:16' && (
           <div className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-between border-2 border-dashed border-accent/70 text-[11px] text-white">
             <div className="flex h-[15%] w-full items-start justify-center bg-accent/15 p-1">
-              <span className="rounded bg-ink/80 px-1.5 py-0.5 text-[11px] text-paper">Batas Header & Suara</span>
+              <span className="rounded bg-black/75 px-1.5 py-0.5 text-[11px] text-white">Batas Header & Suara</span>
             </div>
             <div className="flex flex-1 items-center justify-end pr-1">
               <div className="flex h-[55%] w-[18%] flex-col items-center justify-center rounded-lg border border-accent/50 bg-accent/20 p-0.5 text-center leading-tight">
-                <span className="rounded bg-ink/80 px-1 py-0.5 text-[11px] text-paper">Ikon Interaksi</span>
+                <span className="rounded bg-black/75 px-1 py-0.5 text-[11px] text-white">Ikon Interaksi</span>
               </div>
             </div>
             <div className="flex h-[22%] w-full items-end justify-start bg-accent/15 p-2">
-              <span className="rounded bg-ink/80 px-1.5 py-0.5 text-[11px] text-paper">Batas Judul & Akun</span>
+              <span className="rounded bg-black/75 px-1.5 py-0.5 text-[11px] text-white">Batas Judul & Akun</span>
             </div>
           </div>
         )}
-        {!items.length && <div className="flex size-full items-center justify-center text-paper">Belum ada klip</div>}
+        {!items.length && <div className="flex size-full items-center justify-center text-white/75">Belum ada klip</div>}
         {audition && win && (
-          <span className="pointer-events-none absolute left-2.5 top-2.5 z-10 flex items-center gap-1.5 rounded-full bg-ink/80 px-2.5 py-1 text-xs font-medium text-paper">
+          <span className="pointer-events-none absolute left-2.5 top-2.5 z-10 flex items-center gap-1.5 rounded-full bg-black/75 px-2.5 py-1 text-xs font-medium text-white">
             <span className="size-1.5 animate-pulse rounded-full bg-accent" />
             {audition.kind === 'clip' ? 'Pratinjau gerak kamera' : 'Pratinjau transisi'} · klik untuk berhenti
           </span>
         )}
       </div>
       <div
-        className="flex items-center gap-1.5 select-none"
-        style={{ width: Math.max(box.w, 480), maxWidth: '100%' }}
+        className="flex min-w-0 items-center gap-1 select-none"
+        style={{ width: Math.max(box.w, 460), maxWidth: '100%' }}
       >
-        <div className="flex items-center gap-1 shrink-0">
-          <IconButton label="Klip sebelumnya" size={36} className="border-transparent bg-transparent hover:bg-sand" onClick={() => jump(-1)}>
-            <SkipBack className="size-4.5" />
+        <div className="flex shrink-0 items-center gap-0.5">
+          <IconButton label="Klip sebelumnya" size={34} className="border-transparent bg-transparent hover:bg-sand" onClick={() => jump(-1)}>
+            <SkipBack className="size-4" />
           </IconButton>
-          <IconButton label="Mundur 1 frame ([)" size={36} className="border-transparent bg-transparent hover:bg-sand" onClick={() => stepFrame(-1)}>
-            <ChevronLeft className="size-4.5" />
+          <IconButton label="Mundur 1 frame ([)" size={34} className="border-transparent bg-transparent hover:bg-sand" onClick={() => stepFrame(-1)}>
+            <ChevronLeft className="size-4" />
           </IconButton>
           <button
             type="button"
-            aria-label={playing ? 'Jeda' : 'Putar'}
+            aria-label={playing ? 'Jeda (Spasi)' : 'Putar (Spasi)'}
+            title={playing ? 'Jeda (Spasi)' : 'Putar (Spasi)'}
             onClick={() => {
               stopAudition()
               if (!playing && t >= total - 0.05) seek(0)
               toggle()
             }}
-            className="flex size-10 shrink-0 items-center justify-center rounded-full border-[1.5px] border-ink bg-ink text-paper shadow-sm transition-transform hover:bg-ink-2 active:scale-95"
+            className="flex size-9 shrink-0 items-center justify-center rounded-full border-[1.5px] border-ink bg-ink text-paper shadow-sm transition-transform hover:bg-ink-2 active:scale-95"
           >
-            {playing ? <Pause className="size-4.5" fill="currentColor" /> : <Play className="ml-0.5 size-4.5" fill="currentColor" />}
+            {playing ? <Pause className="size-4" fill="currentColor" /> : <Play className="ml-0.5 size-4" fill="currentColor" />}
           </button>
-          <IconButton label="Maju 1 frame (])" size={36} className="border-transparent bg-transparent hover:bg-sand" onClick={() => stepFrame(1)}>
-            <ChevronRight className="size-4.5" />
+          <IconButton label="Maju 1 frame (])" size={34} className="border-transparent bg-transparent hover:bg-sand" onClick={() => stepFrame(1)}>
+            <ChevronRight className="size-4" />
           </IconButton>
-          <IconButton label="Klip berikutnya" size={36} className="border-transparent bg-transparent hover:bg-sand" onClick={() => jump(1)}>
-            <SkipForward className="size-4.5" />
+          <IconButton label="Klip berikutnya" size={34} className="border-transparent bg-transparent hover:bg-sand" onClick={() => jump(1)}>
+            <SkipForward className="size-4" />
           </IconButton>
         </div>
-        <div className="ml-2 shrink-0 font-mono text-xs tabular-nums text-ink whitespace-nowrap">
+        <div className="ml-1 shrink-0 whitespace-nowrap font-mono text-xs tabular-nums text-ink">
           <span className="font-semibold">{timecode(t)}</span>
           <span className="mx-1 text-muted">/</span>
           <span className="text-muted">{timecode(total)}</span>
         </div>
-        <div className="flex-1 min-w-2" />
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="min-w-1 flex-1" />
+        <div className="flex shrink-0 items-center gap-1">
           {aspect === '9:16' && (
             <button
               type="button"
@@ -535,7 +573,7 @@ export function Player({
               aria-pressed={showShortsGuide}
               title="Tampilkan panduan area aman YouTube Shorts"
               className={cx(
-                'inline-flex shrink-0 whitespace-nowrap items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors',
+                'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border px-2 py-1 text-xs font-medium transition-colors',
                 showShortsGuide
                   ? 'border-ink bg-sun-soft font-semibold text-ink shadow-xs'
                   : 'border-line-2 bg-surface text-ink-2 hover:border-ink-2 hover:bg-paper hover:text-ink'
@@ -546,8 +584,8 @@ export function Player({
             </button>
           )}
           <IconButton
-            label={isFullscreen ? 'Keluar layar penuh (F)' : 'Layar penuh / Cinema mode (F)'}
-            size={36}
+            label={isFullscreen ? 'Keluar layar penuh (F)' : 'Mode layar penuh (F)'}
+            size={34}
             className="border-transparent bg-transparent hover:bg-sand"
             onClick={toggleFullscreen}
           >

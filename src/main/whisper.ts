@@ -169,11 +169,18 @@ export async function recognize(audio: string, language: string, tmp: string, si
   const json = JSON.parse(readFileSync(`${outBase}.json`, 'utf8')) as { transcription?: JsonSegment[] }
   rmSync(wav, { force: true })
   rmSync(`${outBase}.json`, { force: true })
-  const words = (json.transcription ?? []).map((s) => {
-    const dtw = (s.tokens ?? []).filter((t) => !t.text.startsWith('[_') && (t.t_dtw ?? -1) >= 0)
-    const start = dtw.length ? dtw[0].t_dtw! / 100 : s.offsets.from / 1000
-    return { text: s.text, start, end: Math.max(start, s.offsets.to / 1000) }
-  })
+  // Drop Whisper control/non-speech tokens ([BLANK_AUDIO], [MUSIC], [_BEG_], ...) and punctuation-only
+  // segments before clamping word end times so they never truncate the preceding spoken word.
+  const words = (json.transcription ?? [])
+    .filter((s) => {
+      const text = s.text.trim()
+      return text.length > 0 && !/^\[.*\]$/.test(text) && /[\p{L}\p{N}]/u.test(text)
+    })
+    .map((s) => {
+      const dtw = (s.tokens ?? []).filter((t) => !/^\[.*\]$/.test(t.text.trim()) && (t.t_dtw ?? -1) >= 0)
+      const start = dtw.length ? dtw[0].t_dtw! / 100 : s.offsets.from / 1000
+      return { text: s.text, start, end: Math.max(start, s.offsets.to / 1000) }
+    })
   // Starts only move forward, and a word lasts until the next one starts at the latest.
   words.forEach((w, i) => {
     if (i > 0 && w.start < words[i - 1].start) w.start = words[i - 1].start

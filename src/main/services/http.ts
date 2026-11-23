@@ -27,11 +27,15 @@ export class ApiError extends Error {
 export const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
   new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error('Dibatalkan'))
-    const t = setTimeout(resolve, ms)
-    signal?.addEventListener('abort', () => {
+    const onAbort = (): void => {
       clearTimeout(t)
       reject(new Error('Dibatalkan'))
-    })
+    }
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
   })
 
 export async function downloadTo(url: string, signal?: AbortSignal): Promise<{ bytes: Buffer; contentType: string }> {
@@ -44,7 +48,8 @@ export async function downloadTo(url: string, signal?: AbortSignal): Promise<{ b
     } catch (e) {
       lastErr = e
       if (signal?.aborted) throw e
-      await sleep(1500 * (attempt + 1), signal)
+      if (e instanceof ApiError && !e.retryable) throw e
+      if (attempt < 2) await sleep(1500 * (attempt + 1), signal)
     }
   }
   throw lastErr

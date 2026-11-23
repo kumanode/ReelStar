@@ -74,13 +74,13 @@ export function StylePicker({ value, onChange }: { value: string; onChange: (id:
                   type="button"
                   aria-pressed={on}
                   onClick={() => onChange(s.id)}
-                  title={`${s.name} — ${s.niche}`}
+                  title={`${s.name} · ${s.niche}`}
                   className={cx(
                     'group relative flex aspect-[16/10] w-full flex-col overflow-hidden rounded-[14px] text-left transition-all',
                     'border-2',
                     on
                       ? 'border-accent shadow-ink-md ring-2 ring-accent/30'
-                      : 'border-line hover:border-line-3 hover:shadow-ink-sm'
+                      : 'border-line hover:border-line-3 hover:shadow-ink'
                   )}
                 >
                   {/* Style Background Artwork */}
@@ -93,10 +93,10 @@ export function StylePicker({ value, onChange }: { value: string; onChange: (id:
                   {/* Dark gradient overlay for text readability */}
                   <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" />
 
-                  {/* "Default" Badge on top-left */}
+                  {/* "Bawaan" Badge on top-left */}
                   {isDefault && (
                     <span className="pointer-events-none absolute left-2 top-2 rounded-full bg-black/70 px-2 py-0.5 text-[11px] font-semibold tracking-wide text-white shadow-xs backdrop-blur-xs">
-                      Default
+                      Bawaan
                     </span>
                   )}
 

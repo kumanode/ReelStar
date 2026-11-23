@@ -44,10 +44,19 @@ export function CandidateReviewModal({
   const [lastResult, setLastResult] = useState<LorebookExtractionResult | null>(null)
   if (result && result !== lastResult) {
     setLastResult(result)
+    setActiveTab('characters')
     setSelectedChars(new Set(result.characters.map((c, i) => c.tempId || `char-${i}`)))
     setSelectedDerivs(new Set(result.derivatives.map((d, i) => d.tempId || `deriv-${i}`)))
     setSelectedLocs(new Set(result.locations.map((l, i) => l.tempId || `loc-${i}`)))
     setSelectedProps(new Set(result.props.map((p, i) => p.tempId || `prop-${i}`)))
+  }
+
+  const formatInteriorExterior = (val: string): string => {
+    const up = val.trim().toUpperCase()
+    if (up === 'INT') return 'Dalam ruangan'
+    if (up === 'EXT') return 'Luar ruangan'
+    if (up === 'INT/EXT' || up === 'EXT/INT') return 'Dalam & luar ruangan'
+    return val
   }
 
   const characters = result?.characters || []
@@ -113,6 +122,23 @@ export function CandidateReviewModal({
       title="Hasil Ekstraksi Lorebook dari Cerita"
       subtitle="Tinjau karakter, varian pakaian, lokasi, dan prop yang terdeteksi secara otomatis dari cerita. Pilih yang ingin kamu masukkan ke Lorebook."
       width={720}
+      footer={
+        <div className="flex items-center justify-between gap-2">
+          <Button variant="secondary" size="sm" onClick={onClose} disabled={submitting}>
+            Batal
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<Check className="size-3.5" />}
+            onClick={handleConfirm}
+            loading={submitting}
+            disabled={submitting || totalSelected === 0}
+          >
+            {submitting ? 'Menyimpan…' : `Terima ${totalSelected} aset terpilih`}
+          </Button>
+        </div>
+      }
     >
       <div className="space-y-4">
         {/* Navigation Tabs */}
@@ -179,7 +205,16 @@ export function CandidateReviewModal({
                 return (
                   <div
                     key={id}
+                    role="checkbox"
+                    aria-checked={isSelected}
+                    tabIndex={0}
                     onClick={() => toggleSelect(selectedChars, setSelectedChars, id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        toggleSelect(selectedChars, setSelectedChars, id)
+                      }
+                    }}
                     className={cx(
                       'cursor-pointer rounded-xl border p-4 transition-all',
                       isSelected ? 'border-accent bg-accent/5 ring-1 ring-accent/30' : 'border-line bg-surface hover:border-line-2'
@@ -187,11 +222,11 @@ export function CandidateReviewModal({
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-2.5">
-                        <span className="text-accent">
+                        <span className="text-accent-ink">
                           {isSelected ? <CheckSquare className="size-4" /> : <Square className="size-4 text-muted" />}
                         </span>
-                        <div>
-                          <div className="flex items-center gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
                             <span className="text-sm font-semibold text-ink">{c.name}</span>
                             {c.voiceStyle && <Badge tone="info">{c.voiceStyle}</Badge>}
                             {n?.role && <Badge tone="warn">{n.role}</Badge>}
@@ -249,7 +284,16 @@ export function CandidateReviewModal({
                 return (
                   <div
                     key={id}
+                    role="checkbox"
+                    aria-checked={isSelected}
+                    tabIndex={0}
                     onClick={() => toggleSelect(selectedDerivs, setSelectedDerivs, id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        toggleSelect(selectedDerivs, setSelectedDerivs, id)
+                      }
+                    }}
                     className={cx(
                       'cursor-pointer rounded-xl border p-4 transition-all',
                       isSelected ? 'border-accent bg-accent/5 ring-1 ring-accent/30' : 'border-line bg-surface hover:border-line-2'
@@ -257,16 +301,16 @@ export function CandidateReviewModal({
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-2.5">
-                        <span className="text-accent">
+                        <span className="text-accent-ink">
                           {isSelected ? <CheckSquare className="size-4" /> : <Square className="size-4 text-muted" />}
                         </span>
-                        <div>
-                          <div className="flex items-center gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
                             <span className="text-sm font-semibold text-ink">{d.name}</span>
                             <Badge tone="info">{d.characterName}</Badge>
                           </div>
                           {d.costumeKeyphrase && (
-                            <p className="text-[11px] text-accent font-medium mt-0.5">
+                            <p className="mt-0.5 text-[11px] font-medium text-accent-ink">
                               Frasa Kunci: &ldquo;{d.costumeKeyphrase}&rdquo;
                             </p>
                           )}
@@ -294,7 +338,16 @@ export function CandidateReviewModal({
                 return (
                   <div
                     key={id}
+                    role="checkbox"
+                    aria-checked={isSelected}
+                    tabIndex={0}
                     onClick={() => toggleSelect(selectedLocs, setSelectedLocs, id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        toggleSelect(selectedLocs, setSelectedLocs, id)
+                      }
+                    }}
                     className={cx(
                       'cursor-pointer rounded-xl border p-4 transition-all',
                       isSelected ? 'border-accent bg-accent/5 ring-1 ring-accent/30' : 'border-line bg-surface hover:border-line-2'
@@ -302,7 +355,7 @@ export function CandidateReviewModal({
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-2.5">
-                        <span className="text-accent">
+                        <span className="text-accent-ink">
                           {isSelected ? <CheckSquare className="size-4" /> : <Square className="size-4 text-muted" />}
                         </span>
                         <div>
@@ -319,7 +372,7 @@ export function CandidateReviewModal({
                     <p className="mt-2 text-xs text-ink/80">{l.description}</p>
                     {p && (
                       <div className="mt-2.5 grid grid-cols-2 gap-2 rounded-lg bg-sand/50 p-2 text-[11px]">
-                        {p.interiorExterior && <div><span className="text-muted">Tipe:</span> {p.interiorExterior}</div>}
+                        {p.interiorExterior && <div><span className="text-muted">Tipe:</span> {formatInteriorExterior(p.interiorExterior)}</div>}
                         {p.timeOfDayLighting && <div><span className="text-muted">Cahaya:</span> {p.timeOfDayLighting}</div>}
                         {p.architecturalStyle && <div><span className="text-muted">Gaya:</span> {p.architecturalStyle}</div>}
                         {p.keyFeatures && <div><span className="text-muted">Fitur:</span> {p.keyFeatures}</div>}
@@ -342,7 +395,16 @@ export function CandidateReviewModal({
                 return (
                   <div
                     key={id}
+                    role="checkbox"
+                    aria-checked={isSelected}
+                    tabIndex={0}
                     onClick={() => toggleSelect(selectedProps, setSelectedProps, id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        toggleSelect(selectedProps, setSelectedProps, id)
+                      }
+                    }}
                     className={cx(
                       'cursor-pointer rounded-xl border p-4 transition-all',
                       isSelected ? 'border-accent bg-accent/5 ring-1 ring-accent/30' : 'border-line bg-surface hover:border-line-2'
@@ -350,11 +412,11 @@ export function CandidateReviewModal({
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-2.5">
-                        <span className="text-accent">
+                        <span className="text-accent-ink">
                           {isSelected ? <CheckSquare className="size-4" /> : <Square className="size-4 text-muted" />}
                         </span>
-                        <div>
-                          <div className="flex items-center gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
                             <span className="text-sm font-semibold text-ink">{pr.name}</span>
                             {p?.category && <Badge tone="warn">{p.category}</Badge>}
                           </div>
@@ -376,24 +438,6 @@ export function CandidateReviewModal({
               })
             )
           )}
-        </div>
-
-        {/* Footer actions */}
-        <div className="flex items-center justify-between border-t border-line pt-3 mt-2">
-          <Button variant="secondary" size="sm" onClick={onClose} disabled={submitting}>
-            Batal
-          </Button>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="primary"
-              size="sm"
-              icon={<Check className="size-3.5" />}
-              onClick={handleConfirm}
-              disabled={submitting || totalSelected === 0}
-            >
-              {submitting ? 'Menyimpan...' : `Terima ${totalSelected} Aset Terpilih`}
-            </Button>
-          </div>
         </div>
       </div>
     </Modal>

@@ -79,14 +79,27 @@ function Slider({
         max={max}
         step={1}
         value={value}
-      onPointerDown={() => useProject.getState().beginHistoryGesture()}
-      onPointerUp={() => useProject.getState().endHistoryGesture()}
-      onPointerCancel={() => useProject.getState().endHistoryGesture()}
+        onPointerDown={(e) => {
+          if (e.pointerType === 'mouse' && e.button !== 0) return
+          let active = true
+          useProject.getState().beginHistoryGesture()
+          const finish = (): void => {
+            if (!active) return
+            active = false
+            window.removeEventListener('pointerup', finish)
+            window.removeEventListener('pointercancel', finish)
+            window.removeEventListener('blur', finish)
+            useProject.getState().endHistoryGesture()
+          }
+          window.addEventListener('pointerup', finish)
+          window.addEventListener('pointercancel', finish)
+          window.addEventListener('blur', finish)
+        }}
         onChange={(e) => onChange(Number(e.target.value))}
         onDoubleClick={() => onChange(def)}
         aria-label={label}
         className="flex-1 cursor-pointer"
-        title={`Geser atau klik 2x untuk kembali ke default (${def}${unit})`}
+        title={`Geser atau klik 2x untuk kembali ke bawaan (${def}${unit})`}
       />
       {editing ? (
         <input
@@ -101,23 +114,22 @@ function Slider({
             if (e.key === 'Enter') commit()
             if (e.key === 'Escape') setEditing(false)
           }}
-          className="h-6 w-14 rounded border border-ink bg-surface px-1 text-right font-mono text-xs outline-none"
+          className="h-6 w-14 rounded border border-ink bg-surface px-1 text-right font-mono text-xs outline-none focus-visible:ring-2 focus-visible:ring-accent/35"
         />
       ) : (
-        <span
-          role="button"
-          tabIndex={0}
+        <button
+          type="button"
           onClick={(e) => {
             e.preventDefault()
             setDraft(String(value))
             setEditing(true)
           }}
           title={`Klik untuk mengetik angka, klik 2x untuk reset ke ${def}${unit}`}
-          className="w-12 cursor-pointer text-right font-mono hover:text-accent hover:underline"
+          className="w-12 cursor-pointer text-right font-mono hover:text-accent-ink hover:underline"
         >
           {value}
           {unit}
-        </span>
+        </button>
       )}
     </label>
   )
@@ -342,7 +354,14 @@ export function OverlayPanel({ total }: { total: number }) {
                   className={cx('flex items-center gap-2.5 rounded-xl border px-2 py-1.5', on ? 'border-accent bg-accent-soft' : 'border-line-2 hover:border-ink-2')}
                 >
                   <button type="button" onClick={() => pick(o)} aria-pressed={on} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
-                    <span className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-line bg-[repeating-conic-gradient(#EFEAE2_0_25%,#FFFFFF_0_50%)] bg-[length:10px_10px]">
+                    <span
+                      className={cx(
+                        'flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-line',
+                        o.kind === 'text'
+                          ? 'bg-sand text-ink'
+                          : 'bg-[repeating-conic-gradient(var(--color-sand)_0_25%,var(--color-sand-2)_0_50%)] bg-[length:10px_10px]'
+                      )}
+                    >
                       {asset ? <img src={asset.url} alt="" className="max-h-full max-w-full object-contain" /> : <Type className="size-4" />}
                     </span>
                     <span className="flex min-w-0 flex-col">

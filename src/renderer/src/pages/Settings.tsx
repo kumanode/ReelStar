@@ -5,12 +5,14 @@ import {
   Cpu,
   Info,
   KeyRound,
+  RefreshCw,
   SlidersHorizontal
 } from 'lucide-react'
 import type { AppSettings, KeyStatus } from '@shared/types'
 import { Logo } from '../components/Logo'
 import { ThemeToggle } from '../components/ThemeToggle'
-import { Button, cx } from '../components/ui'
+import { Button, Spinner, cx } from '../components/ui'
+import { errorText } from '../lib/format'
 import { useApp } from '../store/app'
 import { AboutSection } from './AboutSection'
 import { WhisperSection } from './WhisperSection'
@@ -21,21 +23,37 @@ import { GeneralSection } from './settings/GeneralSection'
 type Tab = 'models' | 'providers' | 'general' | 'whisper' | 'about'
 
 export function Settings() {
-  const { go, route } = useApp()
+  const { go, route, toast } = useApp()
   const back = route.name === 'settings' && route.back ? route.back : ({ name: 'home' } as const)
   const [tab, setTab] = useState<Tab>('models')
   const [keys, setKeys] = useState<KeyStatus[]>([])
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [folder, setFolder] = useState('')
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
 
   const reload = (): void => {
-    void window.api.settings.keys().then(setKeys)
-    void window.api.settings.get().then(setSettings)
+    setLoading(true)
+    setLoadError(null)
+    void Promise.all([window.api.settings.keys(), window.api.settings.get()])
+      .then(([k, s]) => {
+        setKeys(k)
+        setSettings(s)
+      })
+      .catch((e) => {
+        const msg = errorText(e)
+        setLoadError(msg)
+        toast('error', `Gagal memuat pengaturan: ${msg}`)
+      })
+      .finally(() => setLoading(false))
   }
 
   useEffect(() => {
     reload()
-    void window.api.exporter.defaultFolder().then(setFolder)
+    void window.api.exporter
+      .defaultFolder()
+      .then(setFolder)
+      .catch((e) => toast('error', errorText(e)))
   }, [])
 
   const NAV: { id: Tab; label: string; icon: ReactNode }[] = [
@@ -49,7 +67,7 @@ export function Settings() {
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-[68px] shrink-0 items-center gap-3.5 border-b border-line bg-surface px-8">
-        <button type="button" onClick={() => go({ name: 'home' })}>
+        <button type="button" aria-label="Kembali ke beranda" onClick={() => go({ name: 'home' })}>
           <Logo />
         </button>
         <span className="text-xl text-line-3">/</span>
@@ -82,6 +100,29 @@ export function Settings() {
 
         <main className="scroll-thin overflow-y-auto">
           <div className="flex max-w-[920px] flex-col gap-6 px-12 pb-24 pt-8">
+            {tab !== 'about' && !settings && (
+              loadError ? (
+                <div className="flex flex-col items-start gap-3 rounded-2xl border border-bad/30 bg-bad-soft p-5 text-sm text-bad-ink">
+                  <p className="font-semibold">Gagal memuat pengaturan</p>
+                  <p className="text-xs opacity-90">{loadError}</p>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={<RefreshCw className="size-3.5" />}
+                    loading={loading}
+                    onClick={reload}
+                  >
+                    Coba lagi
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3 py-12 text-sm text-muted">
+                  <Spinner className="size-5 text-accent" />
+                  <span>Memuat pengaturan…</span>
+                </div>
+              )
+            )}
+
             {tab === 'models' && settings && (
               <ActiveModelsSection settings={settings} keys={keys} onSettings={setSettings} />
             )}

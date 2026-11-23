@@ -139,19 +139,33 @@ export async function cancelProjectJobs(projectId: string, kind?: string): Promi
       : getDb().prepare(`SELECT id FROM jobs WHERE project_id = ? AND status IN ('queued', 'running')`).all(projectId)
   ) as { id: string }[]
   await Promise.all(rows.map((r) => cancelJob(r.id)))
+  if (!kind) {
+    const deadline = Date.now() + 15000
+    while (rows.some((r) => controllers.has(r.id)) && Date.now() < deadline) {
+      await new Promise((res) => setTimeout(res, 100))
+    }
+  }
 }
 
 export function isActive(id: string): boolean {
   return controllers.has(id)
 }
 
-/** Cancels the running work tied to episodes or clips, leaving Lorebook sheet jobs of the same project alone. */
-export async function cancelEpisodeJobs(projectId: string): Promise<void> {
-  const rows = getDb()
-    .prepare(
-      `SELECT id FROM jobs WHERE project_id = ? AND (episode_id IS NOT NULL OR clip_id IS NOT NULL) AND status IN ('queued', 'running')`
-    )
-    .all(projectId) as { id: string }[]
+/** Cancels running work tied to episodes or clips (all episodes, or one specific episode), leaving Lorebook sheet jobs alone. */
+export async function cancelEpisodeJobs(projectId: string, episodeId?: string): Promise<void> {
+  const rows = (
+    episodeId
+      ? getDb()
+          .prepare(
+            `SELECT id FROM jobs WHERE project_id = ? AND (episode_id = ? OR clip_id IN (SELECT id FROM clips WHERE project_id = ? AND episode_id = ?)) AND status IN ('queued', 'running')`
+          )
+          .all(projectId, episodeId, projectId, episodeId)
+      : getDb()
+          .prepare(
+            `SELECT id FROM jobs WHERE project_id = ? AND (episode_id IS NOT NULL OR clip_id IS NOT NULL) AND status IN ('queued', 'running')`
+          )
+          .all(projectId)
+  ) as { id: string }[]
   await Promise.all(rows.map((r) => cancelJob(r.id)))
   // Their rows are about to be deleted, so wait until each task has stopped writing to them (bounded: a task
   // stuck in a download still gets its abort, it just is not waited for).

@@ -21,9 +21,10 @@ export function AboutSection() {
             type="button"
             onClick={() => open(CHANNEL_URL)}
             title="Buka channel YouTube Bang Tutorial"
-            className="self-start text-sm font-medium text-muted underline-offset-2 hover:text-accent-dark hover:underline"
+            className="inline-flex items-center gap-1 self-start text-sm font-semibold text-accent-ink underline-offset-2 hover:underline"
           >
-            short drama ai
+            <span>short drama ai</span>
+            <ExternalLink className="size-3.5" />
           </button>
         </div>
         {version && <span className="rounded-full border border-line-2 px-3 py-1 font-mono text-xs text-ink">Versi {version}</span>}
@@ -35,7 +36,7 @@ export function AboutSection() {
           <span className="text-[13px] text-muted">Cara membuat video dari ide sampai ekspor dengan ReelStar</span>
         </div>
         {/* No autoplay: a play the viewer starts is what YouTube counts as a view. */}
-        <div className="overflow-hidden rounded-xl border border-line-2 bg-ink">
+        <div className="overflow-hidden rounded-xl border border-line-2 bg-black">
           <iframe
             src={`https://www.youtube.com/embed/${TUTORIAL_ID}?rel=0&playsinline=1`}
             title="Tutorial ReelStar"

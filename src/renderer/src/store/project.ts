@@ -118,7 +118,7 @@ interface ProjectState {
   save(): Promise<void>
   flush(): Promise<void>
 
-  applyClip(clipId: string, patch: Partial<Clip>): void
+  applyClip(clipId: string, patch: Partial<Clip>, opts?: { rev?: number; fromUser?: boolean }): void
   applyCharacter(characterId: string, patch: Partial<Character>): void
   /** Adds a character the main process already saved, so the next save does not drop it. */
   receiveCharacter(character: Character): void
@@ -130,6 +130,7 @@ interface HistoryEntry {
   project: Project
   episode?: Episode | null
   characters: Character[]
+  derivatives: CharacterDerivative[]
   clips: Clip[]
   assets: Record<string, Asset>
   selectedClipId: string | null
@@ -156,6 +157,7 @@ function recordHistory(get: () => ProjectState, set: (patch: Partial<ProjectStat
     project: structuredClone(s.project),
     episode: s.episode ? structuredClone(s.episode) : null,
     characters: structuredClone(s.characters),
+    derivatives: structuredClone(s.derivatives),
     clips: structuredClone(s.clips),
     assets: copyAssetIndex(s.assets),
     selectedClipId: s.selectedClipId
@@ -172,6 +174,12 @@ function rebaseClip(clipId: string, patch: Partial<Clip>): void {
   }
 }
 
+function rebaseCharacter(characterId: string, patch: Partial<Character>): void {
+  for (const entry of [...past, ...future]) {
+    entry.characters = entry.characters.map((ch) => (ch.id === characterId ? { ...ch, ...patch } : ch))
+  }
+}
+
 // Word saves started here, per asset. Main emits the updated asset before the save resolves, so a counted
 // asset event is the user's own edit; any other change to existing words comes from a job (Whisper sync).
 const pendingWordEdits = new Map<string, number>()
@@ -183,6 +191,30 @@ function sendWords(assetId: string, words: WordTiming[]): Promise<Asset> {
     if (left > 0) pendingWordEdits.set(assetId, left)
     else pendingWordEdits.delete(assetId)
   })
+}
+
+// Track Undo/Redo audio link restorations so main's resulting clip patch does not rebase history over them.
+const pendingAudioRestores = new Map<string, number>()
+
+function syncAudioLinks(fromClips: Clip[], toClips: Clip[]): void {
+  const fromById = new Map(fromClips.map((c) => [c.id, c]))
+  for (const targetClip of toClips) {
+    const curClip = fromById.get(targetClip.id)
+    if (!curClip || curClip.audioAssetId === targetClip.audioAssetId) continue
+    pendingAudioRestores.set(targetClip.id, (pendingAudioRestores.get(targetClip.id) ?? 0) + 1)
+    const req = targetClip.audioAssetId
+      ? window.api.assets.setActive(targetClip.id, targetClip.audioAssetId, true)
+      : window.api.clips.detachVoice(targetClip.id)
+    void req
+      .catch((error: unknown) => {
+        useApp.getState().toast('error', `Suara klip tidak tersimpan: ${errorText(error)}`)
+      })
+      .finally(() => {
+        const left = (pendingAudioRestores.get(targetClip.id) ?? 1) - 1
+        if (left > 0) pendingAudioRestores.set(targetClip.id, left)
+        else pendingAudioRestores.delete(targetClip.id)
+      })
+  }
 }
 
 function rebaseAsset(asset: Asset, fromJob: boolean): void {
@@ -202,6 +234,8 @@ const AUTOSAVE_MS = 1200
 let timer: ReturnType<typeof setTimeout> | null = null
 let inFlight: Promise<void> | null = null
 let changedDuringSave = false
+let serverRev = 0
+let switchSeq = 0
 
 function snapshot(s: ProjectState): ProjectSnapshot {
   const { createdAt: _c, updatedAt: _u, coverAssetId: _cv, ...project } = s.project!
@@ -210,8 +244,11 @@ function snapshot(s: ProjectState): ProjectSnapshot {
     episodeId: s.episode?.id || '',
     // project.editor holds the active episode's timeline settings (see getBundle).
     episodeEditor: s.project!.editor,
-    characters: s.characters.map(({ sheetAssetId: _s, ...c }) => c),
-    clips: s.clips.map(({ imageAssetId: _i, videoAssetId: _v, audioAssetId: _a, ...c }) => c)
+    baseRev: serverRev,
+    // Asset links and derivatives are only applied by main on INSERT so Undo brings back deleted rows intact.
+    characters: s.characters,
+    derivatives: s.derivatives,
+    clips: s.clips
   }
 }
 
@@ -277,13 +314,19 @@ export const useProject = create<ProjectState>((set, get) => {
     switchEpisode: async (episodeId) => {
       const p = get().project
       if (!p || get().episode?.id === episodeId) return
+      const seq = ++switchSeq
+      const pid = p.id
       await get().flush()
+      if (seq !== switchSeq || get().project?.id !== pid) return
       try {
-        const bundle = await window.api.projects.get(p.id, episodeId)
+        const bundle = await window.api.projects.get(pid, episodeId)
+        if (seq !== switchSeq || get().project?.id !== pid) return
         get().load(bundle, { keepHistory: false })
-        localStorage.setItem(`last_episode:${p.id}`, episodeId)
+        localStorage.setItem(`last_episode:${pid}`, episodeId)
       } catch (err) {
-        useApp.getState().toast('error', `Gagal membuka episode: ${errorText(err)}`)
+        if (seq === switchSeq && get().project?.id === pid) {
+          useApp.getState().toast('error', `Gagal membuka episode: ${errorText(err)}`)
+        }
       }
     },
     createEpisode: async (input) => {
@@ -304,32 +347,84 @@ export const useProject = create<ProjectState>((set, get) => {
     removeEpisode: async (id) => {
       const p = get().project
       if (!p) return
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      // Flush pending edits before deletion so project-level changes persist and no autosave targets a deleted episode.
+      await get().flush()
       await window.api.episodes.remove(id)
       const remaining = get().episodes.filter((e) => e.id !== id)
       set({ episodes: remaining })
       if (get().episode?.id === id) {
+        if (timer) {
+          clearTimeout(timer)
+          timer = null
+        }
+        changedDuringSave = false
+        past = []
+        future = []
+        historyGestureDepth = 0
+        lastHistoryTime = -Infinity
+        set({ saveState: 'saved', saveError: null, canUndo: false, canRedo: false })
         if (remaining.length > 0) {
-          await get().switchEpisode(remaining[0].id)
+          // Already flushed before removal; switch directly to avoid flushing the deleted episode.
+          const seq = ++switchSeq
+          const pid = p.id
+          try {
+            const bundle = await window.api.projects.get(pid, remaining[0].id)
+            if (seq === switchSeq && get().project?.id === pid) {
+              get().load(bundle, { keepHistory: false })
+              localStorage.setItem(`last_episode:${pid}`, remaining[0].id)
+            }
+          } catch (err) {
+            if (seq === switchSeq && get().project?.id === pid) {
+              useApp.getState().toast('error', `Gagal membuka episode: ${errorText(err)}`)
+            }
+          }
         } else {
-          set({ episode: null, clips: [], activeView: 'hub' })
+          set({ episode: null, clips: [], selectedClipId: null, activeView: 'hub' })
         }
       }
     },
     removeAllEpisodes: async () => {
       const p = get().project
       if (!p) return
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      changedDuringSave = false
+      if (inFlight) await inFlight
       await window.api.episodes.removeAll(p.id)
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      changedDuringSave = false
+      past = []
+      future = []
+      historyGestureDepth = 0
+      lastHistoryTime = -Infinity
       try {
         localStorage.removeItem(`last_episode:${p.id}`)
       } catch {
         // ignore storage errors
       }
       const b = await window.api.projects.get(p.id)
+      if (get().project?.id !== p.id) return
+      serverRev = Math.max(serverRev, b.rev ?? 0)
       set({
         episodes: [],
         episode: null,
         clips: [],
+        selectedClipId: null,
         assets: Object.fromEntries(b.assets.map((a) => [a.id, a])),
+        jobs: Object.fromEntries(b.jobs.map((j) => [j.id, j])),
+        saveState: 'saved',
+        saveError: null,
+        canUndo: false,
+        canRedo: false,
         activeView: 'hub'
       })
     },
@@ -396,7 +491,9 @@ export const useProject = create<ProjectState>((set, get) => {
       const p = get().project
       if (!p) return
       const bundle = await window.api.projects.get(p.id, get().episode?.id)
+      if (get().project?.id !== p.id) return
       set({
+        project: get().project ? { ...get().project!, seriesLock: bundle.project.seriesLock } : null,
         characters: bundle.characters,
         derivatives: bundle.derivatives ?? [],
         locations: bundle.locations ?? [],
@@ -435,6 +532,18 @@ export const useProject = create<ProjectState>((set, get) => {
     },
 
     load: (b, opts) => {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      changedDuringSave = false
+      const prevProject = get().project
+      const sameProject = prevProject?.id === b.project.id
+      if (prevProject && !sameProject) {
+        serverRev = b.rev ?? 0
+      } else {
+        serverRev = Math.max(serverRev, b.rev ?? 0)
+      }
       if (!opts?.keepHistory) {
         past = []
         future = []
@@ -461,7 +570,14 @@ export const useProject = create<ProjectState>((set, get) => {
       const defaultTab: 'production' | 'editor' =
         lastTab || (b.episode?.status === 'editing' || b.episode?.status === 'exported' ? 'editor' : 'production')
 
-      const shouldCollapseSidebar = defaultView === 'episode' && defaultTab === 'editor'
+      const nextActiveView: 'hub' | 'lorebook' | 'episode' =
+        get().pendingAutoPlanProjectId === b.project.id
+          ? 'hub'
+          : sameProject && get().activeView === 'hub'
+            ? 'hub'
+            : defaultView
+
+      const shouldCollapseSidebar = nextActiveView === 'episode' && defaultTab === 'editor'
 
       set({
         loaded: true,
@@ -481,14 +597,20 @@ export const useProject = create<ProjectState>((set, get) => {
         selectedClipId: get().selectedClipId && b.clips.some((c) => c.id === get().selectedClipId) ? get().selectedClipId : (b.clips[0]?.id ?? null),
         canUndo: past.length > 0,
         canRedo: future.length > 0,
-        activeView: get().pendingAutoPlanProjectId === b.project.id ? 'hub' : defaultView,
+        activeView: nextActiveView,
         activeTab: defaultTab,
         sidebarCollapsed: shouldCollapseSidebar
       })
       void get().loadContinuityItems(b.project.id)
     },
     unload: () => {
-      if (timer) clearTimeout(timer)
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      changedDuringSave = false
+      switchSeq++
+      serverRev = 0
       past = []
       future = []
       historyGestureDepth = 0
@@ -534,6 +656,7 @@ export const useProject = create<ProjectState>((set, get) => {
         project: structuredClone(s.project),
         episode: s.episode ? structuredClone(s.episode) : null,
         characters: structuredClone(s.characters),
+        derivatives: structuredClone(s.derivatives),
         clips: structuredClone(s.clips),
         assets: copyAssetIndex(s.assets),
         selectedClipId: s.selectedClipId
@@ -548,11 +671,13 @@ export const useProject = create<ProjectState>((set, get) => {
           restoreWords(id, prevAsset.meta.words)
         }
       }
+      syncAudioLinks(s.clips, prev.clips)
 
       set({
         project: prev.project,
         episode: prev.episode ?? get().episode,
         characters: prev.characters,
+        derivatives: prev.derivatives,
         clips: prev.clips,
         assets: prev.assets,
         selectedClipId: prev.selectedClipId && prev.clips.some((c) => c.id === prev.selectedClipId)
@@ -570,6 +695,7 @@ export const useProject = create<ProjectState>((set, get) => {
         project: structuredClone(s.project),
         episode: s.episode ? structuredClone(s.episode) : null,
         characters: structuredClone(s.characters),
+        derivatives: structuredClone(s.derivatives),
         clips: structuredClone(s.clips),
         assets: copyAssetIndex(s.assets),
         selectedClipId: s.selectedClipId
@@ -584,11 +710,13 @@ export const useProject = create<ProjectState>((set, get) => {
           restoreWords(id, nextAsset.meta.words)
         }
       }
+      syncAudioLinks(s.clips, next.clips)
 
       set({
         project: next.project,
         episode: next.episode ?? get().episode,
         characters: next.characters,
+        derivatives: next.derivatives,
         clips: next.clips,
         assets: next.assets,
         selectedClipId: next.selectedClipId && next.clips.some((c) => c.id === next.selectedClipId)
@@ -742,7 +870,21 @@ export const useProject = create<ProjectState>((set, get) => {
       recordHistory(get, set, true)
       set({
         characters: get().characters.filter((c) => c.id !== id),
-        clips: get().clips.map((c) => ({ ...c, characterIds: c.characterIds.filter((x) => x !== id), speakerId: c.speakerId === id ? null : c.speakerId }))
+        derivatives: get().derivatives.filter((d) => d.characterId !== id),
+        clips: get().clips.map((c) => {
+          let costumeIds = c.costumeIds
+          if (costumeIds && id in costumeIds) {
+            const next = { ...costumeIds }
+            delete next[id]
+            costumeIds = next
+          }
+          return {
+            ...c,
+            characterIds: c.characterIds.filter((x) => x !== id),
+            costumeIds,
+            speakerId: c.speakerId === id ? null : c.speakerId
+          }
+        })
       })
       touch()
     },
@@ -752,7 +894,8 @@ export const useProject = create<ProjectState>((set, get) => {
         clearTimeout(timer)
         timer = null
       }
-      if (!get().project) return
+      const pid = get().project?.id
+      if (!pid) return
       if (inFlight) {
         changedDuringSave = true
         return inFlight
@@ -761,15 +904,20 @@ export const useProject = create<ProjectState>((set, get) => {
       changedDuringSave = false
       set({ saveState: 'saving', saveError: null })
       inFlight = (async () => {
+        let shouldRetry = false
         try {
-          const { updatedAt } = await window.api.projects.save(snapshot(get()))
-          set({ savedAt: updatedAt, saveState: changedDuringSave ? 'dirty' : 'saved' })
+          const res = await window.api.projects.save(snapshot(get()))
+          if (get().project?.id !== pid) return
+          serverRev = Math.max(serverRev, res.rev ?? 0)
+          set({ savedAt: res.updatedAt, saveState: changedDuringSave ? 'dirty' : 'saved' })
+          shouldRetry = changedDuringSave
         } catch (e) {
+          if (get().project?.id !== pid) return
           set({ saveState: 'error', saveError: errorText(e) })
         } finally {
           inFlight = null
         }
-        if (changedDuringSave) {
+        if (shouldRetry && get().project?.id === pid) {
           changedDuringSave = false
           timer = setTimeout(() => void get().save(), 300)
         }
@@ -781,12 +929,16 @@ export const useProject = create<ProjectState>((set, get) => {
       if (get().saveState === 'dirty' || get().saveState === 'error') await get().save()
     },
 
-    applyClip: (clipId, patch) => {
-      rebaseClip(clipId, patch)
+    applyClip: (clipId, patch, opts) => {
+      if (opts?.rev !== undefined) serverRev = Math.max(serverRev, opts.rev)
+      const fromLocalRestore = pendingAudioRestores.has(clipId) && 'audioAssetId' in patch
+      if (!opts?.fromUser && !fromLocalRestore) rebaseClip(clipId, patch)
       set({ clips: get().clips.map((c) => (c.id === clipId ? { ...c, ...patch } : c)) })
     },
-    applyCharacter: (characterId, patch) =>
-      set({ characters: get().characters.map((c) => (c.id === characterId ? { ...c, ...patch } : c)) }),
+    applyCharacter: (characterId, patch) => {
+      rebaseCharacter(characterId, patch)
+      set({ characters: get().characters.map((c) => (c.id === characterId ? { ...c, ...patch } : c)) })
+    },
     receiveCharacter: (character) => {
       if (character.projectId !== get().project?.id || get().characters.some((c) => c.id === character.id)) return
       set({ characters: [...get().characters, character] })
@@ -811,6 +963,11 @@ export const useProject = create<ProjectState>((set, get) => {
           )
         }
         if (asset.derivativeId) {
+          for (const entry of [...past, ...future]) {
+            entry.derivatives = entry.derivatives.map((d) =>
+              d.id === asset.derivativeId ? { ...d, sheetAssetId: asset.id } : d
+            )
+          }
           patch.derivatives = get().derivatives.map((d) =>
             d.id === asset.derivativeId ? { ...d, sheetAssetId: asset.id } : d
           )
